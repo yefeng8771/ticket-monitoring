@@ -1,0 +1,55 @@
+# yefeng8771 fork 新增：每日从上游 dengmeiluan/ticket-monitoring 自动同步
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 每天 10:00 CST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 合并上游
+        run: |
+          git remote add upstream https://github.com/dengmeiluan/ticket-monitoring.git || true
+          git fetch upstream main
+          before="$(git rev-parse HEAD)"
+          upstream_head="$(git rev-parse upstream/main)"
+          if ! git merge -X theirs upstream/main --no-edit \
+              -m "chore(sync): 合并 dengmeiluan/ticket-monitoring@${upstream_head:0:7}"; then
+            # -X theirs 处理不了"上游删除、fork 侧新增/修改"这类删除冲突。
+            # 同步语义是 fork 跟随上游：残留冲突一律按上游为准。
+            git diff -z --name-only --diff-filter=U | while IFS= read -r -d '' f; do
+              if git cat-file -e "upstream/main:$f" 2>/dev/null; then
+                git checkout --theirs -- "$f"
+              else
+                git rm "$f"
+              fi
+            done
+            git add -A
+            git commit --no-edit
+          fi
+          if [ "$before" != "$(git rev-parse HEAD)" ]; then
+            git push origin main
+            echo "已同步到上游 ${upstream_head:0:7}"
+          else
+            echo "已是最新，无需同步"
+          fi
