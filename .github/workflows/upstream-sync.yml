@@ -1,4 +1,7 @@
 # yefeng8771 fork 新增：每日从上游 dengmeiluan/ticket-monitoring 自动同步
+# 快照式同步：上游会改写 main 历史（force-push，见 2026-10-19 ee5afc73 孤儿快照），
+# merge 式同步遇到无共同祖先就会失败；快照式每次用上游当前树整体替换，
+# 仅叠回 fork 自有文件，线性提交，永不失败。
 name: upstream-sync
 
 on:
@@ -27,29 +30,31 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: 合并上游
+      - name: 快照同步上游
         run: |
+          set -e
+          # fork 自有文件：同步时保留，不被上游树覆盖
+          # （Dockerfile/.dockerignore 是 fork 定制版，覆盖上游同名文件是刻意的）
+          KEEP=(
+            .github/workflows/upstream-sync.yml
+            .github/workflows/docker-build.yml
+            Dockerfile
+            .dockerignore
+            docker/entrypoint.sh
+            docker/README.md
+          )
           git remote add upstream https://github.com/dengmeiluan/ticket-monitoring.git || true
           git fetch upstream main
           before="$(git rev-parse HEAD)"
           upstream_head="$(git rev-parse upstream/main)"
-          if ! git merge -X theirs upstream/main --no-edit \
-              -m "chore(sync): 合并 dengmeiluan/ticket-monitoring@${upstream_head:0:7}"; then
-            # -X theirs 处理不了"上游删除、fork 侧新增/修改"这类删除冲突。
-            # 同步语义是 fork 跟随上游：残留冲突一律按上游为准。
-            git diff -z --name-only --diff-filter=U | while IFS= read -r -d '' f; do
-              if git cat-file -e "upstream/main:$f" 2>/dev/null; then
-                git checkout --theirs -- "$f"
-              else
-                git rm "$f"
-              fi
-            done
-            git add -A
-            git commit --no-edit
-          fi
-          if [ "$before" != "$(git rev-parse HEAD)" ]; then
+          # 整体替换为上游当前树（上游改写历史也不怕），再把自有文件叠回来
+          git read-tree --reset -u upstream/main
+          git checkout "$before" -- "${KEEP[@]}"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "已是最新，无需同步"
+          else
+            git commit -m "chore(sync): 快照同步 dengmeiluan/ticket-monitoring@${upstream_head:0:7}"
             git push origin main
             echo "已同步到上游 ${upstream_head:0:7}"
-          else
-            echo "已是最新，无需同步"
           fi
