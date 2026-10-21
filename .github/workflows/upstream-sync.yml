@@ -11,8 +11,6 @@ on:
 
 permissions:
   contents: write
-  # 快照提交会带上上游 .github/workflows 的变更，没有 workflows 权限 push 会被 GitHub 拒绝
-  workflows: write
 
 concurrency:
   group: upstream-sync
@@ -52,6 +50,14 @@ jobs:
           # 整体替换为上游当前树（上游改写历史也不怕），再把自有文件叠回来
           git read-tree --reset -u upstream/main
           git checkout "$before" -- "${KEEP[@]}"
+          # .github/workflows 整体冻结为 fork 当前版本：GITHUB_TOKEN 的权限模型里
+          # 没有推送 workflow 文件变更这一项，带上游 workflow 变更的提交会被 GitHub
+          # 拒绝（2026-10-21 run 39574197535 实测）。上游自带 CI 在 fork 里本来就
+          # 跑不过，冻结该目录不影响 fork 自有 docker-build 与代码同步。
+          git checkout "$before" -- .github/workflows
+          git ls-tree -r --name-only upstream/main -- .github/workflows | while read -r f; do
+            git cat-file -e "${before}:${f}" 2>/dev/null || rm -f "$f"
+          done
           git add -A
           if git diff --cached --quiet; then
             echo "已是最新，无需同步"
