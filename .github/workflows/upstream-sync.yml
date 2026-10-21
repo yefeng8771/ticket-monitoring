@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  # 快照提交会带上上游 .github/workflows 的变更，没有 workflows 权限 push 会被 GitHub 拒绝
+  workflows: write
 
 concurrency:
   group: upstream-sync
@@ -55,6 +57,6 @@ jobs:
             echo "已是最新，无需同步"
           else
             git commit -m "chore(sync): 快照同步 dengmeiluan/ticket-monitoring@${upstream_head:0:7}"
-            git push origin main
+            git push origin HEAD:main
             echo "已同步到上游 ${upstream_head:0:7}"
           fi
