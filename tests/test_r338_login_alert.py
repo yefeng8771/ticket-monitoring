@@ -108,6 +108,35 @@ def test_recovery_notifies_once(monkeypatch):
         _teardown(main, REGISTRY, old)
 
 
+def test_streak_survives_restart(monkeypatch, tmp_path):
+    """streak 持久化：跨进程重启累计（生产实录——12:47 重启清内存
+    streak，70 分钟长轮+频繁重启下内存态永到不了 2=告警哑火）。
+    形态：第一轮尾存盘 → 模拟重启（清内存+重载哨状态）→ 第二轮尾
+    直接触发首鸣。"""
+    main, REGISTRY, old = _fresh()
+    try:
+        n = _FakeN()
+        monkeypatch.setattr(REGISTRY[_PLAT], "login_suspect", True)
+        monkeypatch.setattr(main, "_sent_state_path",
+                            lambda: str(tmp_path / "sent.json"))
+        users = [{"platforms": [_PLAT]}]
+        main._channel_login_alert_sentinel([(users[0], n)],
+                                           logging.getLogger("t"))
+        assert len(n.sent) == 0, "重启前第一轮 streak=1 不鸣"
+        # 模拟进程重启：内存全清 + 从哨状态文件回填
+        main._LOGIN_ALERT_STREAK.clear()
+        main._SENT_LAST.clear()
+        main._SENT_CNT.clear()
+        main._sent_load()
+        main._channel_login_alert_sentinel([(users[0], n)],
+                                           logging.getLogger("t"))
+        assert len(n.sent) == 1, (
+            "重启后 streak 从持久化继续（=2）应首鸣——内存态在长轮"
+            "周期+频繁重启下永到不了 2（生产实录哑火）")
+    finally:
+        _teardown(main, REGISTRY, old)
+
+
 def test_unrelated_platform_not_alerted(monkeypatch):
     """用户未启用该渠道 → 不推（多租户告警面按启用平台过滤）。"""
     main, REGISTRY, old = _fresh()

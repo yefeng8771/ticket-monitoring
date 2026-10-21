@@ -4,16 +4,17 @@
 > rich DingTalk group reports → 4-layer urgent alerts when your target price hits.
 > Domestic and international routes (destinations across five continents) run
 > through the same collection → judging → push pipeline.
-> Your data stays on your machine. Everything is configured in the browser. Free & open source.
+> For frequent flyers and small teams who want their own fare watch: fares and settings stay on your machine; outbound traffic only goes to the push channels and image host you configure.
 
 [![Live Demo](https://img.shields.io/badge/🎪_Live_Demo-click_to_play-brightgreen)](https://dengmeiluan.github.io/ticket-monitoring/site/)
 [![Release](https://img.shields.io/github/v/release/dengmeiluan/ticket-monitoring)](https://github.com/dengmeiluan/ticket-monitoring/releases)
+[![Version](https://img.shields.io/badge/version-1.5.264-1f6feb)](https://github.com/dengmeiluan/ticket-monitoring/releases)
 [![CI](https://github.com/dengmeiluan/ticket-monitoring/actions/workflows/ci.yml/badge.svg)](https://github.com/dengmeiluan/ticket-monitoring/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/Platform-Windows_%7C_Linux_%7C_macOS-0078D6)](https://github.com/dengmeiluan/ticket-monitoring/releases)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-**[🎪 Live demo (zero install)](https://dengmeiluan.github.io/ticket-monitoring/site/)** · [中文文档](README.md) · [Windows releases](https://github.com/dengmeiluan/ticket-monitoring/releases)
+**[🎪 Live demo (zero install)](https://dengmeiluan.github.io/ticket-monitoring/site/)** · [中文文档](README.md) · [Releases (all platforms)](https://github.com/dengmeiluan/ticket-monitoring/releases)
 
 ![Overview workspace (light)](docs/screenshots/console-light.png)
 
@@ -22,9 +23,13 @@
 <details>
 <summary>More screenshots: panel-based settings / global config center / flight details / K-line / push preview / mobile</summary>
 
-![Panel-based settings](docs/screenshots/console-config.png)
+![Panel-based settings: date mode switch, channel readiness and save bar in one view.](docs/screenshots/console-config.png)
+
+![Date mode switch: range or specific-day, one editor at a time with drafts kept.](docs/screenshots/console-date-modes.png)
 
 ![Global config center](docs/screenshots/console-globals.png)
+
+![Restart & migration center](docs/screenshots/console-restart.png)
 
 ![Flight details](docs/screenshots/console-details.png)
 
@@ -32,17 +37,19 @@
 
 ![Push preview](docs/screenshots/console-preview.png)
 
-![Mobile](docs/screenshots/console-mobile.png)
+![Mobile details](docs/screenshots/console-mobile.png)
+
+![Mobile filters with a persistent "view results" action](docs/screenshots/console-mobile-filter.png)
 
 </details>
 
 ## What it does
 
 - **Collects** flight details (price, flight no., times, transfers, duration, terminals, cabin, aircraft, punctuality, baggage rules) from five Chinese travel platforms: Qunar, Fliggy, Ctrip, Tongcheng, Tuniu — each on its PC-first path (Qunar PC primary with H5 fallback, Fliggy PC SSR read, Ctrip/Tongcheng/Tuniu direct HTTP), zero browser overhead except where a channel demands it.
-- **Watches** your routes with per-route thresholds (direct / transfer), arrival-time constraints and departure-time windows. Each route can watch **multiple departure dates at once** (date chips with auto year-completion — every date gets its own collection, push section, trend chart and calendar), and **cloning a route** copies the whole config in one click (the copy starts disabled: fix the cities, then switch on). Every route has an **enable/disable switch** — pausing keeps the whole config and exempts the route from scheduling, pushes and details everywhere; no more delete-to-stop. A **daily report** lands at your configured hour (default 09:00) with per-route KPIs and trend images.
+- **Watches** your routes with per-route thresholds (direct / transfer), arrival-time constraints and departure-time windows. Each route can watch **multiple departure dates at once** through a range / specific-day mode switch — one editor at a time, both drafts retained, applied ranges merge and dedupe automatically; every date gets its own collection, push section, trend chart and calendar. **Cloning a route** copies the whole config in one click (the copy starts disabled: fix the cities, then switch on). Every route has an **enable/disable switch** — pausing keeps the whole config and exempts the route from scheduling, pushes and details everywhere; no more delete-to-stop. A **daily report** lands at your configured hour (default 09:00) with per-route KPIs and trend images.
 - **Pushes** one aggregated DingTalk message per round: per-route KPI sections in a **three-tier semantic layout** (price as a direct link / flight body / decision fields in a grey quote tier) with **semantic tier dots** (🎯 hit · 🟩 below line · 🟨 near — "above line" is the default state and carries no dot), one-line action advice, 7-day trend, smoothed price charts with **four-tier hit point rings** (● dark green = truly actionable hit / ○ fine green = market broke the line / ○ amber = near / ▼ red = fell back below line) speaking the same language as the push copy, the details table and the calendar, a merged detail table image (with cross-channel price comparison for the same flight — the table image is the single carrier, nothing truncated), and per-channel jump links on hit rows. Every text line is width-guarded for phone screens (degrades gracefully, always keeping price/flight/criteria). If the table image upload ever fails, a **text fallback** carries the full TOP5 details instead (same-price multi-channel rows merge into one line with a ×N badge — information never vanishes with the picture). Email delivery (163/QQ mail boxes, full-page screenshot and push charts inline — zero external image loading on the recipient side) can run alongside DingTalk; every send is archived for in-console replay. Quiet hours (e.g. 23:00–07:00) silence routine heartbeats/storms/phone calls while hit alerts still get through.
 - **Monitors international flights** with zero extra configuration: still just three-letter codes — scope is detected automatically (either end outside the mainland city set, incl. HK/MO/TW and overseas, marks the route international). International rows always carry the **tax-inclusive total price** (a small tax breakdown accompanies the detail row), cross-day tolerance widens to 0-7 days and duration truth is timezone-corrected; the city panel gains an international-hot tab (33 cities, searchable by Chinese name / pinyin / code), route heads show an automatic globe badge, hit rows are tagged tax-inclusive, and the cross-channel phantom-price guards grade by the international price range.
-- **Escalates** on target hits: 🚨 title, @your phone in group, storm re-push, optional ntfy phone popup + ringtone (DND-piercing), optional Aliyun phone call/SMS, Windows toast jumping to the single-alert page. Debounced (2h / further ¥50 drop). If an escalation channel itself fails, the next DingTalk push says so — an alerting system must surface its own outages.
+- **Escalates** on target hits: 🚨 title, @your phone in group, storm re-push, optional ntfy phone popup + ringtone (DND-piercing), optional **Bark push to iPhone** (self-hosted server supported), optional Aliyun phone call/SMS, Windows toast jumping to the single-alert page. Debounced (2h / further ¥50 drop). If an escalation channel itself fails, the next DingTalk push says so — an alerting system must surface its own outages.
 
 ## The console
 
@@ -52,18 +59,27 @@ A zero-dependency single-page console served on `127.0.0.1:8765`, designed like 
 
 Run pulse: per-round per-channel row counts & latency in a ring buffer — a 4-cell mono statline plus stacked pulse bars (red cap = some channel failed), so collection health is visible at a glance. DingTalk pushes carry a "full details" link; on Windows, target-hit toasts jump straight to the same single-alert page. Keyboard: `1`/`2` switch console/settings, `3`/`4`/`5`/`6` jump straight to Overview / Trend / Details / Health, `Ctrl/⌘+S` save settings, `R` run a sweep now (press twice to confirm), `/` focus search, `Esc` close overlays.
 
-**All settings hot-reload on save — no restart, ever**: routes, thresholds, notifiers (DingTalk / ntfy / Aliyun / ServerChan / email, each with a one-click test button — the Windows toast test fires a real local notification), scan interval & jitter, console port (rebound in place), headless mode, crawler timeouts & pacing, user-agent, debug dumps, daily-report hour, image host. The **Global config center** groups schedule / crawler / general with 🔥 hot badges, and startup-only paths (database, log, browser profile) are honestly marked ♻ read-only. Settings also support field-level search, `Ctrl/⌘+S` save, and export/import of the whole config as JSON.
+**Routine settings hot-reload on save; startup-level changes show a diff and require a restart**: routes, thresholds, notifiers (DingTalk / ntfy / **Bark** / Aliyun / ServerChan / email, each with a one-click test button — the Windows toast test fires a real local notification), scan interval & jitter, console port (rebound in place), headless mode, crawler timeouts & pacing, user-agent, debug dumps, daily-report hour, image host, **date quick-picks & range select / direct-flights-only toggle / round-trip multi-return dates / airline whitelist (three equivalent writings — `MU` / `China Eastern` full name / `东航` short alias, auto-normalized to the code with a live resolution preview as you type; `!` prefix = exclusion) / no-LCC / min baggage / wide-body / price ceiling / max total flight duration in hours (incl. layovers, 0.5h steps) / no-overnight / departure & arrival time windows (both support overnight wrap-around windows)**. The **Global config center** groups schedule / crawler / general with 🔥 hot badges; startup-level paths (database, log, browser profile, chromium cache) are **editable**, each showing its resolved **absolute path** with a 📂 open-folder button — old database & login-state files auto-migrate on path change. Settings also support field-level search, `Ctrl/⌘+S` save, and export/import of the whole config as JSON.
 
-## Quick start (Windows, no Python needed)
+## Quick start (prebuilt, no Python needed)
 
 1. Download your platform package from [Releases](https://github.com/dengmeiluan/ticket-monitoring/releases):
-   Windows `…-win64.zip` / Linux `…-linux-x64.zip` / Apple Silicon `…-macos-arm64.zip`.
+   Windows `…-win64.zip` / Linux `…-linux-x64.zip` / Apple Silicon `…-macos-arm64.zip` / Intel Mac `…-macos-x64.zip`.
 2. Unzip anywhere and run it: Windows `TicketMonitor.exe`;
    Linux/macOS `chmod +x TicketMonitor && ./TicketMonitor`.
 3. Open `http://127.0.0.1:8765` → ⚙️ Settings: add routes (Chinese city names with autocomplete), target prices, and your DingTalk robot Webhook + signing secret. Hit 「🔔 测试推送」 to verify.
 4. Save — monitoring starts immediately.
 
-> Ctrip requires one QR-code login: run once with `--login ctrip` (the other four channels work out of the box).
+> Ctrip requires a one-time QR-code login (`--login ctrip`); Qunar/Tongcheng/Tuniu are best after a login session, Fliggy works without one.
+
+### Docker / NAS
+
+```bash
+cp config.example.yaml config.yaml   # first run: create config (or do it in the web UI)
+docker compose up -d
+```
+
+Open `http://NAS_IP:8765`. Config, the price database (`data/`), browser sessions (`user_data/`) and logs all live in local volumes — upgrades and rebuilds keep your data. The image ships chromium and CJK fonts (~1.5 GB, no first-run browser download). The Windows toast channel auto-disables inside containers; DingTalk/email pushes are unaffected. On a NAS without Docker, grab `…-linux-x64.zip` and run it directly.
 
 ## Special fares monitoring
 
@@ -113,8 +129,8 @@ endpoint automatically** — destinations across five continents, ready to watch
   air); the cross-day tolerance widens to 0-7 days so long international
   itineraries are no longer falsely rejected; latest-arrival limits judge by
   local arrival time
-- **City panel**: the 🌐 international tab groups 177 destinations by region
-  (Greater MABA → Japan/Korea → SE Asia → South Asia → Middle East →
+- **City panel**: the 🌐 international tab groups 272 destinations (33 highlighted) by region
+  (Hong Kong/Macau/Taiwan → Japan/Korea → SE Asia → South Asia → Middle East →
   Europe → Americas → Oceania → Africa), searchable by Chinese name, pinyin
   or code ("dongjing", "成田" and NRT all reach Tokyo Narita); route heads
   show an automatic globe badge
@@ -182,9 +198,11 @@ pyinstaller TicketMonitor.spec --noconfirm
 
 ## Development
 
+Current source version: **1.5.264**. Release badges/assets may lag until the release workflow finishes.
+
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 2441 tests — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate
-python docs/uitest.py             # full UI self-test (456 assertions, self-hosted demo, zero-JS-error hard gate)
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 3164 tests — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate
+python docs/uitest.py             # full UI self-test (516 assertions, self-hosted demo, zero-JS-error hard gate)
 python docs/screenshot.py         # regenerate README screenshots (start the demo first: python webui.py --demo --port 8799)
 python docs/demo_build.py         # rebake the static demo site (docs/site)
 ```
@@ -197,20 +215,20 @@ A: Polling uses a signature cache + ETag/304 — zero recomputation server-side 
 **Q: Pushes fail with -1 "system busy"?**
 A: That's DingTalk's "ghost delivery" — it errors but the message usually did land in the group. Policy is single-send, never retry; losses are naturally covered next round (phone escalation is an independent channel for hits).
 
-**Q: Why is Fliggy consistently cheaper by 50-100?**
-A: Fliggy PC shows tax-exclusive fares while others show tax-inclusive prices. The system adds a **+100 tax pad** to Fliggy quotes for hit qualification (display price untouched, labelled "税前") — a below-threshold Fliggy price not triggering a hit is expected, not a miss.
+**Q: Why is Fliggy sometimes cheaper by 50-100?**
+A: Historically Fliggy's PC list showed tax-exclusive fares. Hit qualification now uses the **channel's original price without a tax pad**; international rows always use the **tax-inclusive total**. Any channel-side price-basis note is preserved in details and pushes for verification.
 
 **Q: Ctrip shows "no data this round"?**
 A: Login expired — run `--login ctrip` once and re-scan the QR code.
 
 **Q: Do I need to restart after changing settings?**
-A: No. Routes/thresholds/notifiers/interval/jitter/port/headless/timeouts/pacing/report hour/image host all hot-reload on save; only the database and log paths are startup-level.
+A: For routine settings, no. Routes/thresholds/notifiers/interval/jitter/port/headless/timeouts/pacing/report hour/image host hot-reload on save. **Startup-level items** (database, log, browser profile, chromium cache, listen address, run-on-start) need a restart: saving shows a diff and a one-click 🔄 restart (spawns the new instance before exiting the old one; the page recovers automatically).
 
 **Q: Will my credentials leak?**
-A: They live only in the local, git-ignored `config.yaml`. Demo mode and the online demo use synthetic data and never read back real credentials.
+A: Fares and settings live only on your machine (`config.yaml` / `data/`, both git-ignored). Outbound traffic only reaches the push channels and image host you configure. Demo mode and the online demo use synthetic data and never read back real credentials.
 
 Hard-earned lessons (anti-bot, DingTalk quirks, engineering pitfalls): [docs/LESSONS.md](docs/LESSONS.md). Before filing PRs, read [CONTRIBUTING.md](CONTRIBUTING.md). Security issues: [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache-2.0. For personal learning and research only — please respect each platform's terms of service.
+Apache-2.0. Please respect each platform's terms of service; evaluate compliance before commercial use or redistribution.

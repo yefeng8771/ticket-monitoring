@@ -2843,23 +2843,21 @@ def test_qunar_dom_median_anchor_drops_phantom():
     assert len(out) == 5, codes                    # 正常行全保留
 
 
-def test_midnight_window_warns_once(monkeypatch):
-    """跨零点出发窗口：dmin>dmax 的钟面窗口判定恒 False，
-    整航线曾静默零数据——每对窗口只告警一次，正常窗口不告警。"""
+def test_midnight_window_ring():
+    """跨零点出发窗=环形判定（r339h 与到达窗 _hhmm_in_win 同族口径
+    统一）：旧线性比较下 dmin>dmax 恒 False=手输 22:00–02:00 整航线
+    静默无数据（语义审计 P1 实证），且告警表已随合法化退役。"""
     import core.alerter as _a
-    _a._WIN_WARNED.clear()
-    seen = []
-
-    class _L:
-        def warning(self, *a, **k):
-            seen.append(a)
-
-    monkeypatch.setattr(_a, "_LOG", _L())
-    assert _a.Alerter._dep_in_window("23:00", "22:00", "02:00") is False
-    assert _a.Alerter._dep_in_window("01:00", "22:00", "02:00") is False
-    assert len(seen) == 1, seen            # 每对跨零点窗口只告警一次
+    assert not hasattr(_a, "_WIN_WARNED")   # 退役防复活
+    assert _a.Alerter._dep_in_window("23:00", "22:00", "02:00") is True
+    assert _a.Alerter._dep_in_window("01:00", "22:00", "02:00") is True
+    assert _a.Alerter._dep_in_window("12:00", "22:00", "02:00") is False
     assert _a.Alerter._dep_in_window("12:00", "06:00", "09:00") is False
-    assert len(seen) == 1, seen            # 正常窗口不产生告警
+    # 线性窗回归锚（原语义不改）：边界含端 + 缺维度放行
+    assert _a.Alerter._dep_in_window("09:00", "17:00", "") is False
+    assert _a.Alerter._dep_in_window("18:30", "17:00", "") is True
+    assert _a.Alerter._dep_in_window("", "17:00", "") is True
+    assert _a.Alerter._dep_in_window("6:30", "06:00", "07:00") is True
 
 
 def test_near_ratio_single_source_and_warn_sync():
@@ -3031,6 +3029,10 @@ def test_mark_xchan_build_sections_filters_phantom():
         transfer_layover_min = 0
         transfer_baggage = ""
         dep_time_min = ""; dep_time_max = ""
+        # 航线级筛选四门（e181446 起常驻 Route 字段，_route_filters
+        # 恒读）：默认全不限语义
+        airlines = ""; no_lcc = False
+        min_baggage = 0; widebody_only = False
     a = Alerter.__new__(Alerter)   # 免构造（notifier 等本用例不触）
     import logging
     a.logger = logging.getLogger("t")

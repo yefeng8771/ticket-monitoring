@@ -114,6 +114,9 @@ crawler:
   timeout_seconds: 45
   delay_min: 5
   delay_max: 15
+  # 浏览器内核目录（可选，留空=默认装系统盘用户目录约 500MB）：配置后
+  # chromium 缓存安装与查找全部指向该目录（如 D:/pw-cache），重启生效。
+  # browser_dir: ''
   # 采集代理（可选）：填本机代理端口后，浏览器与特价发现层的出口统一
   # 走它——出口 IP 可变（IP 级限流绕行；途牛特价榜城市=出口 IP 城市）。
   # 例：http://127.0.0.1:7897（Clash Verge 默认混合端口）。

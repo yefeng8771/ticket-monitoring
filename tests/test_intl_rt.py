@@ -157,11 +157,13 @@ def test_push_link_prefers_element_rt_view():
 
 def test_webui_round_trip_badge_and_field():
     src = webui.PAGE
-    # 行头「🔁 往返」徽标：ret_date 在场即亮（徽标族 .rintl 同形态）
+    # 行头「🔁 往返」徽标：返程日在场即亮（_rds 归一双键读取，
+    # ×N 角标随 syncRouteHead 徽标族刷新）
     assert 'class="rrt"' in src
-    assert "syncRouteHead" in src and "r.ret_date" in src
-    # 配置槽：回程日期输入（可选，留空=单程）
-    assert "ret_date" in src and "回程日期" in src
+    assert "syncRouteHead" in src and "_rdsLen" in src
+    # 配置槽：返程日期 chips 行（toggleRT 开合，ret_dates 主键；
+    # legacy ret_date 读取兼容保留）
+    assert "ret_dates" in src and "返程日期" in src
 
 
 def test_webui_payload_passes_ret_date():

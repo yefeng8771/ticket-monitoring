@@ -43,6 +43,9 @@ from .base import BaseCrawler, iata2, iata3
 _RE_HHMM = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
 # 舱位订座码形态门（r329：段级订座码串「W-W」单字母连串——B 报告
 # 77/77 实证值域；int 旧舱等形态/小写一律不落防脏词面）
+# R4 族带数字形态（'R4-W'/'R4-X1'）漂移曾在案，裁决维持不采：出勤
+# 地板钉（test_r329_intl_fields 缺席 ≤40 带即哨）；翻身前提=价位带
+# 互锁+cabin 词面同现双证（qunar R2/R3/R4 同族先例验证形态）
 _RE_CABIN_CODE = re.compile(r"[A-Z](-[A-Z])*")
 
 

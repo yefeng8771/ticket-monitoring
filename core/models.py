@@ -42,7 +42,20 @@ class Route:
     transfer_baggage: str = ""     # "direct"=仅认渠道标明行李直挂的班次（""=不限）
     dep_time_min: str = ""         # 出发时段下限 HH:MM（空=不限）
     dep_time_max: str = ""         # 出发时段上限 HH:MM（空=不限）
-    ret_date: str = ""             # 往返回程日期（INTL_DESIGN §2.6；空=单程）
+    ret_date: str = ""             # 往返回程日期（INTL_DESIGN §2.6；空=单程；legacy 单值键，读取兼容）
+    ret_dates: list = field(default_factory=list)  # 往返多返程日（AiLao 提案：可配多个不同返程日；空=单程；build_routes 从 ret_dates/ret_date 归一）
+    airlines: str = ""             # 航司白名单（逗号分隔 IATA 码或名称片段；空=不限）；`!` 前缀=排除项（如 `!9C,!春秋` 命中即剔，与白名单独立判定：先排除后白名单）
+    no_lcc: bool = False           # 排除廉航（True=标注廉航的班次不参达标/明细）
+    min_baggage: int = 0           # 免费托运下限 kg（0=不限；未标注 kg 的行按不满足）
+    widebody_only: bool = False    # 仅大型机（未标注机型的行不剔除，防渠道覆盖差整渠道误杀）
+    price_max: float = 0           # 价格上限 ¥（0=不限；只盯 ≤ 此价的班次；票价不可解析的行保留——票价是行主体，缺席剔除会整渠道误杀）
+    no_cross: bool = False         # 排除跨天（crossDayN>0 的班次不参达标/明细，红眼嫌弃用）
+    arr_time_min: str = ""         # 到达时段下限 HH:MM（空=不限；与出发窗同构，红眼落地嫌弃用）
+    arr_time_max: str = ""         # 到达时段上限 HH:MM（空=不限）
+    max_duration_h: float = 0      # 最长飞行总时长小时（0=不限；含中转全程；超限班次不参达标/明细；渠道未标注时长的行按不满足）
+    transfer_layover_max: int = 0  # 中转最长衔接分钟（0=不限；已知衔接超限即剔，未知放行）
+    exclude_stop: bool = False     # 排除经停（f["stop"] 明确标注经停的班次不参达标/明细）
+    exclude_share: bool = False    # 排除共享航班（渠道标注共享承运的班次不参达标/明细）
 
 
 # 价格带单源：取数链五处（爬虫接受带/曲线 _rounds/日报池/

@@ -41,7 +41,10 @@ def test_desktop_savebar_toast_lift():
     r264 起 bottom 走 --sbh 实高动态单源（固定 96px 校准退役，
     fallback 40+56=96 为 JS 失效等效值）——钉面随行为演进改写
     （LESSONS 十八§9 双段断言：旧固定值禁复活 + 动态形态在场）。"""
-    assert "@media(min-width:761px){body:has(.savebar.on) #toasts{bottom:calc(var(--sbh,40px) + 56px)}}" in PAGE
+    # r346：桌面块内先声明 savebar 左停靠，再声明 toast 动态抬升
+    assert "@media(min-width:761px){" in PAGE
+    assert ".savebar{left:18px;right:auto}" in PAGE
+    assert "body:has(.savebar.on) #toasts{bottom:calc(var(--sbh,40px) + 56px)}" in PAGE
     assert "body:has(.savebar.on) #toasts{bottom:96px}" not in PAGE
 
 

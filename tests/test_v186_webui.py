@@ -93,8 +93,18 @@ class TestWebuiV186Audit:
         src = self._src()
         # >901px coarse 触控块补齐姊妹块清单(.cnav/.hbtn/输入 38px/
         # switch 热区/16px 字号)——iPad Pro 横屏触控基准欠账
+        # 窗口取块边界（配平大括号），不锚固定字符数——PAGE 增厚会
+        # 把目标声明推出固定窗口（LESSONS 卅一§3 窗口钉对插入敏感）
         i0 = src.index("@media(pointer:coarse) and (min-width:901px){")
-        seg = src[i0:i0 + 1800]
+        depth = 0; i1 = i0
+        for i1 in range(i0, min(i0 + 8000, len(src))):
+            if src[i1] == "{":
+                depth += 1
+            elif src[i1] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+        seg = src[i0:i1 + 1]
         for needle in (".cnav{padding:10px 14px}",
                        ".hbtn{min-height:36px;min-width:36px}",
                        ".switch::before{content:'';position:absolute;inset:-8px}",

@@ -647,6 +647,15 @@ class FliggyCrawler(BaseCrawler):
                     # extra schema，qunar._via 同律；消费端 normalize
                     # 对 stopover 短路判定结果不变）
                     cur["stopover"] = True
+                if "共享" in ln and not (share_map or {}).get(
+                        cur.get("code")):
+                    # 共享词面兜底（r339b F1）：「共享」词与 share
+                    # 载荷（a.J_Content data-content）同 DOM 元素渲染
+                    # ——_SHARE_JS evaluate 异常被吞/按屏漏采窗时，
+                    # 词面是共享事实的独立载体；shareCarrier 命中
+                    # （常态轮）时零增量不重复落
+                    cur["labels"] = ((cur.get("labels") + "·共享")
+                                     if cur.get("labels") else "共享")
                 continue
             # 机场行：「乌鲁木齐天山国际机场」（出发侧单航站
             # 楼无 T 码）/「虹桥国际机场T2」（到达侧 35/35 带码）——

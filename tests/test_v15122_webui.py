@@ -62,8 +62,11 @@ def test_p2d_letter_spacing_two_tier_tokens():
     # 五值并轨：0.8 与 1.5 档清零
     assert "letter-spacing:.8px" not in s
     assert "letter-spacing:1.5px" not in s
-    # 微签族消费点全走令牌：主站 9 + notify .top b = 10 处 --ls1
-    assert s.count("letter-spacing:var(--ls1)") == 10
+    # 微签族消费点全走令牌：主站 9 + notify .top b = 10 处 --ls1；
+    # r342 配置工作台新增 5 处微签（配置 chrome/概览卡/筛选预设/分组/
+    # 明细摘要）同走令牌 → 15；r344 存储卡 pstat 微签 +1 → 16
+    #（新增微签不得裸写 px 字距）
+    assert s.count("letter-spacing:var(--ls1)") == 16
     # --ls2 消费四处：装饰英文签两处（.seclab .en / .grouplab .en）
     # + r273 收编的两处 15px 展示签（.pvbody .md-g 主站 / .md .g notify）
     assert s.count("letter-spacing:var(--ls2)") == 4

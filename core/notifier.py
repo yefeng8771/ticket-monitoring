@@ -1341,12 +1341,16 @@ class NtfyNotifier:
                 }, timeout=15, trust_env=False)
             ok = 200 <= r.status_code < 300
             if ok:
+                self.last_err = None
                 self.logger.info("ntfy 强提醒已发送: %s", title)
             else:
+                self.last_err = "HTTP %s %s" % (
+                    r.status_code, (r.text or "")[:120])
                 self.logger.warning("ntfy 发送失败 %s: %s",
                                     r.status_code, r.text[:120])
             return ok
         except Exception as e:
+            self.last_err = str(e)[:160]
             self.logger.warning("ntfy 发送异常: %s", e)
             return False
 
@@ -1495,9 +1499,76 @@ class WindowsToastNotifier:
             return False
 
 
+class BarkNotifier:
+    """Bark iOS 推送通道（论坛 AiLao 提案，finb/bark）：POST {server}/
+    push JSON（GET 路径形态有 URL 长度上限，600 截断语义装不下）；
+    server 可自托管（默认官方 api.day.app）。达标专用强提醒（与 ntfy
+    同位：心跳不触发）；单发零重试同钉钉纪律；trust_env=False 直连律
+    （图床/钉钉/ntfy 同族）。level/sound 等渠道参数 v1 不透传（宁缺
+    勿错，官方默认档已够用）。"""
+
+    def __init__(self, key: str, logger: logging.Logger,
+                 server: str = "https://api.day.app",
+                 group: str = "机票监控"):
+        self.key = (key or "").strip().rstrip("/")
+        self.server = (server or "https://api.day.app").rstrip("/")
+        self.group = (group or "机票监控").strip()
+        self.logger = logger
+        self.last_errcode = None   # 聚合层透传语义（廿七§2 同律）
+
+    def send(self, title: str, desp: str = "",
+             at_mobiles: list = None, is_at_all: bool = False,
+             launch: str = "") -> bool:
+        if not self.key:
+            return False
+        # 强提醒文本纪律三件套（r339e P2-1，ntfy 同族律）：
+        # ① _alert_body 消费（图例/仪表条/⏱/@ 行滤除 + 档位 emoji
+        #    转写为词 + 装饰符剥离，单源在 _alert_body 内）；
+        # ② markdown 记号剥（_alert_body 契约：输出仍含 ####/>/[]()
+        #    原文，消费通道各自补剥——ntfy 同款三连）；
+        # ③ 截断留痕（「（已截断…）」尾注，钉钉/ntfy/短信/WinToast
+        #    同族）+ URL 截点避让 + 悬垂冒号剥
+        body = _alert_body(desp or title)
+        body = _re.sub(r"!\[[^\]]*\]\([^)]*\)", "[图]", body)
+        body = _re.sub(r"\[([^\]]*)\]\(([^)]*)\)", r"\1: \2", body)
+        body = _re.sub(r"[#>*`]", "", body)
+        body = "\n".join(ln.lstrip(" ") for ln in body.split("\n")).strip()
+        _NOTE = "（已截断，完整明细见控制台）"
+        _cut = body[:600 - len(_NOTE) - 2]
+        for _m in _re.finditer(r"https?://\S+", body):
+            if _m.start() >= len(_cut):
+                break
+            if len(_cut) < _m.end():
+                _cut = body[:_m.start()].rstrip()
+                break
+        # 悬垂冒号剥（ntfy 同构守卫：URL 避让让位后「￥2650:」残行）
+        _cut = _cut.rstrip(" ：:").rstrip()
+        if len(body) > 600 - len(_NOTE) - 2:
+            _cut += _NOTE
+        payload = {"device_key": self.key, "title": title[:200] or "机票监控",
+                   "body": _cut, "group": self.group}
+        if launch:
+            payload["url"] = launch   # 点通知跳转（_launch_public 守卫后传入）
+        try:
+            r = httpx.post(f"{self.server}/push", json=payload,
+                           timeout=15, trust_env=False)
+            self.last_errcode = r.status_code
+            ok = (r.status_code == 200 and
+                  (r.json() or {}).get("code") == 200)
+            if not ok:
+                self.logger.warning("[Bark] 推送被拒 status=%s body=%s",
+                                    r.status_code, r.text[:120])
+            return bool(ok)
+        except Exception as e:
+            self.last_errcode = -1
+            self.logger.warning("[Bark] 推送异常: %s", e)
+            return False
+
+
 def build_urgent_notifier(cfg: dict, logger: logging.Logger):
     """达标专用强提醒通道列表（与普通推送分开，心跳不会吵）：
-    ntfy（系统级弹窗+铃声）与 aliyun（云监控事件→电话/短信）可并联。"""
+    ntfy（系统级弹窗+铃声）、bark（iOS 推送）与 aliyun（云监控事件→
+    电话/短信）可并联。"""
     outs = []
     wt = (cfg or {}).get("win_toast", True)   # 缺省开启（Windows 本机弹窗）
     if isinstance(wt, dict):
@@ -1510,6 +1581,11 @@ def build_urgent_notifier(cfg: dict, logger: logging.Logger):
             topic=nt["topic"], logger=logger,
             server=nt.get("server") or "https://ntfy.sh",
             priority=nt.get("priority", 5)))
+    bk = (cfg or {}).get("bark") or {}
+    if bk.get("enabled") and (bk.get("key") or "").strip():
+        outs.append(BarkNotifier(
+            key=bk["key"], logger=logger,
+            server=bk.get("server") or "https://api.day.app"))
     ay = (cfg or {}).get("aliyun") or {}
     if ay.get("enabled") and (ay.get("url") or "").strip() and ay.get("user"):
         outs.append(AliyunAlertNotifier(
@@ -1603,6 +1679,7 @@ def build_notifier(cfg: dict, logger: logging.Logger,
         if sc.get("enabled") and sc.get("send_key"):
             primary = ServerChanNotifier(
                 send_key=sc["send_key"],
+                logger=logger,
                 channel=sc.get("channel"),
             )
     # 邮件渠道（多渠道）：emails 列表优先（每项=发件账号+

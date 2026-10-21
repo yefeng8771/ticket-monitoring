@@ -1602,7 +1602,10 @@ def render_chart(series, title, thresholds=(0, 0), out_path="data/trend.png",
     nx = PAD_L
     f_ring = d.font(13)
     for t, c in (("●深绿", C_QUAL), (f"={TIER_FULL['qual']}　", DESIGN.MUTED),
-                 ("○描绿", C_QUAL), (f"={TIER_FULL['mkt']}　", DESIGN.MUTED),
+                 ("○描绿", C_QUAL),
+                 # mkt 词条带购买性限定（r339e P3-1：与总表 summary
+                 # 词条「描绿=行情破线（未必可出手）」同图族对齐）
+                 (f"={TIER_FULL['mkt']}（未必可购）　", DESIGN.MUTED),
                  ("○琥珀", C_NEAR),
                  (f"={TIER_FULL['near']}　", DESIGN.MUTED),
                  ("▼红", C_CMP), (f"={TIER_FULL['fall']}　", DESIGN.MUTED),
@@ -2040,7 +2043,11 @@ def upload_ghimg(png_path, ih, logger):
     上传端可有代理，显示端必须读者网络直连可达（双端约束）。
     repo=owner/name，token=GitHub PAT（contents:write 权限）。"""
     repo = (ih.get("repo") or "").strip()
-    token = (ih.get("token") or "").strip()
+    # r339j 通道审计 P2-1：token 槽拆键——ghimg 专读 ghtoken（与
+    # sm.ms 的 token 隔离，切床曾互窜凭据）；legacy 无 ghtoken 回落
+    # token 存量兼容
+    token = ((ih.get("ghtoken") or "").strip()
+                 or (ih.get("token") or "").strip()).strip()
     if not repo or not token:
         return None
     stem, ext = os.path.splitext(os.path.basename(png_path))
@@ -2127,7 +2134,8 @@ def upload_chart(png_path, cfg, logger, ih=None):
     if provider == "freeimage":
         return upload_freeimage(png_path, logger)
     if provider == "ghimg" and (ih.get("repo") or "").strip() \
-            and (ih.get("token") or "").strip():
+            and ((ih.get("ghtoken") or "").strip()
+                    or (ih.get("token") or "").strip()):
         url = upload_ghimg(png_path, ih, logger)
         if url:
             return url

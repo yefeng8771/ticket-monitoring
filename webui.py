@@ -11,7 +11,9 @@ import json
 import logging
 import os
 import re
+import socket
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -33,6 +35,332 @@ def _anchored(p, default):
     """相对路径锚定仓库根（绝对路径原样）。"""
     p = (str(p) if p else "").strip() or default
     return p if os.path.isabs(p) else os.path.join(_ROOT, p)
+
+
+# open-folder 白名单解析（端点与测试共用单源）：键→config 路径→
+# _anchored 仓库根基准→目录化（文件取父目录，不存在则按原字面父路径
+# 返回由端点兜底创建）。曾按 __file__ 双层 dirname 手写基准=解析到
+# 仓库上级目录还 makedirs 造野目录（用户实报「打开路径错误」根因）
+_OPEN_KEYS = {"db": lambda c: str(((c.get("output") or {}).get(
+    "db_path", "data/prices.db")) or "data/prices.db"),
+    "log": lambda c: str(((c.get("output") or {}).get(
+        "log_path", "logs/monitor.log")) or "logs/monitor.log"),
+    "ud": lambda c: str(((c.get("crawler") or {}).get(
+        "user_data_dir", "user_data")) or "user_data"),
+    # bdir 空=playwright 系统默认缓存位（非本仓可控路径）→ None，
+    # 端点按「未自定义」回执（打开仓库根是误导，r341）
+    "bdir": lambda c: (str(((c.get("crawler") or {}).get(
+        "browser_dir", "") or "").strip()) or None),
+    # r342：配置文件本体与浏览器默认缓存位（显式键——bdir 空语义不动）
+    "cfg": lambda c: os.path.abspath(_State.config_path),
+    "bdir_default": lambda c: _playwright_cache_default()}
+
+
+# 存储四件单源（键 → config 段/键/默认值/类型）。配置页路径卡、
+# /api/config storage 与 /api/path-check 共用，防三处手抄漂移。
+_STORAGE_SPECS = {
+    "db": ("数据库", "output", "db_path", "data/prices.db", "file"),
+    "log": ("运行日志", "output", "log_path", "logs/monitor.log", "file"),
+    "ud": ("浏览器资料目录", "crawler", "user_data_dir", "user_data", "dir"),
+    "bdir": ("浏览器内核目录", "crawler", "browser_dir", "", "dir"),
+}
+
+
+def _playwright_cache_default() -> str:
+    """playwright 默认内核缓存位绝对路径（不探测网络、不创建目录）。"""
+    p = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
+    if not p:
+        base = (os.environ.get("LOCALAPPDATA") or "").strip()
+        p = os.path.join(base, "ms-playwright") if base else os.path.join(
+            os.path.expanduser("~"), ".cache", "ms-playwright")
+    return os.path.abspath(os.path.expanduser(p))
+
+
+def _storage_raw(cfg: dict, kind: str) -> str:
+    spec = _STORAGE_SPECS.get(kind)
+    if not spec:
+        return ""
+    _label, sec, key, default, _typ = spec
+    return str(((cfg or {}).get(sec) or {}).get(key) or default or "")
+
+
+def _open_file_target(which: str, cfg: dict):
+    """键 → 可在默认应用打开的文件绝对路径；目录/未知/缺席返回 None。"""
+    if which == "cfg":
+        p = os.path.abspath(_State.config_path)
+    elif which in _STORAGE_SPECS:
+        p = _path_meta(which, _storage_raw(cfg or {}, which), cfg).get("abs")
+    else:
+        return None
+    return p if p and os.path.isfile(p) else None
+
+
+_WIN_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {
+    "COM%d" % i for i in range(1, 10)} | {"LPT%d" % i for i in range(1, 10)}
+
+
+def _bad_path_reason(abs_p: str) -> str:
+    """Windows 目标路径的静态否决项；空串=通过。"""
+    # 跨平台：CI 跑 Linux 时 os.path.splitdrive 不识别 D:，会把盘符
+    # 误当目录名并因冒号判非法。显式剥离盘符后再逐段检查。
+    _p = str(abs_p or "").replace("\\", "/")
+    _p = re.sub(r"^[A-Za-z]:", "", _p)
+    for part in re.split(r"[\\/]+", _p):
+        if not part:
+            continue
+        if any(ch in part for ch in '<>:"|?*'):
+            return "路径含 Windows 不允许的字符（<>:\"|?*）：" + part
+        if part != part.rstrip(" ."):
+            return "文件名/目录名不能以空格或句点结尾：" + part
+        if part.split(".")[0].upper() in _WIN_RESERVED:
+            return "使用了 Windows 保留名：" + part
+    return ""
+
+
+def _storage_save_error(cfg: dict) -> str:
+    """保存前的四路径总检；空串=通过。
+
+    与 /api/path-check 同源，但独立于前端预览：即便有人绕过 UI 直接
+    POST，也不能把非法/同址/不可写路径写进 config.yaml 等重启才炸。
+    """
+    seen = {}
+    for kind in _STORAGE_SPECS:
+        label = _STORAGE_SPECS[kind][0]
+        m = _path_meta(kind, _storage_raw(cfg or {}, kind), cfg or {})
+        if not m.get("ok"):
+            return "%s：路径元数据读取失败" % label
+        if m.get("invalid"):
+            return "%s：%s" % (label, m["invalid"])
+        abs_p = m.get("abs") or ""
+        if abs_p in seen:
+            return "%s与%s不能使用同一路径" % (label, seen[abs_p])
+        seen[abs_p] = label
+        if m.get("exists") and not m.get("writable"):
+            return "%s：目标已存在但不可写，请换一个位置" % label
+        typ = _STORAGE_SPECS[kind][4]
+        if typ == "file" and m.get("exists") and m.get("is_dir"):
+            return "%s指向目录，请填文件路径" % label
+        if typ == "dir" and m.get("exists") and not m.get("is_dir"):
+            return "%s指向文件，请填目录路径" % label
+    return ""
+
+
+def _path_meta(kind: str, raw: str, cfg: dict = None) -> dict:
+    """路径配置 → 可视化元数据（绝对路径/存在性/体积/父目录可写）。
+
+    bdir 空值不代表无效：空=playwright 系统默认缓存位，abs 指默认位
+    且 default=True（配置页显示「系统默认」而非空白）。其余键空值
+    回落 default 与 _anchored 同律。"""
+    spec = _STORAGE_SPECS.get(kind)
+    if not spec:
+        return {"ok": False, "err": "未知存储项"}
+    label, _sec, _key, default, typ = spec
+    typed = str(raw or "").strip()
+    is_default = not typed
+    if kind == "bdir" and is_default:
+        abs_p = _playwright_cache_default()
+    else:
+        abs_p = os.path.abspath(_anchored(typed or default, ""))
+    exists = os.path.exists(abs_p)
+    is_dir = os.path.isdir(abs_p) if exists else typ == "dir"
+    size = 0
+    mtime = 0
+    if exists:
+        try:
+            # 目录不做递归计量：/api/config 每开一次配置页都遍历
+            # 近 4GB 的浏览器缓存会拖慢首屏（实测 300ms+ 竞态），
+            # 路径卡对目录只需要存在性与可写性；文件体积照常。
+            if os.path.isfile(abs_p):
+                size = os.path.getsize(abs_p)
+            mtime = int(os.path.getmtime(abs_p))
+        except OSError:
+            pass
+    # 存在目录=自身即父；缺失目录/文件=字面父目录（缺失目录自身不可
+    # 当父目录探测，否则「父目录尚不存在」对 user_data_x 恒误报）
+    parent = abs_p if (exists and is_dir) else os.path.dirname(abs_p)
+    parent_exists = os.path.isdir(parent)
+    # 父目录可写探测：只查权限位/尝试等价判断，不创建文件
+    parent_writable = False
+    if parent_exists:
+        try:
+            parent_writable = os.access(parent, os.W_OK)
+        except OSError:
+            parent_writable = False
+    # 父目录尚不存在≠不可写：向上找最近已存在的祖先探测权限——
+    # 重启时 os.makedirs 会逐级创建；UI 曾把「待创建」误报「不可写」。
+    probe = parent
+    while probe and not os.path.isdir(probe):
+        nxt = os.path.dirname(probe)
+        if nxt == probe:
+            break
+        probe = nxt
+    ancestor_exists = bool(probe and os.path.isdir(probe))
+    ancestor_writable = False
+    if ancestor_exists:
+        try:
+            ancestor_writable = os.access(probe, os.W_OK)
+        except OSError:
+            ancestor_writable = False
+    creatable = bool((parent_writable if parent_exists else ancestor_writable)
+                     and not exists)
+    writable = False
+    if exists:
+        try:
+            writable = os.access(abs_p, os.W_OK)
+        except OSError:
+            writable = False
+    elif creatable:
+        writable = True
+    return {"ok": True, "kind": kind, "label": label,
+            "raw": typed, "abs": abs_p, "type": typ,
+            "default": is_default, "exists": bool(exists),
+            "is_dir": bool(is_dir), "size": int(size), "mtime": mtime,
+            "parent": parent, "parent_exists": bool(parent_exists),
+            "parent_writable": bool(parent_writable),
+            "creatable": creatable, "writable": bool(writable),
+            "invalid": _bad_path_reason(abs_p),
+            "ancestor": probe or "", "ancestor_exists": ancestor_exists,
+            "ancestor_writable": bool(ancestor_writable)}
+
+
+def _storage_view(cfg: dict) -> dict:
+    return {k: _path_meta(k, _storage_raw(cfg, k), cfg)
+            for k in _STORAGE_SPECS}
+
+
+def _demo_config_payload() -> dict:
+    """演示 /api/config 与静态演示站共用的单一载荷源。
+
+    配置卡、航线摘要与 state 同源，防止静态站出现「1 条旧航线 / 9 月
+    日期」而监控页是 6 条 11 月航线的双源矛盾。
+    """
+    from core.demo import demo_routes as _demo_routes
+    from wizard import CITY as _CITY_TAB
+    return {
+        "users": [{
+            "name": "演示用户",
+            "routes": [
+                {"from": r["from"], "from_name": r["from_name"],
+                 "to": r["to"], "to_name": r["to_name"],
+                 "dates": r["dates"],
+                 "alert_direct": r["alert_direct"],
+                 "alert_transfer": r["alert_transfer"]}
+                for r in _demo_routes()],
+            "notifier": {"dingtalk": {"enabled": False},
+                         "win_toast": True,
+                         "image_host": {"provider": "ghimg",
+                                        "repo": "demo/ticket-img"}},
+            "platforms": ["qunar", "ctrip", "fliggy",
+                          "tongcheng", "tuniu"],
+            "specials": [{"enabled": True, "from": "SHA",
+                          "from_name": "上海",
+                          "max_price": 400, "days": 30}],
+        }],
+        "city": dict(_CITY_TAB),
+        "cityx": _cityx(), "intl": _intl_payload(),
+        "airline_alias": _airalias(), "demo": True,
+        "globals": {"interval_minutes": 15, "jitter_minutes": 5,
+                    "port": int(((_State.cfg or {}).get("web") or {})
+                                .get("port", 8765) or 8765),
+                    "run_on_start": True, "headless": True,
+                    "timeout_seconds": 45, "delay_min": 5, "delay_max": 15,
+                    "user_agent": "", "debug": False, "browser_dir": "",
+                    "db_path": "data/prices.db",
+                    "log_path": "logs/monitor.log",
+                    "user_data_dir": "user_data",
+                    "globals_abs": {
+                        "db": os.path.abspath("data/prices.db"),
+                        "log": os.path.abspath("logs/monitor.log"),
+                        "ud": os.path.abspath("user_data"),
+                        "bdir": ""}},
+        "storage": _storage_view(_State.cfg or {}),
+        "restart": {"required": False, "changed": [], "labels": {},
+                    "running": {}, "saved": {}},
+        "runtime": _runtime_view(demo=True)}
+
+
+def _startup_vals(cfg: dict) -> dict:
+    """启动级四键的**生效绝对路径**（运行态重启差量与迁移预览共用）。
+
+    r342：按字面值比较会把「显式写默认值」误判为需重启；统一锚定
+    绝对路径后，默认/显式默认等价，且重启中心展示的是用户可核对的
+    真实落点。bdir 空=渠道默认位（不进重启差量）。"""
+    defaults = {"db_path": "data/prices.db",
+                "log_path": "logs/monitor.log",
+                "user_data_dir": "user_data"}
+    out = {}
+    for k in ("db_path", "log_path", "user_data_dir", "browser_dir"):
+        if k in ("db_path", "log_path"):
+            raw = str(((cfg or {}).get("output") or {}).get(k) or "")
+        else:
+            raw = str(((cfg or {}).get("crawler") or {}).get(k) or "")
+        if k == "browser_dir":
+            out[k] = os.path.abspath(_anchored(raw, "")) if raw.strip() else ""
+        else:
+            out[k] = os.path.abspath(_anchored(
+                raw.strip() or defaults[k], defaults[k]))
+    # r345：监听地址与启动即扫同样是启动级——保存后进程未重启不会生效，
+    # 旧重启中心只列四路径，UI 的 ♻ 徽标因此悬空。
+    out["host"] = str(((cfg or {}).get("web") or {}).get("host")
+                      or "127.0.0.1").strip() or "127.0.0.1"
+    out["run_on_start"] = bool(
+        ((cfg or {}).get("schedule") or {}).get("run_on_start", True))
+    return out
+
+
+def _runtime_view(demo: bool = False) -> dict:
+    """运行时身份（配置页透明化）：程序根/配置文件绝对路径/PID/版本/
+    配置文件体积与修改时间——「我现在跑的是哪份配置」一屏可核对。"""
+    p = os.path.abspath(_State.config_path)
+    size, mtime, exists = 0, 0, os.path.isfile(p)
+    if exists:
+        try:
+            size = os.path.getsize(p)
+            mtime = int(os.path.getmtime(p))
+        except OSError:
+            pass
+    return {"root": os.path.abspath(_ROOT), "config_path": p,
+            "config_exists": bool(exists), "config_size": int(size),
+            "config_mtime": int(mtime), "pid": os.getpid(),
+            "version": str(getattr(_State, "version", "") or ""),
+            "listen": str(getattr(_State, "listen", "") or ""),
+            "started_at": str(getattr(_State, "started_at", "") or ""),
+            "tz": time.strftime("%Z") or "",
+            "argv": list(sys.argv),
+            "demo": bool(demo)}
+
+
+def _restart_view(file_cfg: dict) -> dict:
+    """当前 config.yaml vs 进程启动时配置：已保存但重启后才生效的键。
+
+    这是「重启可视化」的单源——保存后刷新页面仍能看到待重启项，
+    不再依赖前端 GLB_CLEAN 的单会话差量。"""
+    # 比较基准必须是进程启动快照而非热重载后的 _State.cfg：保存配置
+    # 会热重载内存引用，用当前引用比较会把「已保存待重启」瞬间抹平
+    running = _startup_vals(
+        getattr(_State, "boot_cfg", None) or _State.cfg or {})
+    saved = _startup_vals(file_cfg or {})
+    changed = [k for k in running if running[k] != saved[k]]
+    labels = {"db_path": "数据库", "log_path": "运行日志",
+              "user_data_dir": "浏览器资料目录",
+              "browser_dir": "浏览器内核目录",
+              "host": "控制台监听地址",
+              "run_on_start": "启动即扫"}
+    return {"required": bool(changed), "changed": changed,
+            "labels": {k: labels[k] for k in changed},
+            "running": running, "saved": saved}
+
+
+def _open_folder_target(which, cfg):
+    """键 → 应在资源管理器中打开的目录绝对路径；白名单外返回 None。"""
+    fn = _OPEN_KEYS.get(which)
+    if not fn:
+        return None
+    v = fn(cfg or {})
+    if not v:
+        return None
+    p = _anchored(v, "")
+    return p if os.path.isdir(p) else os.path.dirname(p)
 
 
 # 演示模式（python webui.py --demo）：/api/* 走合成数据，POST 全部只读拦截
@@ -333,6 +661,7 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
   pointer-events:none;opacity:0;background:linear-gradient(90deg,transparent,var(--card));
   transition:opacity .15s}
  .tw.xhint::after{opacity:1}
+ .tw.xend::after{opacity:0}   /* r345：X 方向滚到底撤渐隐（xhint 与 xend 曾同真） */
  table{border-collapse:collapse;width:100%;font-size:13px;background:var(--card)}
  th{position:sticky;top:0;background:var(--headbg);color:var(--tx2);font-weight:600;
     font-size:11px;letter-spacing:var(--ls1);z-index:3}
@@ -394,6 +723,14 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .subsec{font-size:11px;letter-spacing:var(--ls1);color:var(--mut);margin:13px 0 7px;
    display:flex;align-items:center;gap:8px;text-transform:uppercase}
  .subsec::after{content:'';flex:1;height:1px;background:var(--line)}
+ /* 启动级重启横幅两态：弱=编辑未保存（警示底纹），armed=已保存待
+    重启（左侧粗描边+内嵌立即重启钮）；-1px 外贴 subsec 呼吸缝。
+    display:flex 写在类上（初始隐藏=行内 style，JS 复位 '' 落回类） */
+ .rhint{display:flex;margin:-1px 0 8px;padding:7px 12px;border-radius:var(--r3);
+   font-size:12px;background:color-mix(in srgb,var(--warn) 10%,var(--card));
+   border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);
+   color:var(--warn-deep);align-items:center;flex-wrap:wrap;gap:4px}
+ .rhint.armed{border-left:3px solid var(--warn);font-weight:600}
  /* ===== 设置行范式（settings list）：说明居左、窄控件居右、hairline 分行 ===== */
  .srow{display:flex;align-items:center;gap:14px;padding:9px 2px;
    border-bottom:1px solid var(--line);min-height:46px;min-width:0;
@@ -403,6 +740,30 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .srow .slab b{overflow:hidden;text-overflow:ellipsis}
  .srow .slab b{font-size:13px;color:var(--tx);font-weight:600;display:block}
  .srow .shint{font-size:11px;color:var(--mut);margin-top:2px;line-height:1.5}
+ /* 航司白名单实时解析预览（r339h 东航案）：条目→码逐条可视，
+    不在册条目如实标注片段匹配兜底——输入语义零黑箱；空态零占位 */
+ .airpv{font-size:11px;color:var(--mut);line-height:1.9}
+ .airpv:not(:empty){margin-top:5px}
+ .airtag{display:inline-block;padding:1px 8px;margin:0 6px 3px 0;
+   border-radius:var(--r3);background:var(--rowalt);border:1px solid var(--line);
+   font-size:11px;white-space:nowrap}
+ .airtag b{color:var(--ok-txt)}
+ .airtag.ban{border-color:color-mix(in srgb,var(--red) 35%,transparent);
+   background:color-mix(in srgb,var(--red) 7%,var(--card))}
+ .airun{color:var(--warn-deep)}
+ /* 航线卡高频重排（r339）：直飞价=keyin 放大突出（决策第一锚点）；
+    rthead=高级约束折叠头（低频项默认收起），aria-expanded 单源驱动
+    chev 旋转（_setFold 同步 aria，两态都在场时 CSS 只认 aria） */
+
+ .rthead{display:flex;align-items:center;gap:8px;margin:6px 0 2px;padding:8px 10px;cursor:pointer;user-select:none;border:1px dashed var(--line);border-radius:var(--r2,8px)}
+ .rthead:hover{background:var(--bg)}
+ .rthead b{font-size:12px;color:var(--tx)}
+ .rthead b{flex:none;white-space:nowrap}
+ .rthead .rfsum{flex:1 1 auto;min-width:0;font-size:11px;color:var(--mut);
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .rthead .rfltbadge{flex:none}
+ .rthead .chev{margin-left:auto;color:var(--mut);font-size:11px;transition:transform .18s}
+ .rthead[aria-expanded="false"] .chev{transform:rotate(-90deg)}
  .srow .sctl{flex:none;display:flex;align-items:center;gap:8px;max-width:72%;flex-wrap:wrap}
  .srow .sctl[style*="flex:1"]{flex:1;max-width:none}
  .srow .sctl input{max-width:100%}
@@ -420,6 +781,7 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .srow .sctl input[type=time],.srow .sctl input:not([type]){width:118px}
  .srow .sctl input[type=time]{text-align:center;padding:0 8px}
  .srow .sctl .btn2{height:34px}
+ .srow .sctl input.keyin{width:116px;font-size:19px;font-weight:700;font-family:var(--num)}   /* r339：直飞价=keyin 放大突出（决策第一锚点）；特异性 (0,3,1)+源码序后置压过上方 13px/96px 基线（A2 审计 V1：旧 .srow .keyin (0,2,0) 全视口死档实锤） */
  .sunit{color:var(--mut);font-size:11px;font-family:var(--num)}
  .switch{appearance:none;-webkit-appearance:none;width:36px;height:20px;
    border-radius:var(--pill);background:var(--ctlbd);position:relative;cursor:pointer;
@@ -447,8 +809,9 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
         padding:10px 14px;margin:8px 0;min-width:0;max-width:100%;
         box-sizing:border-box;overflow:hidden}
  /* 停用态：整卡降不透明度 + 城市对去色；徽标提示「已停用」 */
- .rline.off{opacity:.62}
- .rline.off .rtcode,.rline.off .rhead b{filter:grayscale(1)}
+ .rline.off{opacity:1;background:var(--rowalt)}
+ .rline.off .rtcode,.rline.off .rhead b{filter:grayscale(1);color:var(--mut)}
+ .rline.off .muted,.rline.off .shint{color:var(--mut)}   /* r345：整卡 0.62 曾把标题压到 2.77:1 */
  .rbadge{color:var(--warn);font-weight:700;font-size:11px;white-space:nowrap}
  /* 国际徽标（r325）：实心紫系小徽，与明细行国际 tag 同 token 同相 */
  .rintl{background:var(--fill-i);color:#fff;border-radius:var(--pill);
@@ -461,11 +824,15 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
         border:1px solid var(--redbd);background:transparent;border-radius:var(--r3);
         padding:5px 12px;transition:.15s}
  .danger:hover{background:var(--redbg);border-color:var(--redbdh)}
+ .glcell input.bad,.pathcard input.bad{border-color:var(--red)!important;box-shadow:0 0 0 2px var(--redbg)!important}   /* r346：全档生效，桌面/窄档同红边 */
  .btn2{background:var(--card);color:var(--blue);border:1px solid var(--ctlbd);border-radius:var(--r3);
        padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;
        box-shadow:var(--sh1);margin-right:6px;transition:.15s}
  .btn2:hover{background:var(--headbg);box-shadow:var(--sh2)}
  .btn2:active{transform:scale(.97)}
+ ::placeholder{color:var(--mut);opacity:1}   /* UA #757575 在暗色仅 3.87:1 */
+ button:disabled,.btn2:disabled,.danger:disabled{opacity:.45;cursor:not-allowed;
+   box-shadow:none;transform:none}
  /* users 动作行四钮同排同高：副动作 btn2 对齐行基准主钮高度
     （作用域限定本行，fbar 等其他 .btn2 消费点零扰动） */
  #sec-users>.row>.btn2{padding-top:9px;padding-bottom:9px;font-size:13px}
@@ -477,6 +844,14 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
   display:inline-block;vertical-align:-2px;animation:spin .8s linear infinite}
  @keyframes spin{to{transform:rotate(360deg)}}
  .fbar{margin:8px 0;padding:10px 12px;background:var(--rowalt);border-radius:var(--r10)}
+ .fdrawer-cta{display:none}
+ @media(max-width:760px){
+  body:has(.fbar.open) .fdrawer-cta{display:flex;position:fixed;left:12px;right:12px;
+    bottom:12px;z-index:125;justify-content:center}
+  body:has(.fbar.open):has(.savebar.on) .fdrawer-cta{bottom:calc(var(--sbh,50px) + 12px)}
+  .fdrawer-cta .btn2{width:100%;height:44px;margin:0;justify-content:center;
+    background:var(--fill);color:#fff;border-color:transparent;box-shadow:var(--sh2)}
+ }
  .frow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
  .frow+.frow{margin-top:8px}
  /* 档位图例补位行级开关：行整体切换（宽档 display:none 零占位——
@@ -487,7 +862,7 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  /* 空筛选行不再吃间距（单航线/单日期下 datechips/routechips 空置） */
  .frow:empty{display:none}
  #chartRoutes:empty{display:none}
- .chiplab{font-size:12px;color:var(--mut)}
+ .chiplab{font-size:12px;color:var(--mut);flex:none;white-space:nowrap}
  /* attrchips 顶轴对齐（r324 P3-1）：chiplab 补与 .chip 同值的纵向
     padding=盒高对齐单片，单行形态视觉不变、多行航司组不再把单行
     组悬中；padding 与 .chip 纵向 padding 同源改则同改 */
@@ -497,6 +872,33 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
     航司/机型改用可折行容器（platchips 同语义） */
  .chips-wrap{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
  #alchips{flex:1 1 200px;min-width:180px}
+ /* r343 明细属性筛选压缩：航司/机场从多行 chip 墙收敛为单行横滚 +
+   航司搜索；一行航空司不再把表格推到首屏之外。 */
+ .attrgrid{display:flex;flex-wrap:wrap;gap:5px 14px;align-items:center}
+ .attrgrid .agrp{display:flex;align-items:center;gap:6px;min-width:0;
+   flex:1 1 210px}
+ .attrgrid .agrp.ag-wide{flex:1 1 100%}
+ .attrgrid .agrp .chips-wrap{flex:1 1 auto;min-width:0;flex-wrap:nowrap;
+   overflow-x:auto;overflow-y:hidden;padding:2px 0;scrollbar-width:thin}
+ .attrgrid .agrp .chips-wrap::-webkit-scrollbar{height:5px}
+ .attrgrid .agrp .chip{flex:none}
+ .attrq{height:26px;width:108px;flex:none;padding:0 9px;border:1px solid var(--ctlbd);
+   border-radius:var(--r3);background:var(--card);color:var(--tx);font-size:11px;
+   transition:border-color .15s,box-shadow .15s}
+ .attrq:hover{border-color:var(--mut)}
+ .attrq:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--ring)}
+ @media(max-width:760px){.attrgrid .agrp{flex:1 1 100%}
+   /* r345 390 溢出根治且不增行：航司组保持单行——搜索框定宽
+      104px，片行 flex:1/min-width:0 内横滚，不再把页面撑到 563px；
+      通用组不 wrap（旧溢出只来自 100% 搜索框 + 180px 片行）。 */
+   .attrgrid .ag-wide .attrq{flex:0 0 104px;width:104px;min-width:0;height:36px;font-size:14px}
+   #alchips{flex:1 1 0;min-width:0}
+   .attrq{height:36px;font-size:16px}
+   .chhead .chdel{min-height:36px;display:inline-flex;align-items:center;padding:0 10px}
+   .cmfoot .btn2,.cmfoot .danger{height:38px}}
+ @media(pointer:coarse){
+   .chhead .chdel{min-height:36px;display:inline-flex;align-items:center}
+   .cmfoot .btn2,.cmfoot .danger{height:38px}}
  /* 「⇅日期」排序 chip（≤760 显示，桌面有表头入口）：箭头由
     data-dir 属性驱动 content——排序点击只 setAttribute 零 childList
     变更（扩展 MutationObserver 免疫预置律，LESSONS 十二§3） */
@@ -561,12 +963,9 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
     落空）——右向改由实体盒承载：inline-block+padding 右扩 14px、
     负 margin 对消净布局零位移；::after 右向 inset 收敛 0，防
     padding 撑盒后同向双倍越界侵入邻片，左向/纵向维持 -14px */
- .dchip .dx{font-style:normal;margin-left:6px;margin-right:-14px;opacity:.45;cursor:pointer;
+ .dchip .dx{font-style:normal;margin-left:6px;margin-right:-14px;opacity:.65;cursor:pointer;
    font-size:11px;transition:.15s;display:inline-block;padding:0 14px 0 0}
- .dchip .dx:hover{opacity:1;color:#fff}
- /* 隐藏真 date 控件：仅供 📅 按钮唤原生日历（showPicker），不占视觉 */
- .dreal{position:absolute;width:0;height:0;opacity:0;pointer-events:none;
-   border:0;padding:0}
+ .dchip .dx:hover{opacity:1;color:inherit}
  /* 时段快捷挡：srow 内小号 chip（复用 chip 视觉语言，尺寸贴 time 输入） */
  .schip{padding:4px 9px;border-radius:var(--r3);font-size:11px}
  .chip .bd.mid{color:var(--warn-deep)}.chip .bd.old{color:var(--red)}
@@ -965,6 +1364,7 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .lgdot.on{background:var(--green);box-shadow:0 0 0 3px rgba(var(--okrgb),.15)}
  /* 会话失效证据档（stale）：琥珀点+警示边——档案在而服务端按未登录处理 */
  .lgdot.stale{background:var(--warn);box-shadow:0 0 0 3px rgba(255,170,0,.14)}
+ .lgdot.mid{background:var(--warn);box-shadow:0 0 0 3px var(--warnbg)}   /* 已开但缺凭据=琥珀，不是假绿 */
  .lggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px}
  .lgcard{border:1px solid var(--line);border-radius:var(--r2);padding:12px 14px;
    background:var(--card);display:flex;flex-direction:column;gap:7px;
@@ -978,6 +1378,8 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .lgcard .lgsub{font-size:11px;color:var(--mut)}
  .lgcard .btn2{margin-top:auto}
  .glgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+ .glabs{font-size:10px;color:var(--mut);font-family:var(--num);
+overflow-wrap:anywhere;margin-top:2px;opacity:.95}   /* r342：未定义的 --tx3/--mono 令牌归位（绝对路径可读性） */
  .glcell{border:1px solid var(--line);border-radius:var(--r2);padding:12px 14px;
    background:var(--card);transition:border-color .2s}   /* 12px 14px 与 .lgcard/.chcard 同档（P2-B：11px 垂直档系全卡唯一游离值） */
  .glcell:hover{border-color:var(--line2)}
@@ -992,13 +1394,24 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  /* P1-1：hover/focus 豁免 .switch（原 outline:none 吞掉三枚开关键盘
     焦点环，srow/fbar 对照均有 UA 环；数字/文本输入样式零变化） */
  .glcell .gsub{font-size:11px;color:var(--mut);margin-top:5px}
- .chgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(272px,1fr));
-   gap:10px;margin-top:8px}
+ /* r343：通知渠道从 auto-fit 网格改为单列手风琴。旧网格 4 列 + 展开卡
+   跨全宽会把后续卡整体推走（用户实报「展开位置诡异、不对称」）；
+   一行一渠道、原地纵向展开，操作位置恒定。 */
+ .chgrid{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+ .chcard.expanded{grid-column:auto}/* 兼容旧折叠类；单列下无跨越语义 */
+ .chgrid>button.chemadd{width:100%;min-height:42px;display:flex;align-items:center;
+   justify-content:center;gap:6px;border-style:dashed;color:var(--blue);
+   background:var(--headbg);box-shadow:none;margin:2px 0 0;font-size:12px}
+ .chgrid>button.chemadd:hover{background:var(--hover);border-color:var(--blue)}
+ .chhead .chdel{margin-left:4px;font-size:11px;color:var(--mut);cursor:pointer;
+   padding:3px 7px;border-radius:5px;white-space:nowrap;transition:.15s;
+   position:relative;z-index:2}   /* 压过 .chhead::after 的整行触控外扩层：否则删除钮命中被折叠头劫持 */
+ .chhead .chdel:hover,.chhead .chdel:focus-visible{color:var(--red);background:var(--redbg);outline:none}
+ .chhead .chdel::before{content:'🗑 '}
  /* 网格尾件（动作钮）与「删除用户」钮的呼吸缝：0px 贴合在暗色下
     边框互切成粘叠观感——与网格 gap 同律的 10px；邻接选择器只命中
     紧跟通道网格的删除用户钮，不溅其他 .danger */
- .chgrid + button.danger{margin-top:10px}
- .chcard.expanded{grid-column:1/-1}/* 展开的通道卡跨全宽，不留半列空白 */
+ .chgrid + button.danger{margin-top:10px;margin-left:auto;display:block}
  .chcard.ih-free .ih-token{display:none!important}/* freeimage 下藏 Token 行——!important 压过 applyFolds 展开时的 inline 清空 */
  /* 图床三态行显隐（ghimg=GitHub 图库主通路）：gh 行默认藏、ih-ghimg
     卡显（特异性 0,3,0 压过 0,2,0 的藏），sm.ms Token 行在 ghimg 下藏；
@@ -1011,7 +1424,12 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
    background:var(--card);display:flex;flex-direction:column;gap:9px;
    transition:border-color .2s}
  .chcard.on{border-color:rgba(var(--okrgb),.4)}
- .chhead{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700}
+ .chcard.todo{border-color:var(--warnbd);background:linear-gradient(180deg,var(--warnbg),transparent 42%)}
+ .chhead .ch-title{flex:1 1 0;width:0;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap}   /* r346 390 长邮箱标题不再把删除钮挤出卡外 */
+ .chcard{scroll-margin-top:calc(var(--hdh,54px) + 12px)}
+ .chhead{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;
+   flex-wrap:wrap;row-gap:3px}
  .chhead .muted{font-weight:500;margin-left:auto;white-space:nowrap}
  .hint{font-size:11px;color:var(--mut);line-height:1.55;margin-top:5px}
  .uhead2{cursor:pointer;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 16px;
@@ -1040,7 +1458,7 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .grouplab[data-sec]:hover .zh,.chhead[role="button"]:hover{color:var(--blue)}
  .rhead[role="button"]:hover .rtcode{border-color:var(--blue)}
  .grouplab .chev{margin-left:auto}
- .ucard.flash,.rline.flash{animation:cfgflash 1.4s ease-out}
+ .ucard.flash,.rline.flash,.chcard.flash{animation:cfgflash 1.4s ease-out}
  @keyframes cfgflash{0%{box-shadow:0 0 0 3px rgba(var(--blue-rgb),.5)}
   100%{box-shadow:0 0 0 3px rgba(var(--blue-rgb),0)}}
  .rtcode{font-family:var(--num);font-size:14px;font-weight:600;color:var(--mut);
@@ -1199,6 +1617,24 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
     与吸附分隔投影双影并存（表头首列环同语言），ID 特异度恒压 (0,2,1) 打底块 */
  #ftable tbody tr:focus-visible td:first-child{box-shadow:inset 2px 0 0 var(--blue),2px 0 0 var(--line);outline:none}
  /* ===== 触控热区扩展：可点小控件以 ::after 外扩命中区（视觉尺寸不变） ===== */
+ /* 日期片群 flex 排版（r339d D1/D2 收口）：.chip 基类无 display
+    （默认 inline）——片内日期 token 断行（「2026-」/「11-08」拆两
+    行）+ 换行片垂直叠压（inline 纵向 padding 不撑行盒，实测 -5~
+    -37px）+ 桌面档相邻片零间距（.chip+.chip margin 只在触控块，
+    ✕ 热区 -14px 左向侵入邻片）。作用面收敛在日期片，不动全站
+    .chip（导航/筛选 chips 族零波及） */
+ .dchips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+/* 窄档（≤760）：日期两段式行改上下堆叠满宽——row 布局下 sctl 被
+   slab 挤进 72% 窄列，片群 1 颗/行右溢裁切（390 实测）；column+
+   满宽后 3 片/行自然回绕。置尾晚于基础块与 760 触控块（同特异性
+   后者胜，LESSONS 廿一§1） */
+@media(max-width:760px){
+ /* 窄带配置行堆叠：srow 转列后 align-items 不在此声明（基础层顶对齐
+    flex-start 源码序更晚恒胜，写了即死档）——满宽意图由下行的
+    .sctl width:100% 承载 */
+ .srow:has(.dwrap){flex-direction:column;gap:4px}
+ .srow:has(.dwrap)>.sctl{max-width:100%;width:100%}}
+ .dchip{display:inline-flex;align-items:center;vertical-align:top}
  .dchip .dx,.pvx,a.vw,.hc,.tj{position:relative}
  .pvx::after,a.vw::after{content:'';position:absolute;inset:-11px -8px}   /* 纵向 -11px 达 36 触控基准：a.vw 是纯 inline 盒，::after 包含块取行内片段 content-box，-9px 实测只兑现 34px；横向 -8px 已富余 */
  /* .dx 字面实测 9×15px：::after 左/纵 -14px + 实体盒右 padding 14px
@@ -1221,8 +1657,10 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  /* .chhead（配置页通道卡折叠头，role=button 点击 foldCh 收展）同族
     收编：本体仅 13.5px 字号行高 ≈19px，三处触控基准缺口；纵向 -9px
     补到触控基准，横向 -8px——chcard 间距 10px 内衬不吃相邻卡命中 */
+ /* .chhead 本体实测 17px（r339d D6：注释按 ≈19px 推算的 -9px 实
+    测 35px 差 1px）——纵向 -10px 补到 37px 触控基准 */
  .chhead[role=button]{position:relative}
- .chhead[role=button]::after{content:'';position:absolute;inset:-9px -8px}
+ .chhead[role=button]::after{content:'';position:absolute;inset:-10px -8px}
  /* .pvbody a（弹层正文链接，三入口共用）：inline 锚盒高随环境字体
     浮动（Windows 17px / CI Linux 15px），按最差环境取值 -11px 补到
     CI 37px/Win 39px 触控基准（-10px 在 CI 差 1px 实锤）；
@@ -1344,6 +1782,8 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
     同值补档（历史纪律：媒体增强块置于文件尾部） ===== */
  @media(pointer:coarse) and (min-width:901px){
   .chip,.mchip,.rngchip{padding:9px 14px;font-size:13px}
+  /* 航线卡高级约束折叠头（r339）：触控 36 地板（flex 化垂直居中） */
+  .rthead{min-height:36px}
   nav span,.tabs span{padding:9px 14px}
   /* nav span 触控 36 地板（仅 padding 增强时视高 ~35 差 1px）；
      inline 元素 min-height 不生效，flex 化垂直居中（三触控块同律） */
@@ -1436,6 +1876,7 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
   .fbar.open{display:block;animation:vin .18s ease}/* 抽屉淡入（复用 vin），免突现 */
   .fbar label,.fbar select,.fbar input{font-size:13px}
   button{padding:11px 16px}
+  .rthead{min-height:36px}
   .hc{width:5px}
  }
  /* ===== 移动端触控目标增强（基础规则之后声明，防同特异性覆盖） ===== */
@@ -1446,11 +1887,16 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
   nav span{min-height:36px;display:inline-flex;align-items:center}
   .chip{padding:9px 14px;font-size:13px}/* 触控目标 ~36px，间距防误触 */
   .chip+.chip{margin-left:6px}
+  /* 返程/出发日期片群间距（r339d D2：桌面档 .chip+.chip margin 只在
+     触控块的缺口由 .dchips flex gap 兜住，此处不重复加 margin） */
   .mchip{padding:9px 14px;font-size:13px}/* 与 chip 同触控基准（原 26px 偏小） */
   .fbar input:not(.switch),.fbar select{padding:9px 10px}
   /* 触控基准最后两个漏点：表头排序/配置左导航原 ~34px */
   th.srt{padding:11px 8px}
   .cnav{padding:10px 14px}
+  /* 航线卡高级约束折叠头 36 地板（r339d D5：与 ≤900coarse/901+coarse
+     块三处互指，手机档同族缺口） */
+  .rthead{min-height:36px}
  }
  /* 触控增强必须声明在基础规则之后（同特异性后者胜——曾写在前面整块失效） */
  @media(max-width:760px){.rngchip{padding:9px 14px;font-size:13px}
@@ -1472,6 +1918,15 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
        srow/fbar/glcell 一员不缺（同值补档全族清点，防新增开关位
        时只改部分块的家族漂移） */
    .btn2{min-height:36px}
+   /* 390 档行尾控件越界裁切收口（r339d D3/D8）：sctl flex:none 拒绝
+      收缩，slab 后剩余宽放不下最窄不可断控件行 → 行盒右向越界被
+      .rline overflow:hidden 裁 17px（返程/出发日期/心理价三行实测
+      19 件越界）。放开收缩+允许回绕（行内 flex-wrap 已在）——控件
+      换行代替越界；Bark Key 输入 126px 收窄同根随此消化 */
+   .srow .sctl{flex:0 1 auto;min-width:0}
+   /* 通路验证按钮词面长（~184px 不可断）——可断行收进卡内
+      （r339d D4：chcard overflowX visible，越界直接悬出卡外 44px） */
+   .chcard .srow .sctl .btn2{max-width:100%;white-space:normal}
    .srow .sctl .switch::before{content:'';position:absolute;inset:-8px}
    .fbar .switch::before{content:'';position:absolute;inset:-8px}
    .glcell .switch::before{content:'';position:absolute;inset:-8px}
@@ -1498,15 +1953,19 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
      （iOS 聚焦自动放大且不回位；仅本媒体内生效，桌面 13px 观感不变） */
  /* ===== savebar 小屏（≤760）防溢出+toast 抬升（从 ≤390 提档：391-760 档 savebar 同样可折双行，toast z-index 300 曾盖住按钮点错格） ===== */
  @media(max-width:760px){
-  .savebar{left:12px;right:12px;max-width:calc(100vw - 24px);justify-content:flex-end}
+  .savebar{left:12px;right:12px;max-width:calc(100vw - 24px);justify-content:flex-end;
+    flex-wrap:nowrap;gap:8px;padding:8px 10px;font-size:12px}
+  .savebar #saveTxt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;font-size:12px}
+  .savebar button{flex:none;padding:8px 10px;font-size:12px}
   /* 垫底与 toast 抬升同挂 --sbh 动态单源（双行实高随内容漂移，
      固定 132/148 校准退役；fallback 84+48=132、112+36=148 为
      JS 失效等效值=旧双行校准） */
   #cfgview{padding-bottom:calc(var(--sbh,84px) + 48px)}
-  #toasts{bottom:96px;right:12px}
-  /* toast 底与 savebar 首行恒差呼吸缝（与视口高度无关）——
-     savebar 在场时 toast 整体抬到其上方（实高+bottom+呼吸） */
-  body:has(.savebar.on) #toasts{bottom:calc(var(--sbh,112px) + 36px)}}
+  /* r346：移动端 toast 移到 header 下缘，避开拇指区的「加入/删除/测试」；
+     toast 仍可点击关闭（不牺牲可发现性），但不再压住底栏动作。 */
+  #toasts{top:calc(var(--hdh,54px) + 12px);bottom:auto;right:12px}
+  body:has(.savebar.on) #toasts{bottom:auto}}
  /* ===== ≤390px 小屏档（手机竖排末端）：卡距/header 再收一档；声明在 ≤760 合并块之后（header padding 同特异性后者胜） ===== */
  @media(max-width:390px){
   .kpi{padding:10px 12px}
@@ -1569,7 +2028,9 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
     缩放令 savebar 增高即重叠盖住保存按钮。抬到 --sbh+56（fallback
     96=旧校准值，JS 失效等效）；媒体条件与 ≤760 档 calc 抬升互斥，
     不参与层叠竞争 */
- @media(min-width:761px){body:has(.savebar.on) #toasts{bottom:calc(var(--sbh,40px) + 56px)}}
+ @media(min-width:761px){
+  .savebar{left:18px;right:auto}   /* r346：左停靠，避开右侧日期提交/保存动作 */
+  body:has(.savebar.on) #toasts{bottom:calc(var(--sbh,40px) + 56px)}}
  /* P2-5：教学行左距挪基础 CSS（内联 style 曾在 ≤760 独立成行后
     残留右偏——媒体块 margin 简写可覆写本值，内联则压不过）。
     触屏隐藏的 coarse 块置样式区尾（同选择器 ≤760 块的层叠序） */
@@ -1895,7 +2356,10 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
     (置尾块晚于 5px 基础声明的地位不变),768-900 带覆盖写生效 */
  @media(pointer:coarse) and (max-width:900px){
   .hcells{overflow-x:auto;overflow-y:hidden}
-  .hc{width:9px;flex:none}}
+  .hc{width:9px;flex:none}
+  /* 航线卡高级约束折叠头 36 触控地板（r339d D5：901+coarse 块已收
+     本条，iPad 竖屏带与手机档同族缺口——三触控块互指纪律） */
+  .rthead{min-height:36px}}
  /* ===== >901 coarse 健康格触控补档（r306 审计 P3-1）：iPad Pro 横屏
     1366 落 ≥1024 弹性带 flex 均分实测 8.4px<9px 触控地板，901-1023
     coarse 落基础 6px 更窄。置尾晚于弹性带声明——LESSONS 二十一§1
@@ -1964,16 +2428,355 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .cnav,.uhead2,.grouplab,.rhead,.chhead,.kpi.clk,.hc,.pbar,.plitem,
  .toast,.pvx,.tg,.tj,.dx,input.switch{
   touch-action:manipulation}}
+.sctl.dwrap{flex-direction:column;align-items:stretch;gap:6px}
+.dwrap .dline{display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  justify-content:flex-start;min-width:0}
+/* V2（A2 审计）：dwrap 容器定宽——开合工具组时容器宽随 max-content
+   变化曾致已选片行整体横移 414px；定宽后开合零位移 */
+@media(min-width:761px){
+ .srow .sctl.dwrap{width:72%}
+}
+/* r339i 视觉审计 P2-1+P3-5：airpv 预览片 390 档在 126px 半栏内
+   右缘被裁 41px——整行落位（标签行下方全宽），与 dwrap 行同律；
+   明细表窄档横滚右缘渐隐暗示（.xend=滚到底自愈，仿 opscard xhint） */
+@media(max-width:760px){
+ .srow:has(.airpv){flex-wrap:wrap}
+ .srow:has(.airpv)>.sctl{flex:1 1 100%!important}   /* !important=压行内 flex:1（媒体窄档整行落位唯一通道） */
+ .tw:not(.xend){-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 20px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 20px),transparent)}}
+/* B2-3 审计：≤540 档 frow 内裸 .chiplab（日期：/航线：/渠道：）被 flex
+   压 24px 断词竖排（航司/舱位标签有 inline flex:none 免疫，同批件漂移）
+   ——flex:none 对齐同批件写法 */
+@media(max-width:540px){
+ .frow .chiplab{flex:none;white-space:nowrap}}
+.dwrap .dline .btn2{margin-right:0}   /* V4：btn2 inline 遗产 margin 与 flex gap 叠加 6/12 交替，gap 单源归 6 */   /* 0,3,0 压 .dwrap .dline 基线（dtools 元素同时挂 dline 类） */
+/* 质感随行（r339d）：日期行标签与两行内容顶对齐（默认 center 把
+   标签吊在两行中间）；工具行弱一档呼吸（与已选片行 2px 分层） */
+.srow:has(.dwrap){align-items:flex-start}
+.srow:has(.dwrap)>.slab{padding-top:4px}
+.dwrap .dline+.dline{margin-top:2px}
+/* 区间三件绑组（r340 P3-1）：[范围起] → [范围止] 同进退回绕，
+   箭头不再孤行悬段；不复用 .wingrp（其 ≤760 媒体块放开 wrap，
+   与绑组语义相逆）。输入以声明宽为基准可收缩，96px 可读地板 */
+.dwrap .dspan{display:inline-flex;align-items:center;gap:6px;
+  white-space:nowrap;min-width:0}
+.dwrap .dspan>input[type=date]{min-width:96px}
+/* 窄带（≤540，控制列实宽 ~132px）横排绑组 min-content ~243px 几何
+   不可达（整列会被顶到 270px 全面越界）——纵向栈组 [起]↓[止]：
+   箭头旋转 90° 居中。组 contain:inline-size 把内在贡献归零
+   （width:100% 的百分比在内在语境不可解析，会回落输入内在宽 163px
+   顶爆列宽），flex:1 1 100% 独占一行撑满线宽 */
+@media(max-width:540px){
+  .dwrap .dspan{flex:1 1 100%;min-width:0;contain:inline-size;
+    flex-direction:column;align-items:stretch;gap:2px}
+  .dwrap .dspan>input[type=date]{width:100%!important;min-width:0}
+  .dwrap .dspan .sunit{align-self:center;transform:rotate(90deg)}
+}
+
+/* ===== r342 配置工作台（user: 高级感/紧凑度/一切配置可视化） =====
+   设计语言沿既有「精仪」谱：hairline 分层、等宽数字、蓝色只给
+   主行动与选中；新增信息一律先问「它在替用户回答什么」——概览卡
+   回答「配置整体健康吗」，日期编排回答「区间/逐日都可以」，路径卡
+   回答「文件在哪、多大、改到哪、何时生效」。 */
+ .cfgchrome{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+   margin:2px 0 10px;padding:9px 12px;border:1px solid var(--line);
+   border-radius:var(--r2);background:linear-gradient(180deg,var(--card),var(--headbg))}
+ .cfgchrome .cc-t{font-size:11px;letter-spacing:var(--ls1);color:var(--mut);
+   text-transform:uppercase;font-weight:700}
+ .cfgchrome .cc-sub{font-size:11px;color:var(--mut);min-width:0;overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap;font-family:var(--num)}
+ .cfgchrome .cc-sp{flex:1}
+ .cfgchrome .cc-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;
+   padding:3px 9px;border-radius:var(--pill);border:1px solid var(--line);
+   background:var(--card);color:var(--mut);white-space:nowrap;cursor:pointer}
+ .cfgchrome .cc-chip.ok{color:var(--ok-txt);border-color:rgba(var(--okrgb),.35);background:var(--okbg)}
+ .cfgchrome .cc-chip.warn{color:var(--warn-deep);border-color:var(--warnbd);background:var(--warnbg)}
+ .cfgnav .cnav{display:flex;align-items:center;gap:8px}
+ .cfgnav .cnav .cnavn{margin-left:auto;font-family:var(--num);font-size:10px;
+   color:var(--mut);background:var(--headbg);border:1px solid var(--line);
+   border-radius:var(--pill);padding:1px 7px;line-height:16px}
+ .cfgnav .cnav.on .cnavn{color:#fff;background:rgba(0,0,0,.20);border-color:transparent}
+ .cfgnav .cnavst{margin-top:6px;padding:8px 10px;border:1px dashed var(--line);
+   border-radius:var(--r3);font-size:11px;color:var(--mut);line-height:1.55}
+ .cfgnav .cnavst b{color:var(--tx2)}
+ .cfgdeck{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+   gap:8px;margin:2px 0 10px}
+ .cfgk{position:relative;overflow:hidden;padding:10px 12px 9px;border:1px solid var(--line);
+   border-radius:var(--r2);background:var(--card);cursor:pointer;transition:border-color .15s,transform .15s}
+ .cfgk:hover{border-color:var(--blue);transform:translateY(-1px)}
+ .cfgk:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+ .cfgk .kl{font-size:10px;letter-spacing:var(--ls1);color:var(--mut);
+   text-transform:uppercase;white-space:nowrap}
+ .cfgk .kv{font-family:var(--num);font-size:21px;font-weight:700;line-height:1.25;margin-top:2px;
+   font-variant-numeric:tabular-nums;color:var(--tx)}
+ .cfgk .ks{font-size:11px;color:var(--mut);margin-top:2px;overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap}
+ .cfgk.warn .kv{color:var(--warn-deep)}.cfgk.ok .kv{color:var(--ok-txt)}
+ .cfgk .kbar{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--line)}
+ .cfgk.warn .kbar{background:var(--warn)}.cfgk.ok .kbar{background:var(--green)}
+ .cfgbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px}
+ .cfgbar .cb-lab{font-size:11px;color:var(--mut);margin-right:2px}
+ .cfgbar .cbsp{width:1px;height:16px;background:var(--line);margin:0 4px}
+ .rline{background:var(--card);box-shadow:var(--sh1);transition:border-color .15s,box-shadow .15s}
+ .rline:hover{border-color:var(--line2);box-shadow:var(--sh2)}
+ .rhead{padding:2px 0 8px;border-bottom:1px solid var(--line);margin-bottom:2px}
+ .rhead .rop{gap:8px;row-gap:6px}   /* r346：4px 相邻动作易误触（开关/删除） */
+ .rhead .ropbtn{padding:4px 8px;font-size:11px}
+ .rhead .muted{font-size:11px}
+ .rneed{font-size:10px;font-weight:700;color:var(--warn-deep);background:var(--warnbg);
+   border:1px solid var(--warnbd);border-radius:var(--pill);padding:2px 8px;white-space:nowrap}
+ .rfltbadge{font-size:10px;color:var(--blue);background:var(--headbg);border:1px solid var(--line);
+   border-radius:var(--pill);padding:2px 7px;white-space:nowrap;font-family:var(--num)}
+ .rfhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+ .rfhead .rfsum{font-size:11px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap;min-width:0;flex:1}
+ .rfhead .chev{margin-left:auto}
+ .rfpresets{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 10px;
+   margin:6px 0 4px;border:1px dashed var(--line);border-radius:var(--r3);background:var(--card)}
+ .rfpresets .rfl{font-size:10px;letter-spacing:var(--ls1);color:var(--mut);text-transform:uppercase;
+   margin-right:2px}
+ .rfpresets .chip{font-size:11px;padding:4px 9px}
+ .rfpresets .chip.on{border-color:transparent}
+ .rfgrp{font-size:10px;letter-spacing:var(--ls1);color:var(--mut);
+   text-transform:uppercase;margin:8px 2px 2px;display:flex;align-items:center;gap:6px}
+ .rfgrp::after{content:'';flex:1;height:1px;background:var(--line)}
+ .rline .srow{padding:7px 2px;min-height:40px}
+ .rline .srow .shint{line-height:1.45}
+ /* 日期编排全宽：标签一行；下方是「已选日期片 + 单编辑器」。
+   一次只展开一种录入方式（用户心智：不会同时填区间和单日），
+   模式条常显、两份草稿都保留，切换只换面板不丢值。 */
+ .srow.dateSrow{flex-direction:column;align-items:stretch;gap:6px}
+ .srow.dateSrow>.slab{width:100%;flex:none;padding-top:0}
+ .srow.dateSrow>.sctl.dwrap{width:100%;max-width:none;flex:1 1 100%;gap:7px}
+ .dchips-line{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+ .dchips-line .dchips{min-width:0;flex:1 1 auto}
+ .dchips-empty{font-size:10px;color:var(--mut)}
+ .dcompose{display:flex;flex-direction:column;gap:7px;padding:7px 8px 8px;
+   background:var(--headbg);border:1px solid var(--line);border-radius:var(--r3);min-width:0}
+ .dcompose-h{display:flex;align-items:center;gap:8px;min-width:0}
+ .dctabs{display:inline-flex;align-items:center;gap:2px;padding:2px;
+   background:var(--card);border:1px solid var(--line);border-radius:var(--pill)}
+ .dctab{height:26px;padding:0 12px;border:0;border-radius:var(--pill);background:transparent;
+   color:var(--mut);font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:5px;
+   cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+ .dctab .dct-ic{font-family:var(--num);font-size:10px;opacity:.9}
+ .dctab.on{background:var(--fill);color:#fff;box-shadow:0 1px 6px -2px var(--glow)}
+ .dctab:hover:not(.on){color:var(--tx2);background:var(--rowalt)}
+ .dctab:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+ .dcsum{margin-left:auto;font-size:10px;color:var(--mut);font-family:var(--num);white-space:nowrap}
+ .dpanel{display:flex;flex-direction:column;gap:7px;min-width:0}
+ .dpanel[hidden]{display:none}
+ .dpanel-row{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+   align-items:center;gap:6px;min-width:0;min-height:32px}
+ .dpanel-row.single{grid-template-columns:minmax(0,1fr)}
+ .dpanel-row input[type=date]{width:100%;min-width:0;height:32px;font-size:12px}
+ .dpanel-row .darr{color:var(--mut);font-family:var(--num);font-size:11px}
+ .dpanel-row.err input[type=date]{border-color:var(--warn);box-shadow:0 0 0 2px var(--warnbg)}
+ .dcompose-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+   min-height:32px;padding-top:7px;border-top:1px dashed var(--line)}
+ .dcompose-foot .q-lab{font-size:10px;color:var(--mut);white-space:nowrap}
+ .dcompose-foot .dquickhint{font-size:10px;color:var(--mut);white-space:nowrap}
+ .dapply{height:32px;width:96px;min-width:96px;padding:0 10px;margin:0 0 0 auto!important;
+   display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;font-size:11px}
+ .dapply.primary{background:var(--fill);color:#fff;border-color:transparent;box-shadow:0 2px 8px -2px var(--glow)}
+ .dapply.primary:hover{background:var(--fill2)}
+ .dapply:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+ .dcount{font-size:10px;color:var(--mut);font-family:var(--num);white-space:nowrap}
+ /* 航司白名单：表达式输入 + 已解析 chip + 候选 + 快捷航司；全部
+   同源 AIRALIAS（东航=东方航空=MU），输入语义零黑箱且可点选 */
+ .srow.airrow{display:block;padding:8px 2px}
+ .srow.airrow>.sctl{display:block;width:100%;max-width:none}
+ .srow.airrow>.slab{width:100%;padding-top:0;overflow:visible}
+ .srow .slab .shint b{display:inline;font-weight:600;color:var(--tx2)}
+ .airfield{width:100%}
+ .airbox{display:flex;flex-direction:column;gap:6px;min-width:0;width:100%}
+ .airchip .airnm{color:var(--mut);font-size:11px}
+ .airfield{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+ .airfield input{flex:1 1 220px;min-width:0;text-align:left!important}
+ .airmode{display:inline-flex;border:1px solid var(--ctlbd);border-radius:var(--r3);overflow:hidden;
+   flex:none;height:34px}
+ .airmode span{padding:0 9px;font-size:11px;display:inline-flex;align-items:center;cursor:pointer;
+   color:var(--mut);background:var(--card);user-select:none;transition:.15s}
+ .airmode span.on{background:var(--fill);color:#fff}
+ .airmode span+span{border-left:1px solid var(--line)}
+ .airchips{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+ .airchips:empty{display:none}
+ .airchip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:var(--pill);
+   border:1px solid var(--line);background:var(--headbg);font-size:11px;white-space:nowrap}
+ .airchip b{color:var(--ok-txt);font-family:var(--num)}
+ .airchip i{font-style:normal;color:var(--mut);cursor:pointer;margin-left:1px;padding:0 2px}
+ .airchip i:hover{color:var(--red)}
+ .airchip.ban{border-color:var(--redbd);background:var(--redbg)}
+ .airchip.ban b{color:var(--red)}
+ .airchip.unk{border-color:var(--warnbd);background:var(--warnbg);color:var(--warn-deep)}
+ .airquick{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+ .airquick .aq-lab{font-size:10px;color:var(--mut);white-space:nowrap}
+ .airquick .chip{font-size:11px;padding:3px 8px}
+ .airsug{display:flex;flex-direction:column;gap:2px;padding:5px;border:1px solid var(--line2);
+   border-radius:var(--r3);background:var(--card);box-shadow:var(--sh2);max-height:190px;overflow:auto}
+ .airsug:empty{display:none}
+ .airsug .asg{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;
+   cursor:pointer;font-size:12px}
+ .airsug .asg:hover,.airsug .asg.on{background:var(--hover)}
+ .airsug .asg b{font-family:var(--num);color:var(--blue)}
+ .airsug .asg .m{color:var(--mut);font-size:11px;margin-left:auto}
+ .airpv{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+ .airpv .airtag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px}
+ .airpv .airun{white-space:nowrap}
+ .airmeta{font-size:10px;color:var(--mut)}
+ /* 存储与迁移：路径卡是「配置透明化」的主承载——文件在哪/多大/是否
+   存在/改到哪/何时生效一屏可读，打开文件与文件夹是动作而非文案 */
+ #cfgglobals .glgrid{grid-template-columns:repeat(3,minmax(0,1fr))}
+ #cfgglobals .glgrid .glcell:only-child{grid-column:1/-1}
+ @media(max-width:1099px){#cfgglobals .glgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+ @media(max-width:700px){#cfgglobals .glgrid{grid-template-columns:minmax(0,1fr)}}
+ .storagesec{margin-top:8px}
+ .storehead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;
+   border:1px solid var(--line);border-radius:var(--r2);background:var(--headbg);margin-bottom:8px}
+ .storehead .sh-t{font-size:12px;font-weight:700}
+ .storehead .sh-path{font-family:var(--num);font-size:11px;color:var(--mut);
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+ .storehead .sh-meta{flex-basis:100%;font-size:11px;color:var(--mut);
+   font-family:var(--num);overflow-wrap:anywhere;padding-top:4px;border-top:1px dashed var(--line)}
+ .storehead .sh-meta b{color:var(--tx2);font-weight:600}
+ .pathgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ @media(max-width:900px){.pathgrid{grid-template-columns:minmax(0,1fr)}}
+ .pathcard{border:1px solid var(--line);border-radius:var(--r2);background:var(--card);
+   padding:11px 12px;display:flex;flex-direction:column;gap:7px;min-width:0}
+ .pathcard:hover{border-color:var(--line2)}
+ .pathcard .ph{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+ .pathcard .ph b{font-size:12px}
+ .pathcard .ph .ptag{font-size:10px;border-radius:var(--pill);padding:2px 7px;
+   border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+ .pathcard .ph .ptag.ok{color:var(--ok-txt);border-color:rgba(var(--okrgb),.35);background:var(--okbg)}
+ .pathcard .ph .ptag.warn{color:var(--warn-deep);border-color:var(--warnbd);background:var(--warnbg)}
+ .pathcard .ph .ptag.restart{color:var(--warn-deep);border-color:var(--warnbd);background:var(--warnbg)}
+ .pathcard input{height:34px!important;width:100%;text-align:left!important;font-family:var(--num);
+   font-size:12px!important;border:1px solid var(--ctlbd)!important;border-radius:var(--r3)!important;
+   background:var(--headbg)!important;padding:0 10px!important}
+ .pathcard .glabs{margin-top:0;font-size:11px;color:var(--tx2);font-family:var(--num);
+   overflow-wrap:anywhere;background:var(--headbg);border-radius:5px;padding:3px 6px;
+   min-height:32px;display:flex;align-items:center}
+ .pstat{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+ .pstat .ps{display:flex;flex-direction:column;gap:1px;padding:4px 7px;min-width:0;
+   border:1px solid var(--line);border-radius:5px;background:var(--headbg)}
+ .pstat .ps b{font-size:9px;letter-spacing:var(--ls1);color:var(--mut);
+   font-weight:600;text-transform:uppercase}
+ .pstat .ps em{font-style:normal;font-size:11px;color:var(--tx2);
+   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .pstat .ps em.warn{color:var(--warn-deep)}
+ .pathcard .pmeta{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--mut);
+   font-family:var(--num)}
+ .pathcard .pmeta:empty{display:none}
+ .pathcard .pact{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+ .pathcard .pact .btn2{height:30px;padding:0 9px;font-size:11px;margin:0;display:inline-flex;
+   align-items:center;gap:4px}
+ .pathpv{font-size:11px;color:var(--mut);line-height:1.5;border-top:1px dashed var(--line);
+   padding-top:5px;white-space:normal;overflow-wrap:anywhere}
+ .pathpv .ok{color:var(--ok-txt)}.pathpv .warn{color:var(--warn-deep)}
+ .cfgfilerow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;
+   padding:9px 12px;border:1px dashed var(--line);border-radius:var(--r3)}
+ .cfgfilerow .fl{font-size:11px;font-weight:700;color:var(--tx2)}
+ .cfgfilerow code{font-family:var(--num);font-size:11px;color:var(--mut);
+   overflow-wrap:anywhere;flex:1;min-width:160px}
+ .rcmask{position:fixed;inset:0;z-index:160;background:rgba(6,12,20,.5);
+   display:none;align-items:center;justify-content:center;padding:20px}
+ .rcmask.on{display:flex}
+ .cmask{z-index:180}
+ .cmcard{width:min(430px,100%);background:var(--card);color:var(--tx);
+   border:1px solid var(--line2);border-radius:14px;box-shadow:var(--sh3);overflow:hidden}
+ .cmhead{display:flex;align-items:center;gap:9px;padding:14px 18px 8px}
+ .cmhead b{font-size:14px}
+ .cmi{width:24px;height:24px;border-radius:50%;background:var(--warnbg);color:var(--warn-deep);
+   display:inline-flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+ .cmbody{padding:2px 18px 14px;font-size:12px;line-height:1.65;color:var(--tx2);
+   overflow-wrap:anywhere;white-space:pre-line}
+ .cmfoot{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;
+   border-top:1px solid var(--line);background:var(--headbg)}
+ .cmfoot .btn2,.cmfoot .danger{height:34px;min-width:86px;margin:0}
+ .cmfoot .cmdanger{background:var(--red);color:#fff;border-color:transparent}
+ .cmfoot .cmdanger:hover{background:var(--red);filter:brightness(.94)}
+ html[data-theme="dark"] .cmfoot .cmdanger{background:var(--danger-solid)}
+ .rccard{width:min(720px,100%);max-height:86vh;overflow:auto;background:var(--card);
+   color:var(--tx);border:1px solid var(--line2);border-radius:14px;box-shadow:var(--sh3)}
+ .rchead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+ .rchead b{font-size:14px}.rchead .rcx{margin-left:auto;cursor:pointer;font-size:16px;color:var(--mut);
+   padding:4px 8px;border-radius:6px}.rchead .rcx:hover{background:var(--hover);color:var(--tx)}
+ .rcbody{padding:14px 18px;display:flex;flex-direction:column;gap:10px}
+ .rcbody .rclead{font-size:12px;color:var(--mut);line-height:1.6}
+ .rcdiff{border:1px solid var(--line);border-radius:var(--r3);padding:10px 12px;background:var(--headbg)}
+ .rcdiff .rd-h{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;margin-bottom:6px}
+ .rcdiff .rd-row{display:grid;grid-template-columns:92px minmax(0,1fr) auto minmax(0,1fr);gap:8px;
+   align-items:center;font-size:11px;font-family:var(--num);color:var(--mut);padding:3px 0}
+ .rcdiff .rd-row .new{color:var(--warn-deep);overflow-wrap:anywhere}
+ .rcdiff .rd-row .arr{color:var(--mut)}
+ .rcdiff .rd-row .old{overflow-wrap:anywhere}
+ .rcdiff .rd-row .k{color:var(--tx2);font-family:inherit;font-weight:600}
+ .rcfoot{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:12px 18px;
+   border-top:1px solid var(--line)}
+ .rcfoot .btn2,.rcfoot button{height:34px}
+ .rc-empty{padding:12px;border:1px dashed var(--line);border-radius:var(--r3);color:var(--mut);
+   font-size:12px;text-align:center}
+ /* ===== r342 明细：筛选摘要 + 智能预设 ===== */
+ .fltsum{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin:7px 0 0;
+   padding:6px 9px;border:1px solid var(--line);border-radius:var(--r3);
+   background:var(--headbg);font-size:11px;color:var(--mut)}
+ .fltsum:empty{display:none}
+ .fltsum .fs-lab{font-size:10px;letter-spacing:var(--ls1);text-transform:uppercase;
+   color:var(--mut);white-space:nowrap}
+ .fltsum .fs-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;
+   border:1px solid var(--line);border-radius:var(--pill);background:var(--card);
+   color:var(--tx2);white-space:nowrap;cursor:pointer;font-size:11px}
+ .fltsum .fs-chip:hover{border-color:var(--blue);color:var(--blue)}
+ .fltsum .fs-chip b{color:var(--blue);font-family:var(--num)}
+ .fltsum .fs-clear{margin-left:auto;color:var(--blue);cursor:pointer;white-space:nowrap;
+   padding:2px 4px;border-radius:4px}
+ .fltsum .fs-clear:hover{background:var(--hover)}
+ .fltpresetrow{gap:6px}
+ .fltpresetrow .chiplab{flex:none}
+ .fltpreset{font-size:11px;padding:4px 9px}
+ .fltpreset.on{box-shadow:0 0 0 1px var(--blue) inset}
+ @media(max-width:900px) and (pointer:coarse){
+   .fltpreset{min-height:36px;display:inline-flex;align-items:center;padding:0 12px}}
+ #fltwrap{padding:5px 8px}
+ #fltwrap .frow+.frow{margin-top:3px}   /* r347：Linux CI 字体高 4px，再收窄档呼吸距保图例首屏 */
+ @media(max-width:900px){.pathgrid{grid-template-columns:minmax(0,1fr)}}
+ @media(max-width:760px){
+   .dcompose{padding:6px;gap:6px}
+   .dctab{height:30px;padding:0 10px}
+   .dpanel-row input[type=date]{height:36px;font-size:16px}
+   .dcompose-foot{min-height:36px}
+   .dapply{height:36px;width:104px;min-width:104px}
+   .dcompose-foot .dquickhint{display:none}
+   .airmode{height:36px}
+   .airfield input{flex-basis:100%}
+   .cfgdeck{grid-template-columns:repeat(2,minmax(0,1fr))}
+   .rhead .rop{flex-wrap:wrap;justify-content:flex-end}
+   /* 390 重启差量：旧 72px 首列把新路径挤成逐字竖排——改为
+      标签一行、旧值一行、新值一行，箭头以行首符号保留方向。 */
+   .rcdiff .rd-row{grid-template-columns:minmax(0,1fr);gap:3px}
+   .rcdiff .rd-row .k{grid-column:1/-1;font-size:10px;color:var(--mut)}
+   .rcdiff .rd-row .old,.rcdiff .rd-row .new{grid-column:1/-1}
+   .rcdiff .rd-row .new::before{content:'→ ';color:var(--mut)}
+   .rcdiff .rd-row .arr{display:none}
+ }
+ @media(max-width:540px){
+   .cfgdeck{grid-template-columns:repeat(2,minmax(0,1fr))}
+   .pathcard{padding:10px}
+   .rcmask{padding:8px}
+   .dcompose-h{gap:6px}
+   .dctab{padding:0 9px}
+   .dcsum{font-size:9px}
+ }
 </style></head><body><div class="wrap">
 <header id="hdcard"><h1><span class="logo">✈️</span>机票监控台</h1>
  <div class="hdx"><span id="ntBtn" class="hbtn" role="button" tabindex="0" aria-label="达标浏览器通知开关" onclick="togNotify()" title="达标时浏览器通知+提示音">🔕</span><span id="themeBtn" class="hbtn" role="button" tabindex="0" aria-label="切换亮暗主题" onclick="cycleTheme()" title="亮/暗/自动">🌗</span><span id="denBtn" class="hbtn" role="button" tabindex="0" aria-label="切换界面密度" onclick="cycleDensity()" title="密度">≡</span><span class="pill" id="pill" title="数据通道状态：加载中" onclick="jumpQual()">加载中…</span>
   <span class="hdmeta"><span id="nextrun" class="cdt" role="timer" aria-label="距下一轮扫描倒计时" style="display:none"></span><span id="nrLive" class="vh" aria-live="polite"></span><span id="updated" style="font-family:var(--num)"></span></span></div></header>
 
-<div id="citypanel" style="display:none" role="dialog" aria-label="城市选择面板">
+<div id="citypanel" style="display:none" role="dialog" aria-modal="true" aria-label="城市选择面板">
  <div class="cp-search"><input id="cpq" type="text" placeholder="搜索：中文 / 拼音 / 三字码" aria-label="搜索城市" oninput="cityPanelFilter(this.value)"><button type="button" class="cp-x" aria-label="关闭城市面板" onclick="cityPanelClose()">✕</button></div>
  <div id="cptabs" style="display:flex;gap:6px;padding:8px 12px 0" role="tablist" aria-label="航线范围">
-  <span class="chip on" data-t="dom" role="tab" tabindex="0" onclick="cityPanelTab('dom')" onkeydown="if(event.key==='Enter')cityPanelTab('dom')">国内</span>
-  <span class="chip" data-t="intl" role="tab" tabindex="0" onclick="cityPanelTab('intl')" onkeydown="if(event.key==='Enter')cityPanelTab('intl')">🌐 国际</span>
+  <span class="chip on" data-t="dom" role="tab" tabindex="0" onclick="cityPanelTab('dom')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();cityPanelTab('dom')}">国内</span>
+  <span class="chip" data-t="intl" role="tab" tabindex="0" onclick="cityPanelTab('intl')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();cityPanelTab('intl')}">🌐 国际</span>
  </div>
  <div id="cpbody" class="cp-body"></div>
 </div>
@@ -2056,7 +2859,16 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
   <span id="fltBtn" aria-expanded="false" aria-controls="fltwrap" onclick="togFlt()" title="筛选；档位图例：深绿=真达标 · 描绿=行情破线（行情价低于达标线但未达标，未必可出手，达标以🔥/环标为准） · 琥珀=擦边">🎛 筛选<b id="fltN" style="display:none"></b></span>
   <!-- 档位图例常驻（触屏读不到 price 格 title 的补位）：b 元素避开 .tabs span 胶囊底；「未必可出手」语义收进 title 悬停防行尾溢出；≤540 全档隐藏、语义并入 fltBtn title（吸顶条单行化），宽档常驻不受扰 -->
   <b class="muted" style="margin-left:auto;font-size:11px" title="描绿=行情破线：行情价低于达标线但未达标，未必可出手（达标以🔥/环标为准）">深绿=真达标 · 描绿=行情破线 · 琥珀=擦边</b></div>
- <div class="fbar" id="fltwrap"><div class="frow" id="datechips"></div>
+ <div class="fltsum" id="fltsum" aria-live="polite"></div>
+ <div class="fbar" id="fltwrap"><div class="frow fltpresetrow" id="fltpresets">
+  <span class="chiplab">智能筛选</span>
+  <span class="chip fltpreset" data-fp="direct" role="button" tabindex="0" title="直飞 + 含免费托运 + 排除经停——一键组合后仍可再调" onclick="applyFltPreset('direct')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();applyFltPreset('direct')}">✈ 直飞含行李</span>
+  <span class="chip fltpreset" data-fp="day" role="button" tabindex="0" title="出发 06:00–18:00、到达 06:00–23:59——白天出行不熬夜" onclick="applyFltPreset('day')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();applyFltPreset('day')}">☀ 白天出行</span>
+  <span class="chip fltpreset" data-fp="calm" role="button" tabindex="0" title="排除经停/共享/廉航，并隐藏限购与高风险价——省心但不失透明" onclick="applyFltPreset('calm')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();applyFltPreset('calm')}">🛡 省心出行</span>
+  <span class="chip fltpreset" data-fp="bag" role="button" tabindex="0" title="只看含免费托运额的班次" onclick="applyFltPreset('bag')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();applyFltPreset('bag')}">🧳 含免费托运</span>
+  <span class="muted" style="font-size:11px">组合常用条件，再按需微调</span>
+ </div>
+  <div class="frow" id="datechips"></div>
   <div class="frow" id="routechips"></div>
   <div class="frow" id="platchips"></div>
  <div class="frow flgrow"><span class="muted" id="fltlegend">深绿=真达标 · 描绿=行情破线 · 琥珀=擦边（达标以🔥/环标为准）</span></div>
@@ -2068,14 +2880,14 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
    <label>搜索 <input type="text" id="fq" style="flex:1 1 120px;max-width:180px;width:auto" placeholder="航班号/航司/中转" oninput="applyFltD()"></label>
    <label class="flab"><input type="checkbox" class="switch" id="fnostale" onchange="applyFlt()"> 隐藏补位数据（·Nh前）</label>
   </div>
-  <div class="frow" id="attrchips" style="align-items:flex-start">
-   <span class="chiplab" style="flex:none">航司：</span><span id="alchips" class="chips-wrap"></span>
-   <span class="chiplab" style="flex:none">舱位：</span><span id="cabchips" class="chips-wrap"></span>
-   <span class="wingrp" data-flt="depA"><span class="chiplab">出发机场：</span><span id="depchips" class="chips-wrap"></span></span>
-   <span class="wingrp" data-flt="arrA"><span class="chiplab">到达机场：</span><span id="archips" class="chips-wrap"></span></span>
+  <div class="frow attrgrid" id="attrchips">
+   <div class="agrp ag-wide"><span class="chiplab">航司</span><input id="fltAirQ" class="attrq" placeholder="筛航司…" aria-label="筛选航司列表" oninput="buildAttrChips()"><span id="alchips" class="chips-wrap"></span></div>
+   <div class="agrp"><span class="chiplab">舱位</span><span id="cabchips" class="chips-wrap"></span></div>
+   <div class="agrp" data-flt="ps"><span class="chiplab">机型</span><span id="pschips" class="chips-wrap"></span></div>
+   <div class="agrp" data-flt="depA"><span class="chiplab">出发机场</span><span id="depchips" class="chips-wrap"></span></div>
+   <div class="agrp" data-flt="arrA"><span class="chiplab">到达机场</span><span id="archips" class="chips-wrap"></span></div>
   </div>
   <div class="frow" style="align-items:center">
-   <span class="wingrp" data-flt="ps"><span class="chiplab">机型：</span><span id="pschips" class="chips-wrap"></span></span>
    <label class="flab" data-flt="few" title="仅看渠道标注余票紧张的班次（余N张/仅剩X张）"><input type="checkbox" class="switch" id="ffew" onchange="applyFlt()"> 余票紧张</label>
    <label class="flab" data-flt="nostop" title="经停航班中途落地（直飞经停形态），不喜可选排"><input type="checkbox" class="switch" id="fnostop" onchange="applyFlt()"> 排除经停</label>
    <label class="flab" data-flt="noshare" title="共享航班实际承运方与售票方不同（行内标注共享·X）"><input type="checkbox" class="switch" id="fnoshare" onchange="applyFlt()"> 排除共享航班</label>
@@ -2089,8 +2901,10 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
     <span class="wingrp" data-flt="prate"><span class="chiplab">准点率≥</span><input type="text" id="fprate" aria-label="准点率百分比下限" placeholder="不限" style="width:58px" oninput="applyFltD()"><span class="muted">%</span></span>
     <span class="wingrp" data-flt="age"><span class="chiplab">机龄≤</span><input type="text" id="fage" aria-label="机龄年数上限" placeholder="不限" style="width:58px" oninput="applyFltD()"><span class="muted">年</span></span>
     <label class="flab" data-flt="bag" title="仅看渠道标注含免费托运额的班次"><input type="checkbox" class="switch" id="fbag" onchange="applyFlt()"> 含免费托运</label>
+    <span class="wingrp" data-flt="bagkg" title="免费托运额 ≥N kg（按行内托运词面 kg 数判定；未标注 kg 的班次按不满足剔除）"><span class="chiplab">托运≥</span><input type="text" id="fbagkg" aria-label="免费托运公斤数下限" placeholder="不限" style="width:52px" oninput="applyFltD()"><span class="muted">kg</span></span>
     <label class="flab" data-flt="meal" title="仅看渠道标注含餐食的班次"><input type="checkbox" class="switch" id="fmeal" onchange="applyFlt()"> 含餐食</label>
     <label class="flab" data-flt="nolcc" title="廉价航空中转常需重新值机、行李受限（行内标注廉航）"><input type="checkbox" class="switch" id="fnolcc" onchange="applyFlt()"> 排除廉航</label>
+    <label class="flab" data-flt="wb" title="仅看渠道标注大型机（宽体）的班次；未标注机型的班次按不满足剔除"><input type="checkbox" class="switch" id="fwb" onchange="applyFlt()"> 仅大型机</label>
     <label class="flab" data-flt="cross" title="仅看次日到达（红眼跨天）班次"><input type="checkbox" class="switch" id="fcross" onchange="applyFlt()"> 仅看跨天</label>
     <label class="flab" data-flt="child" title="仅看提供儿童价的班次"><input type="checkbox" class="switch" id="fchild" onchange="applyFlt()"> 儿童价</label>
    </div>
@@ -2098,6 +2912,7 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
    <button class="btn2" onclick="expCsv()">⬇ 导出CSV</button>
    <span class="muted">点击表头可排序（再点切换升降序）</span>
   </div></div>
+ <div class="fdrawer-cta" id="fdrawerCta"><button type="button" class="btn2 primary" onclick="closeFltShow()">查看筛选结果 <b id="fdCount">0</b> 条</button></div>
  <div class="tw"><table id="ftable"><caption class="sr-only">航班明细（按出发日期与价格排序，点击行展开同班跨渠道比价）</caption><tr class="erow"><td colspan="9">加载中…</td></tr></table></div></div>
 </div><!-- /montab-details -->
 
@@ -2120,15 +2935,24 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
 </div><!-- /monview -->
 
  <div id="cfgview" role="main" style="display:none">
+ <div class="cfgchrome" id="cfgChrome">
+  <span class="cc-t">⚙ 配置中心</span>
+  <span class="cc-sub" id="cfgChromePath">读取配置…</span>
+  <span class="cc-sp"></span>
+  <span class="cc-chip" id="cfgChromeDirty" role="status" aria-live="polite" title="尚未落盘的修改；保存后立即热生效">● 无未保存修改</span>
+  <span class="cc-chip" id="cfgChromeRestart" role="button" tabindex="0" onclick="openRestartCenter()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openRestartCenter()}" title="查看启动级配置差量、迁移预案并重启">♻ 重启待办 0</span>
+  <span class="cc-chip" role="button" tabindex="0" onclick="openRestartCenter()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openRestartCenter()}" title="打开重启与迁移中心">详情 ›</span>
+ </div>
  <div class="cfglayout">
  <aside class="cfgnav" id="cfgnav">
   <div class="cfgnav-t">配置分区</div>
   <input id="cfgSearch" class="cfgsearch" aria-label="搜索配置项" placeholder="🔍 搜索配置项"
    oninput="CFGQ=this.value;cfgFilterD()">
   <div class="cfghit" id="cfgHits"></div>
-  <span class="cnav on" data-p="login">🔐 渠道登录</span>
-  <span class="cnav" data-p="users">👥 用户与航线</span>
-  <span class="cnav" data-p="globals">🎛 全局参数</span>
+  <span class="cnav on" data-p="login">🔐 渠道登录<i class="cnavn" id="navN-login">—</i></span>
+  <span class="cnav" data-p="users">👥 用户与航线<i class="cnavn" id="navN-users">—</i></span>
+  <span class="cnav" data-p="globals">🎛 全局参数<i class="cnavn" id="navN-globals">—</i></span>
+  <div class="cnavst" id="cfgNavFoot"><b>配置透明化</b><br>路径、迁移与重启待办见「用户与航线 → 全局参数 → 存储与迁移」。</div>
  </aside>
  <div class="cfgmain" id="cfgmain">
  <div class="cfpanel" id="panel-login">
@@ -2142,7 +2966,9 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  <div class="cfpanel" id="panel-users" style="display:none">
  <div class="ucard" id="sec-users"><div class="uhead"><span class="seclab inline"><span class="no">02</span><span class="zh">用户与航线</span><span class="en">USERS</span></span>
   <span class="muted">保存后立即热重载生效（无需重启）；仅数据库/日志路径等启动级项需改 config.yaml 后重启</span></div>
+ <div id="cfgOverview" class="cfgdeck" aria-label="配置概览"></div>
  <div id="cfgform"></div>
+ <div id="cfgRosterEmpty" class="hint" style="display:none;text-align:center;padding:14px 0">没有符合当前范围/状态的航线——<button class="btn2" onclick="cfgScopeSet('all');cfgStatusSet('all')">重置范围与状态筛选</button></div>
  <div class="row" style="margin-top:10px">
   <button onclick="addUser()">➕ 添加用户</button>
   <button class="warn" onclick="saveCfg()">💾 保存并生效</button>
@@ -2171,6 +2997,28 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
   <div class="pvhead"><span id="pvTitle">预览</span><span class="pvx" id="pvClose" role="button" tabindex="0" aria-label="关闭预览" onclick="closePv()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();closePv()}" title="关闭（Esc）">✕</span></div>
   <div class="pvbody" id="pvBody"></div>
   <div class="pvfoot muted" id="pvFoot">本地近似渲染（标题/段落/加粗/链接/引用/进度条）· 明细总表图仅真实推送携带 · <span class="nw">以钉钉客户端实际效果为准</span></div>
+ </div>
+</div>
+<div id="restartCenter" class="rcmask" onclick="if(event.target===this)closeRestartCenter()">
+ <div class="rccard" role="dialog" aria-modal="true" aria-label="重启与迁移中心">
+  <div class="rchead"><b>♻ 重启与迁移中心</b><span class="muted" style="font-size:11px">启动级配置 · 路径迁移 · 进程重启</span>
+   <span class="rcx" role="button" tabindex="0" aria-label="关闭重启中心" onclick="closeRestartCenter()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();closeRestartCenter()}">✕</span></div>
+  <div class="rcbody" id="rcBody"></div>
+  <div class="rcfoot">
+   <button class="btn2" onclick="closeRestartCenter()">关闭</button>
+   <button class="btn2" onclick="saveCfg()">💾 先保存配置</button>
+   <button class="warn" id="rcRestartBtn" onclick="saveThenRestart(this)">🔄 保存并重启</button>
+  </div>
+ </div>
+</div>
+<div id="confirmMask" class="rcmask cmask" onclick="if(event.target===this)closeConfirm()">
+ <div class="cmcard" role="dialog" aria-modal="true" aria-labelledby="cmTitle" aria-describedby="cmText">
+  <div class="cmhead"><span class="cmi" aria-hidden="true">⚠</span><b id="cmTitle">确认删除</b></div>
+  <div class="cmbody" id="cmText"></div>
+  <div class="cmfoot">
+   <button class="btn2" id="cmCancel" onclick="closeConfirm()">取消</button>
+   <button class="danger cmdanger" id="cmYes" onclick="runConfirm()">确认删除</button>
+  </div>
  </div>
 </div>
 <footer id="foot" class="muted"></footer>
@@ -2578,8 +3426,8 @@ window.addEventListener('hashchange',()=>{
 /* onclick-only span 的键盘可达：tabindex+role=button，Enter/Space 转发 click
    （焦点环复用既有 ：focus-visible 规则；dataset.kbd 防 innerHTML 重建后重复绑定） */
 function mkact(el){if(!el||el.dataset.kbd)return;el.dataset.kbd='1';
- /* 模板自带 tabindex 的元素（健康格/脉冲柱 roving 初态 0/-1、
-    dreal 隐藏件 -1）不改写——无条件赋 0 曾在内联 onkeydown 早退
+ /* 模板自带 tabindex 的元素（健康格/脉冲柱 roving 初态 0/-1）不改写
+    ——无条件赋 0 曾在内联 onkeydown 早退
     之前把 roving -1 族全打穿（族内逐格 Tab 穿越回归） */
  if(!el.hasAttribute('tabindex'))el.tabIndex=0;el.setAttribute('role','button');
  /* 模板自带内联 onkeydown 的元素（健康格 .hc/脉冲柱 .pbar/
@@ -2695,7 +3543,7 @@ function togChip(el){const p=el.dataset.p;if(FLT.plats.has(p))FLT.plats.delete(p
  el.classList.toggle('on');el.setAttribute('aria-pressed',el.classList.contains('on')?'true':'false');saveUI();table();}
 /* ===== 筛选/排序状态持久化（刷新不丢） ===== */
 function saveUI(){try{localStorage.setItem('jpui',JSON.stringify(
- {F:F,U:U,sk:SORT.k,sd:SORT.dir,plats:[...FLT.plats],routes:[...FLT.routes],dates:[...FLT.dates],dep:FLT.dep,arr:FLT.arr,no:FLT.no,q:FLT.q,chr:CHR,exp:EXP,tg:TGOPEN,pmin:FLT.pmin||0,pmax:FLT.pmax||0,airlines:[...FLT.airlines],ps:[...FLT.ps],cabins:[...FLT.cabins],depA:[...FLT.depA],arrA:[...FLT.arrA],few:FLT.few,nostop:FLT.nostop,noshare:FLT.noshare,safe:FLT.safe,lmin:FLT.laymin||0,lmax:FLT.laymax||0,dmin:FLT.durmin||0,dmax:FLT.durmax||0,pr:FLT.prate||0,ag:FLT.age||0,bg:FLT.bag,ml:FLT.meal,nl:FLT.nolcc,cr:FLT.cross,ch:FLT.child}));}catch(e){}}
+ {F:F,U:U,sk:SORT.k,sd:SORT.dir,plats:[...FLT.plats],routes:[...FLT.routes],dates:[...FLT.dates],dep:FLT.dep,arr:FLT.arr,no:FLT.no,q:FLT.q,chr:CHR,exp:EXP,tg:TGOPEN,pmin:FLT.pmin||0,pmax:FLT.pmax||0,airlines:[...FLT.airlines],ps:[...FLT.ps],cabins:[...FLT.cabins],depA:[...FLT.depA],arrA:[...FLT.arrA],few:FLT.few,nostop:FLT.nostop,noshare:FLT.noshare,safe:FLT.safe,lmin:FLT.laymin||0,lmax:FLT.laymax||0,dmin:FLT.durmin||0,dmax:FLT.durmax||0,pr:FLT.prate||0,ag:FLT.age||0,bg:FLT.bag,ml:FLT.meal,nl:FLT.nolcc,cr:FLT.cross,ch:FLT.child,bkg:FLT.bagkg||0,wb:FLT.wb}));}catch(e){}}
 function restoreUI(){try{const j=JSON.parse(localStorage.getItem('jpui')||'{}');
  if(j.F)F=j.F;if(j.sk)SORT={k:j.sk,dir:j.sd||1};
  if(Array.isArray(j.plats)&&j.plats.length){FLT.plats=new Set(j.plats);FLT._platsInit=true;}
@@ -2738,6 +3586,8 @@ function restoreUI(){try{const j=JSON.parse(localStorage.getItem('jpui')||'{}');
  if(j.nl){FLT.nolcc=true;const el=$('fnolcc');if(el)el.checked=true;}
  if(j.cr){FLT.cross=true;const el=$('fcross');if(el)el.checked=true;}
  if(j.ch){FLT.child=true;const el=$('fchild');if(el)el.checked=true;}
+ if(j.bkg){FLT.bagkg=+j.bkg||0;const el=$('fbagkg');if(el)el.value=j.bkg;}
+ if(j.wb){FLT.wb=true;const el=$('fwb');if(el)el.checked=true;}
  U=Math.min(j.U||0,99);
  document.querySelectorAll('#tabs span').forEach(s=>
   s.classList.toggle('on',s.dataset.f===F));}catch(e){}}
@@ -2752,7 +3602,9 @@ function buildWinSel(){
   const cur=FLT[key];
   const box=$(id);
   const want=WINS.map(([,w])=>w);
-  const have=[...box.querySelectorAll('.schip')].map(c=>c.dataset.w);
+  const cw=cur?(cur[0]+'|'+cur[1]):'';
+  const have=[...box.querySelectorAll('.schip:not(.wincustom)')]
+   .map(c=>c.dataset.w);
   /* WINS 恒定，子节点齐时原位翻 on 类不重建——table() 每拍
      整组 innerHTML 重建曾把刚点按/回车的 .schip 连节点换掉，键盘焦点
      每切一挡丢回 body */
@@ -2760,9 +3612,20 @@ function buildWinSel(){
    box.innerHTML=WINS.map(([n,w])=>{
     const on=(cur?(cur[0]+'|'+cur[1]):'')===w;
     return `<span class="chip schip${on?' on':''}" data-w="${w}" onclick="togWin(this,'${key}')">${n}</span>`;}).join('');
-   continue;}
-  const cw=cur?(cur[0]+'|'+cur[1]):'';
-  box.querySelectorAll('.schip').forEach(c=>c.classList.toggle('on',c.dataset.w===cw));
+  }else{
+   box.querySelectorAll('.schip:not(.wincustom)').forEach(c=>
+    c.classList.toggle('on',c.dataset.w===cw));}
+  /* 自定义窗（r342 智能预设「白天出行」）无对应固定挡：补一枚可读、
+     可撤的「自定义」片，避免筛选生效而时段行看着像「不限」 */
+  let ex=box.querySelector('.wincustom');
+  if(cur&&want.indexOf(cw)<0){
+   if(!ex){ex=document.createElement('span');ex.className='chip schip wincustom';
+    box.appendChild(ex);}
+   ex.dataset.w=cw;ex.classList.add('on');
+   ex.textContent='自定义 '+(cur[0]||'00:00')+'–'+(cur[1]||'24:00');
+   ex.title='自定义时段窗：点一下取消（回不限）';
+   ex.onclick=function(){togWin(this,key);};
+  }else if(ex)ex.remove();
  }}
 function togWin(el,key){
  const w=el.dataset.w, was=el.classList.contains('on');
@@ -2781,6 +3644,7 @@ function applyFlt(){applyWins();
  FLT.prate=parseFloat($('fprate').value)||0;FLT.age=parseFloat($('fage').value)||0;
  FLT.bag=$('fbag').checked;FLT.meal=$('fmeal').checked;
  FLT.nolcc=$('fnolcc').checked;FLT.cross=$('fcross').checked;FLT.child=$('fchild').checked;
+ FLT.bagkg=parseFloat($('fbagkg').value)||0;FLT.wb=$('fwb').checked;
  FLT.q=($('fq').value||'').trim();saveUI();table();}
 /* 文本筛选实时防抖：价格/搜索框曾只 onchange（失焦/回车才
    过滤），边打字边出结果更直观；250ms 防抖避免每键全表重建 */
@@ -2820,6 +3684,7 @@ function resetFlt(){if(SORT.k!=='price'||SORT.dir!==1){SORT={k:'price',dir:1};}
  FLT.depA=new Set();FLT.arrA=new Set();
  FLT.noshare=false;FLT.safe=false;FLT.laymin=0;FLT.laymax=0;
  FLT.durmin=0;FLT.durmax=0;FLT.prate=0;FLT.age=0;FLT.bag=false;FLT.meal=false;
+ FLT.bagkg=0;FLT.wb=false;   /* r345：两项曾在重置清单缺席——片仍亮、结果集残留 */
  FLT.nolcc=false;FLT.cross=false;FLT.child=false;setCatAll();
  buildWinSel();
  $('fpmin').value='';$('fpmax').value='';$('fnostale').checked=false;$('fq').value='';
@@ -2827,16 +3692,19 @@ function resetFlt(){if(SORT.k!=='price'||SORT.dir!==1){SORT={k:'price',dir:1};}
  $('fsafe').checked=false;$('flaymin').value='';$('flaymax').value='';
  $('fdurmin').value='';$('fdurmax').value='';$('fprate').value='';$('fage').value='';
  $('fbag').checked=false;$('fmeal').checked=false;$('fnolcc').checked=false;
+ $('fbagkg').value='';$('fwb').checked=false;
  $('fcross').checked=false;$('fchild').checked=false;
- saveUI();buildChips();table();srtChipSync();}
+ const _aq=$('fltAirQ');if(_aq)_aq.value='';
+ saveUI();buildChips();buildDateChips();buildRouteChips();table();srtChipSync();}
 const HEADS=[['price','价格'],['cat','类别'],['date','日期'],['name','航班'],['dep','出发'],
  ['arr','到达'],['dur','时长'],['trans','中转'],['plat','渠道']];
 function tmin(t){const m=(t||'').match(/(\d{1,2}):(\d{2})/);return m?(+m[1])*60+(+m[2]):null;}
+function _flightUid(f){/* 同班判定（KPI 班次去重）：日期+航线+航班号/名+起降时刻；日历价不是航班 */return (f.cal?'cal|':'')+(f.date||'')+'|'+(f.flightNo||f.name||'')+'|'+(f.depTime||'')+'|'+(f.arrTime||'')+'|'+(f.route||'');}
 function sval(f,k){switch(k){case 'price':return f.price;case 'cat':return f.transfer?1:0;
- case 'date':return f.date||'';
+ case 'date':return f.date||null;   /* r339j 审计 P2：缺日期入哨兵集（恒沉底不随方向翻转——空串曾升序置顶） */
  case 'name':return f.name;case 'dep':return tmin(f.depTime)??99999;
  case 'arr':return tmin(f.arrTime)??99999;case 'dur':return f.durM||99999;
- case 'trans':return f.trans||'';case 'plat':return f.plat;default:return 0;}}
+ case 'trans':return f.trans||null;case 'plat':return f.plat;default:return 0;}}   /* trans 缺席同哨兵（—行曾升序 159 行置顶） */
 function sortCol(k){if(SORT.k===k)SORT.dir*=-1;else SORT={k:k,dir:1};saveUI();table();srtChipSync();}
 /* ===== 同班跨渠道比价：点击行展开（指纹含日期/经停——多日期航线同班次、
    直挂与经停报价不混串；经停对应后端 out 的 stop=bool(stopover)） ===== */
@@ -2845,17 +3713,20 @@ let EXP=null;
    data-k 属性与 togRow('${k}') JS 串可被断串；he() 在单引号 JS 上下文
    会因实体解码还原引号反而无效，故在源头统一清洗（fp(x)===k 两侧同源，
    比较一致性不受影响） */
-const fp=f=>((f.date||'')+'|'+f.depTime+'|'+f.arrTime+'|'+f.trans+'|'+f.cross+'|'+(f.stop?1:0)).replace(/["'<>&\\]/g,'_');
+const fp=f=>((f.cal?'cal':'')+'|'+(f.date||'')+'|'+(f.route||'')+'|'+(f.flightNo||f.name||'')+'|'+f.depTime+'|'+f.arrTime+'|'+f.trans+'|'+f.cross+'|'+(f.stop?1:0)).replace(/["'<>&\\]/g,'_');
 /* 展开行渲染期预置为隐藏行，点击只切 display——表格零 childList 变更。
    （禁用"插/删一个 tr"的外科手术方案：翻译/比价类扩展监听 DOM 插入会
    全页重扫，用户实测每点一行卡数秒；隐藏行只是 attribute 变更，不触发） */
-function xrowHtml(u,k,open,grp){
+function xrowHtml(u,k,open,grp,curPrice){
  /* grp=纯 fp 分组键（比价聚合用）；k=行实例键（展开态）。两者必须
     分传——grp 缺省回退 k 会让比价组退化为单行（链静默丢失），故
     不设兜底 */
  const same=u.flights.filter(x=>fp(x)===grp)
   .sort((a,b)=>a.price-b.price);
- const save=same.length>1?same[same.length-1].price-same[0].price:0;
+ const cur=Number(curPrice)||same[0].price;
+ const low=same[0].price;
+ const save=same.length>1?Math.max(0,cur-low):0;
+ const isLow=!!(same.length>1&&cur<=low);
  /* 离群警示（口径单源后端下发=钉钉/推送图同一 Alerter._outlier：最高>2×最低
     或跨舱位大类，收口——前端本地曾只判 2×，跨舱位 ≤2× 时此处显示
     「可省」而推送显示「差」）：「可省」是假优惠——如实改「差」并标 ⚠️+最高价舱位 */
@@ -2868,9 +3739,11 @@ function xrowHtml(u,k,open,grp){
     宽时才折行——短链单行放得下，链尾结论句曾仍藏视口外须横滚；前置后
     恒贴链头（xrow 已退出首列吸附，链头=滚动零位），移动端首屏即见 */
  return `<tr class="xrow"${open?'':' style="display:none"'}><td colspan="9">⚖️ 同班比价`+
-    (save?(outlier?`<span style="white-space:nowrap">（差 ￥${save} · ${hiCn?hiCn+' · ':''}渠道报价口径差异 ⚠️）</span>`
-                  :`<span style="white-space:nowrap">（可省 ￥${save}）</span>`)
-         :'<span style="white-space:nowrap">（仅一渠道报价）</span>')+`：${chain}</td></tr>`;}
+    (same.length<2?'<span style="white-space:nowrap">（仅一渠道报价）</span>'
+      :(isLow?'<span style="white-space:nowrap;color:var(--ok-strong,var(--green))">（本行已是同班最低）</span>'
+        :(outlier?`<span style="white-space:nowrap">（本行较最低高 ￥${save} · ${hiCn?hiCn+' · ':''}渠道口径差异 ⚠️）</span>`
+          :`<span style="white-space:nowrap">（换最低渠道可省 ￥${save}）</span>`)))
+    +`：${chain}</td></tr>`;}
 function _hideXrows(){document.querySelectorAll('#ftable tr.xrow').forEach(
  x=>{x.style.display='none';});}
 /* 展开切换：目标行的紧邻隐藏行 display 翻转，无任何节点插拔/全表重建 */
@@ -2944,6 +3817,30 @@ function togGo(k,el){
  if(tg){tg.style.display='';el.setAttribute('aria-expanded','true');}
  else table();}
 /* 筛选+排序统一出口：表格渲染与 CSV 导出共用同一结果集 */
+const _BAGKG_RE=/(\d+(?:\.\d+)?)\s*(?:kg|公斤)/i;  /* 托运词面 kg
+  提数单源（明细筛选 bagkg 与航线门 min_baggage 同一正则语义，双端
+  改词面须同轮） */
+function _cchip(f){/* 舱位片显示与筛选同源（r339j 明细审计 P1）：
+   订座码归一档（cabinOf）与渠道词面冲突时以归一档显示+title 披露
+   渠道标注（「筛公务剩行显示经济舱」双源矛盾根治）；词面含档词或
+   无码（缺维度默认经济语义，不覆写渠道词）→渠道词面原样 */
+ const co=f.cabinCode?cabinOf(f):'';
+ const ct=String(f.cabinT||'').replace(/<[^>]*>/g, "");
+ if(co&&!ct.startsWith(co))return '<span title="渠道标注：'+he(ct||'（无）')+'；舱位档按订座码归一">'+he(co)+'</span>';
+ return he(ct||co||'');}
+function _bagKgs(f){/* 托运词面全部 kg 数（r339j 与 alerter min_baggage
+   同律：渠道词面常手提+托运并列——「手提7kg·托运20kg」取首个=按
+   7 误剔；额度口径=最大者，谓词与行内可见反馈共用单源） */
+ const out=[];const re=/((?:\d+(?:\.\d+)?))\s*(?:kg|公斤)/gi;
+ let m;const t=String(f&&f.baggage||'');
+ while((m=re.exec(t)))out.push(parseFloat(m[1]));
+ return out;}
+function _hasFreeBag(f){/* 「含免费托运」不能把明示「无免费托运」的行放进来：
+   词面非空≠有免费额。否定/另购语义先判否，其余行李词面才算有。 */
+ const t=String(f&&f.baggage||'').trim();
+ if(!t)return false;
+ if(/(?:无|不含|需另购|另购|收费)(?:免费)?(?:托运|行李)/.test(t))return false;
+ return /(?:免费)?(?:托运|行李)|kg|公斤/.test(t);}
 function carrierWordOf(f){/* 航司词面单源：name 前缀中文（南航CZ6976→
    南航），无中文前缀回退 airlineCode 再回退 name——只作显示词，
    不作筛选键（r324：词形漂移「吉祥/吉祥航」「海航/新海航」与跨码
@@ -2964,8 +3861,8 @@ function cabinOf(f){/* 舱位标签单源：舱系归一（IATA 舱位代码→�
    92/92 携带）不进舱系归一维度返回空串——各段码组合语义不可归单
    舱系（Q→公务/经济双值域在案=映射即赌博），逐串成 chip 是零区分
    度碎片噪音；空串由 chips 构造 filter(Boolean) 排除、筛选门空值
-   放行（缺维度行不被任何舱位档静默滤除——intl 行此前无码归「经济」
-   桶，连串亮相当日即从「经济」筛选静默消失=筛选回归面） */
+   放行（缺维度行不被任何舱位档静默滤除——空值进档会让连串亮相当日
+   从既有筛选静默消失=筛选回归面） */
  const c=f.cabinCode;
  if(!c)return '经济';
  if(c.indexOf('-')>=0)return '';
@@ -3015,7 +3912,11 @@ function buildAttrChips(){const u=S.users[U];if(!u)return;
  [...FLT.cabins].forEach(k=>{if(!cbs.includes(k))FLT.cabins.delete(k);});
  [...FLT.depA].forEach(k=>{if(!daps.some(d=>d[0]===k))FLT.depA.delete(k);});
  [...FLT.arrA].forEach(k=>{if(!aaps.some(d=>d[0]===k))FLT.arrA.delete(k);});
- al.innerHTML=als.map(a=>`<span class="chip${FLT.airlines.has(a[0])?' on':''}" data-k="${he(a[0])}" aria-pressed="${FLT.airlines.has(a[0])?'true':'false'}" onclick="togSet(FLT.airlines,'${he(a[0])}',this)">${he(a[1])}</span>`).join('');
+ const _aq=(($('fltAirQ')||{}).value||'').trim().toLowerCase();
+ const _als=_aq?als.filter(a=>String(a[1]).toLowerCase().indexOf(_aq)>=0
+  ||String(a[0]).toLowerCase().indexOf(_aq)>=0):als;
+ al.innerHTML=_als.map(a=>`<span class="chip${FLT.airlines.has(a[0])?' on':''}" data-k="${he(a[0])}" aria-pressed="${FLT.airlines.has(a[0])?'true':'false'}" onclick="togSet(FLT.airlines,'${he(a[0])}',this)">${he(a[1])}</span>`).join('')
+  +(_aq&&!_als.length?'<span class="muted" style="font-size:11px;white-space:nowrap">无匹配航司</span>':'');
  cb.innerHTML=cbs.map(a=>`<span class="chip${FLT.cabins.has(a)?' on':''}" aria-pressed="${FLT.cabins.has(a)?'true':'false'}" onclick="togSet(FLT.cabins,'${he(a)}',this)">${he(a)}</span>`).join('');
  ps.innerHTML=pss.map(a=>`<span class="chip${FLT.ps.has(a)?' on':''}" aria-pressed="${FLT.ps.has(a)?'true':'false'}" onclick="togSet(FLT.ps,'${he(a)}',this)">${he(a)}</span>`).join('');
  dpc.innerHTML=daps.map(d=>`<span class="chip${FLT.depA.has(d[0])?' on':''}" aria-pressed="${FLT.depA.has(d[0])?'true':'false'}" onclick="togSet(FLT.depA,'${he(d[0])}',this)">${he(d[1])}</span>`).join('');
@@ -3027,8 +3928,10 @@ function buildAttrChips(){const u=S.users[U];if(!u)return;
   safe:has(f=>f.agePolicy||f.riskPolicy),
   lay:has(f=>f.transfer&&f.layoverM>0),
   prate:has(f=>f.prate!=null),age:has(f=>f.planeAge),
-  bag:has(f=>f.baggage),meal:has(f=>f.meal),nolcc:has(f=>f.lcc),
-  cross:has(f=>f.date&&f.arrDate&&f.arrDate>f.date),
+  bag:has(f=>f.baggage),bagkg:has(f=>f.baggage),
+  wb:has(f=>f.planeSize),
+  meal:has(f=>f.meal),nolcc:has(f=>f.lcc),
+  cross:has(f=>String(f.crossDayN)!=''),
   child:has(f=>f.childPrice!=null),
   depA:has(f=>f.depAirport||f.depAirportCode),
   arrA:has(f=>f.arrAirport||f.arrAirportCode)};
@@ -3045,8 +3948,102 @@ function togMoreFlt(){
  btn.setAttribute('aria-expanded',open?'false':'true');
  btn.firstChild.textContent=open?'更多筛选 ▸':'更多筛选 ▾';}
 function moreFltActive(){return (FLT.durmin||FLT.durmax?1:0)+(FLT.prate?1:0)
- +(FLT.age?1:0)+(FLT.bag?1:0)+(FLT.meal?1:0)+(FLT.nolcc?1:0)
- +(FLT.cross?1:0)+(FLT.child?1:0);}
+ +(FLT.age?1:0)+(FLT.bag?1:0)+(FLT.bagkg?1:0)+(FLT.meal?1:0)+(FLT.nolcc?1:0)
+ +(FLT.wb?1:0)+(FLT.cross?1:0)+(FLT.child?1:0);}
+/* ===== r342 明细筛选摘要 / 智能预设（配置页同一套语义，明细可读可撤） ===== */
+function _fltCatLabel(k){return {d:'✈️ 直飞',tq:'🔁 中转·达标',t:'🔁 中转·全部',
+ q:'🔥 仅达标',bag:'🧳 直挂'}[k]||k;}
+function _fltFlags(){const a=[];
+ if(FLT.no)a.push('隐藏补位');if(FLT.few)a.push('余票紧张');
+ if(FLT.nostop)a.push('排除经停');if(FLT.noshare)a.push('排除共享');
+ if(FLT.safe)a.push('隐藏限购/高风险');if(FLT.wb)a.push('仅大型机');
+ if(FLT.bag)a.push('含免费托运');if(FLT.meal)a.push('含餐食');
+ if(FLT.nolcc)a.push('排除廉航');if(FLT.cross)a.push('仅跨天');
+ if(FLT.child)a.push('儿童价');if(FLT.laymin||FLT.laymax)
+  a.push('中转'+(FLT.laymin||0)+'–'+(FLT.laymax||'∞')+'分');
+ if(FLT.durmin||FLT.durmax)a.push('时长'+(FLT.durmin||0)+'–'+(FLT.durmax||'∞')+'分');
+ if(FLT.prate)a.push('准点≥'+FLT.prate+'%');if(FLT.age)a.push('机龄≤'+FLT.age+'年');
+ if(FLT.bagkg)a.push('托运≥'+FLT.bagkg+'kg');return a;}
+function _fltGroups(){const out=[];
+ if(F&&F!=='all')out.push({g:'cat',label:_fltCatLabel(F)});
+ if(FLT.plats.size)out.push({g:'plats',label:'渠道 '+FLT.plats.size});
+ if(FLT.routes.size)out.push({g:'routes',label:'航线 '+FLT.routes.size});
+ if(FLT.dates.size)out.push({g:'dates',label:'日期 '+FLT.dates.size});
+ if(FLT.dep||FLT.arr){const t=[];
+  if(FLT.dep)t.push('出发 '+(FLT.dep[0]||'00:00')+'–'+(FLT.dep[1]||'24:00'));
+  if(FLT.arr)t.push('到达 '+(FLT.arr[0]||'00:00')+'–'+(FLT.arr[1]||'24:00'));
+  out.push({g:'time',label:t.join(' · ')});}
+ if(FLT.pmin||FLT.pmax)out.push({g:'priceq',label:'价格 '
+  +(FLT.pmin?('≥￥'+FLT.pmin):'')+(FLT.pmin&&FLT.pmax?' 且 ':'')
+  +(FLT.pmax?('≤￥'+FLT.pmax):'')});
+ if(FLT.q)out.push({g:'q',label:'搜索「'+FLT.q+'」'});
+ const ac=FLT.airlines.size+FLT.ps.size+FLT.cabins.size+FLT.depA.size+FLT.arrA.size;
+ if(ac)out.push({g:'attr',label:'航司/舱位/机型/机场 '+ac});
+ const fl=_fltFlags();if(fl.length)out.push({g:'other',
+  label:fl.length<=2?fl.join(' · '):('条件 '+fl.length),
+  title:fl.join(' · ')});
+ return out;}
+function renderFltSum(){const box=$('fltsum');if(!box)return;
+ const gs=_fltGroups();
+ document.querySelectorAll('#fltpresets .fltpreset').forEach(el=>{
+  const k=el.dataset.fp;let on=false;
+  if(k==='direct')on=(F==='d'&&FLT.bag&&FLT.nostop);
+  else if(k==='day')on=(FLT.dep&&FLT.dep[0]==='06:00'&&FLT.dep[1]==='18:00'
+   &&FLT.arr&&FLT.arr[0]==='06:00'&&FLT.arr[1]==='23:59');
+  else if(k==='calm')on=!!(FLT.nostop&&FLT.noshare&&FLT.nolcc&&FLT.safe);
+  else if(k==='bag')on=!!FLT.bag;
+  el.classList.toggle('on',on);el.setAttribute('aria-pressed',on?'true':'false');});
+ if(!gs.length){box.innerHTML='';return;}
+ box.innerHTML='<span class="fs-lab">生效筛选</span>'
+  +gs.map(g=>'<span class="fs-chip" role="button" tabindex="0" title="点击清除该组筛选'
+   +esc(g.title?('：'+g.title):'')+'" onclick="clearFltGroup(\''+g.g+'\')"'
+   +' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();clearFltGroup(\''+g.g+'\')}">'
+   +esc(g.label)+' ✕</span>').join('')
+  +'<span class="fs-clear" role="button" tabindex="0" onclick="resetFltUI()"'
+  +' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();resetFltUI()}">清除全部</span>';}
+function syncFltInputs(){const set=(id,v)=>{const el=$(id);if(el)el.value=(v==null||v===0)?'':String(v);};
+ set('fpmin',FLT.pmin);set('fpmax',FLT.pmax);set('fq',FLT.q||'');
+ set('flaymin',FLT.laymin);set('flaymax',FLT.laymax);
+ set('fdurmin',FLT.durmin);set('fdurmax',FLT.durmax);
+ set('fprate',FLT.prate);set('fage',FLT.age);set('fbagkg',FLT.bagkg);
+ const chk=(id,v)=>{const el=$(id);if(el)el.checked=!!v;};
+ chk('fnostale',FLT.no);chk('ffew',FLT.few);chk('fnostop',FLT.nostop);
+ chk('fnoshare',FLT.noshare);chk('fsafe',FLT.safe);chk('fbag',FLT.bag);
+ chk('fmeal',FLT.meal);chk('fnolcc',FLT.nolcc);chk('fwb',FLT.wb);
+ chk('fcross',FLT.cross);chk('fchild',FLT.child);
+ buildWinSel();}
+function clearFltGroup(g){
+ if(g==='cat'){setCatAll();}
+ else if(g==='plats'){FLT.plats=new Set();FLT._platsInit=true;buildChips();}
+ else if(g==='routes'){FLT.routes=new Set();buildRouteChips();}
+ else if(g==='dates'){FLT.dates=new Set();buildDateChips();}
+ else if(g==='time'){FLT.dep=null;FLT.arr=null;buildWinSel();}
+ else if(g==='priceq'){FLT.pmin=0;FLT.pmax=0;syncFltInputs();}
+ else if(g==='q'){FLT.q='';syncFltInputs();}
+ else if(g==='attr'){FLT.airlines=new Set();FLT.ps=new Set();
+  FLT.cabins=new Set();FLT.depA=new Set();FLT.arrA=new Set();}
+ else if(g==='other'){FLT.no=FLT.few=FLT.nostop=FLT.noshare=FLT.safe=false;
+  FLT.wb=FLT.bag=FLT.meal=FLT.nolcc=FLT.cross=FLT.child=false;
+  FLT.laymin=FLT.laymax=FLT.durmin=FLT.durmax=0;
+  FLT.prate=FLT.age=FLT.bagkg=0;syncFltInputs();}
+ saveUI();table();}
+function applyFltPreset(kind){
+ if(kind==='direct'){const on=(F==='d'&&FLT.bag&&FLT.nostop);
+  if(on){F='all';FLT.bag=false;FLT.nostop=false;}
+  else{F='d';FLT.bag=true;FLT.nostop=true;}}
+ else if(kind==='day'){const on=(FLT.dep&&FLT.dep[0]==='06:00'
+  &&FLT.dep[1]==='18:00'&&FLT.arr&&FLT.arr[0]==='06:00'
+  &&FLT.arr[1]==='23:59');
+  if(on){FLT.dep=null;FLT.arr=null;}
+  else{FLT.dep=['06:00','18:00'];FLT.arr=['06:00','23:59'];}}
+ else if(kind==='calm'){const on=!!(FLT.nostop&&FLT.noshare&&FLT.nolcc&&FLT.safe);
+  if(on){FLT.nostop=FLT.noshare=FLT.nolcc=FLT.safe=false;}
+  else{FLT.nostop=FLT.noshare=FLT.nolcc=FLT.safe=true;}}
+ else if(kind==='bag'){FLT.bag=!FLT.bag;}
+ document.querySelectorAll('#tabs span[data-f]').forEach(x=>
+  x.classList.toggle('on',x.dataset.f===F));
+ syncFltInputs();saveUI();table();
+ toast('筛选已更新：'+({direct:'直飞含行李',day:'白天出行',calm:'省心出行',bag:'含免费托运'}[kind]||kind),'ok');}
 function filteredRows(){const u=S.users[U];
  const rows=u.flights.filter(f=>{
   if(F==='d'&&f.transfer)return false;
@@ -3071,10 +4068,12 @@ function filteredRows(){const u=S.users[U];
   if(FLT.arrA.size&&!(FLT.arrA.has(f.arrAirportCode)||FLT.arrA.has((f.arrAirport||'').replace(/国际机场$/,'').replace(/机场$/,''))))return false;
   if(FLT.ps.size&&(!f.planeSize||!FLT.ps.has(f.planeSize)))return false;
   if(FLT.cabins.size&&cabinOf(f)&&!FLT.cabins.has(cabinOf(f)))return false;
-  if(FLT.few&&!f.fewTicket)return false;
+  if(FLT.few&&!(f.fewTicket||(f.leftTickets>0&&f.leftTickets<10)))return false;
   if(FLT.nostop&&f.stop)return false;
   if(FLT.noshare&&f.shareCarrier)return false;
-  if(FLT.safe&&(f.agePolicy||f.riskPolicy))return false;
+  /* r345：safe 词面承诺「隐藏限购/高风险价」——只判 age/risk 曾漏掉
+     诱饵价（lurePrice）与票规风险（ticketRisk），title 与结果双源矛盾 */
+  if(FLT.safe&&(f.agePolicy||f.riskPolicy||f.lurePrice!=null||f.ticketRisk))return false;
   if((FLT.laymin||FLT.laymax)&&f.transfer){const m=f.layoverM;
    // 未知衔接放行不参与区间断言（r51 审计：未知曾压成 0 → 设下限后
    // 无段时刻的国际中转整渠道静默消失；r329 缺维度不静默滤除律）
@@ -3086,13 +4085,22 @@ function filteredRows(){const u=S.users[U];
   if(FLT.prate&&(f.prate==null||f.prate<FLT.prate))return false;
   if(FLT.age){const a=parseFloat(f.planeAge);
    if(f.planeAge==null||isNaN(a)||a>FLT.age)return false;}
-  if(FLT.bag&&!f.baggage)return false;
+  if(FLT.bag&&!_hasFreeBag(f))return false;
+  /* 托运≥N kg（r339 明细筛选扩容）：行内托运词面提 kg 数判定，
+     未标注 kg 的行按不满足（航线门 min_baggage 同语义同源）；共
+     用一个正则单源（模块顶部 _BAGKG_RE），消费端改词面只改一处 */
+  if(FLT.bagkg){const kgs=_bagKgs(f);
+   if(!kgs.length||Math.max(...kgs)<FLT.bagkg)return false;}
   if(FLT.meal&&!f.meal)return false;
   if(FLT.nolcc&&f.lcc)return false;
-  if(FLT.cross&&!(f.date&&f.arrDate&&f.arrDate>f.date))return false;
+  /* 仅大型机（r339 明细筛选扩容，intl 高频）：未标注机型的行按
+     不满足（浏览语境直观语义；航线门 widebody_only 的 fail-open
+     是监控语境防整渠道误杀——两语境语义分立各安其位） */
+  if(FLT.wb&&String(f.planeSize||'').indexOf('大型机')<0)return false;
+  if(FLT.cross&&!(Number(f.crossDayN)>0))return false;
   if(FLT.child&&f.childPrice==null)return false;
   if(FLT.q){const q=FLT.q.toLowerCase();
-   const hay=(f.name+' '+(f.code||'')+' '+(f.trans||'')+' '+f.plat+' '+(f.depAirportCode||'')+' '+(f.arrAirportCode||'')+' '+(f.depAirport||'')+' '+(f.arrAirport||'')+' '+(f.airlineCode||'')+' '+(f.plane||'')).toLowerCase();
+   const hay=(f.name+' '+(f.code||'')+' '+(f.trans||'')+' '+f.plat+' '+(f.depAirportCode||'')+' '+(f.arrAirportCode||'')+' '+(f.depAirport||'')+' '+(f.arrAirport||'')+' '+(f.airlineCode||'')+' '+(f.plane||'')+' '+(f.plane2||'')).toLowerCase();
    if(!hay.includes(q))return false;}
   return true;});
  rows.sort((a,b)=>{const x=sval(a,SORT.k),y=sval(b,SORT.k);
@@ -3176,7 +4184,7 @@ function expCsv(){if(!S||!S.users.length){toast('数据加载中，请稍候再�
   ((_ttc(f.depAirport,f.depTerminal,f.depAirportCode))&&(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode))&&_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)!==_ttc(f.depAirport,f.depTerminal,f.depAirportCode))?(_ttc(f.depAirport,f.depTerminal,f.depAirportCode)+'→'+_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)):(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)||_ttc(f.depAirport,f.depTerminal,f.depAirportCode)||''),
   f.cross||'',f.dur||'',_ad_txt(f.avgDelay),(f.prate?f.prate+'%':''),(f.cancelRate!=null?f.cancelRate+'%':''),f.trans||'',
   (f.layoverT||'')+(f.layMin?(f.layoverM>=f.layMin?'✓':(f.layoverM?'⚠':'')):''),
-  (f.bagState==='direct'?'是':(f.bagState==='recheck'?'需转运':'')),f.baggage||'',f.carryon||'',f.stop?('是'+(f.stopWin?'('+f.stopWin+')':'')):'',(f.cabinT||'').replace(/<[^>]*>/g,''),f.cabinCode||'',(f.seatTilt!=null?f.seatTilt+'°':''),[f.planeSize,f.plane].filter(Boolean).join('·'),(f.bridgeRate!=null?f.bridgeRate+'%':''),(f.transferTax!=null?f.transferTax:''),(f.bizPrice!=null?((f.price!=null&&f.bizPrice>f.price)?'+￥'+(f.bizPrice-f.price):(f.bizCabin||'公务')+'￥'+f.bizPrice):''),_rc_txt(f),(f.lcc?'是':''),f.labels||'',f.labelNote||'',f.transferService||'',f.airlineTransfer||'',f.plat,
+  (f.bagState==='direct'?'是':(f.bagState==='recheck'?'需转运':'')),f.baggage||'',f.carryon||'',f.stop?('是'+(f.stopWin?'('+f.stopWin+')':'')):'',(f.cabinT||'').replace(/<[^>]*>/g,''),f.cabinCode||'',(f.seatTilt!=null?f.seatTilt+'°':''),[f.planeSize,f.planeSize2,f.plane].filter(Boolean).join('·'),(f.bridgeRate!=null?f.bridgeRate+'%':''),(f.transferTax!=null?f.transferTax:''),(f.bizPrice!=null?((f.price!=null&&f.bizPrice>f.price)?'+￥'+(f.bizPrice-f.price):(f.bizCabin||'公务')+'￥'+f.bizPrice):''),_rc_txt(f),(f.lcc?'是':''),f.labels||'',f.labelNote||'',f.transferService||'',f.airlineTransfer||'',f.plat,
   f.stale?('补位·'+f.stale+'h前'):'实时',
   f.qual?'真达标':(f.brk?'行情破线':(f.near?'擦边':'')),
   f.xphan?'是':'',
@@ -3218,11 +4226,11 @@ function _chunkHtml(ci){if(_CHUNKS[ci]!=null)return _CHUNKS[ci];
   `<td class="price${f.brk?' brk':(f.near?' near':'')}"${f.brk?' title="行情破线未达标：因非直挂/衔接不足/税前等原因暂不可出手"':(f.near?` title="擦边：距达标线 ≤${NEAR_PCT}%，未达标"`:'')}>${'<span class="fire">'+(f.qual?'🔥':'')+'</span>'}￥${f.price}${f.xphan?' <span class="stl" style="color:var(--warn);cursor:help" title="跨渠道孤低价：显著低于其他渠道同航班报价，疑似页面污染/错误价——不参与达标判定与行情最优">⚠</span>':''}${f.platKey==='fliggy'&&!f.intl?'<span class="pretax" style="cursor:help" title="飞猪列表价为不含机建燃油的裸价，出行总成本需另加此项">税前</span>':''}${f.blackCard?'<span class="pretax" style="cursor:help" title="黑卡价：渠道黑卡商品价，实付以渠道页为准">黑卡价</span>':''}${f.agePolicy?`<span class="pretax" style="color:var(--warn);cursor:help" title="资格受限专享价：仅符合限定条件（年龄/航司或平台会员资格/指定卡类型/航司协议/成团人数）的旅客可购，误购无法出行">⚠${he(f.agePolicy)}价</span>`:''}${f.riskPolicy?`<span class="pretax" style="color:var(--warn);cursor:help" title="渠道标注的高风险政策价：出票/退款类购买风险以渠道页说明为准，下单前请核实政策详情">⚠${he(f.riskPolicy)}</span>`:''}${f.ticketRisk?`<span class="pretax" style="color:var(--warn);cursor:help" title="值机时效风险（渠道弹层警示）：航班临近起飞，购票前请先到值机柜台确认出票后仍有时间值机；出票失败自动取消全额退款；已出票退改损失需自行承担">⚠值机</span>`:''}${f.lurePrice?`<span class="pretax" style="color:var(--warn);cursor:help" title="渠道列表页展示价￥${f.lurePrice}已被渠道过滤（不可购）：点进渠道预订将按本行可购价成交，请勿以该展示价比价">⚠页面价￥${f.lurePrice}不可购</span>`:''}${(f.returnFee!=null||f.changeFee!=null)?`<span class="pretax" style="cursor:help" title="该价位退改规则（渠道标注，当前档位费率、起飞前分档变动）：退票/改签手续费，不可=渠道标注不可办理">${_rc_txt(f)}</span>`:''}</td>`+
   `<td class="catt">${f.intl?'<span class="tag t-i" title="国际航线：价格为含税总价">国际</span>':''}${f.cal?'<span class="tag t-c" title="日历价：渠道日历最低含税价（非具体航班，时刻/航班号/航司不适用）">日历</span>':`<span class="tag ${f.transfer?'t-t':'t-d'}"${(f.transfer&&f.transferService)?` title="中转服务：${he(f.transferService)}"`:''}>${f.transfer?'中转':'直飞'}</span>`}</td>`+
   `<td class="datd">${f.date?he(dSlash(f.date)):'—'}</td>`+
-  `<td${((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null)||(f.childPrice!=null||f.infantPrice!=null)||f.distance!=null||(f.nearby&&f.nearby.length)||(f.trendRound&&f.trendRound.length))?` title="${he((f.labels||'').split('·').join(' · '))+(f.labels&&f.labelNote?'｜':'')+he(f.labelNote||'')+((f.labels||f.labelNote)&&f.baggage?'｜':'')+(f.baggage?he(f.baggage):'')+((f.labels||f.labelNote||f.baggage)&&f.carryon?'｜':'')+(f.carryon?he(f.carryon):'')+((f.labels||f.labelNote||f.baggage||f.carryon)&&f.bizPrice!=null?'｜':'')+(f.bizPrice!=null?he(f.bizCabin||'公务')+'￥'+he(String(f.bizPrice)):'')+((f.childPrice!=null||f.infantPrice!=null)?(((f.labels||f.labelNote||f.bizPrice!=null||f.baggage||f.carryon)?'｜':'')+(f.childPrice!=null?'儿童价￥'+he(String(f.childPrice)):'')+((f.childPrice!=null&&f.infantPrice!=null)?'｜':'')+(f.infantPrice!=null?'婴儿价￥'+he(String(f.infantPrice)):'')):'')+(f.distance!=null?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null)?'｜':'')+'航程'+he(String(f.distance))+'km':'')+(f.nearby&&f.nearby.length?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null||f.distance!=null)?'｜':'')+he(_nb_txt(f)):'')+(f.trendRound&&f.trendRound.length?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null||f.distance!=null||(f.nearby&&f.nearby.length))?'｜':'')+he(_rt_txt(f)):'')}"`:''}><div class="mmeta">${f.intl?'<span class="tag t-i" title="国际航线：价格为含税总价">国际</span>':''}${f.cal?'<span class="tag t-c" title="日历价：渠道日历最低含税价（非具体航班，时刻/航班号/航司不适用）">日历</span>':`<span class="tag ${f.transfer?'t-t':'t-d'}"${(f.transfer&&f.transferService)?` title="中转服务：${he(f.transferService)}"`:''}>${f.transfer?'中转':'直飞'}</span>`}<span class="mdat">${f.date?he(dSlash(f.date)):'—'}</span></div><span class="xind" aria-hidden="true"></span>${he(f.name)}${f.stop?`<span class="stoptag">经停${he(f.stopCity||'')}${f.stopTimeT?` 停${he(f.stopTimeT)}`:''}${f.stopWin?`(${he(f.stopWin)})`:''}</span>`:''}${f.bagState==='direct'?'<span class="bagtag">直挂</span>':(f.bagState==='recheck'?'<span class="stoptag" title="渠道标注行李需重新托运（中转不直挂）">需转运</span>':'')}${f.lcc?'<span class="stoptag" title="廉价航空：中转常需重新值机、行李托运受限">廉航</span>':''}${(f.cabinT||f.prate||f.meal||f.shareCarrier||f.codeShare||f.fewTicket||f.depTerminal||f.arrTerminal||f.depAirport||f.arrAirport||f.planeSize||f.ptripNote||f.airlineTransfer||f.avgDelay!=null||f.transTerminal||f.transDepTerminal||f.transferTax!=null||(f.leftTickets>0&&f.leftTickets<10)||f.intl)?`<div class="stl" style="margin-top:3px">${[f.cabinT?he(f.cabinT):'',f.intl?`<span title="国际行价格为含税总价口径，此为其中税费构成部分">含税${f.tax!=null?'￥'+he(String(f.tax)):''}</span>`:'',f.cabinCode?'<span title="舱位代码'+(f.seatTilt!=null?'｜座椅倾斜'+f.seatTilt+'°':'')+'">'+he(f.cabinCode)+'</span>':'',f.prate?'准点'+he(String(f.prate))+'%'+(f.cancelRate!=null?'·取消'+he(String(f.cancelRate))+'%':''):'',f.meal?he(f.meal):'',f.planeSize?'<span class="nw" title="'+(f.plane?'机型'+he(f.plane)+'｜':'')+'数据源：渠道连廊率/机龄">'+he(f.planeSize)+(f.bridgeRate!=null?'·廊桥'+he(String(f.bridgeRate))+'%':'')+(f.planeAge?'·机龄'+he(String(f.planeAge))+'年':'')+'</span>':'',f.codeShare?'<span title="共享航班：实际承运航司可能与票面不同">共享航班</span>':'',f.shareCarrier?'共享·'+he(f.shareAirline?f.shareAirline+f.shareCarrier:f.shareCarrier):(f.shareAirline?'承运·'+he(f.shareAirline):''),f.fewTicket?he(f.fewTicket):'',(f.leftTickets>0&&f.leftTickets<10)?'余'+he(String(f.leftTickets))+'张':'',(f.depTerminal||f.arrTerminal||f.depAirport||f.arrAirport)?'<span class="nw">'+he(((_ttc(f.depAirport,f.depTerminal,f.depAirportCode))&&(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode))&&_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)!==_ttc(f.depAirport,f.depTerminal,f.depAirportCode))?(_ttc(f.depAirport,f.depTerminal,f.depAirportCode)+'→'+_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)):(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)||_ttc(f.depAirport,f.depTerminal,f.depAirportCode)))+'</span>':'',f.transTerminal?'<span class="nw">换乘·'+he(f.transTerminal)+(f.transDepTerminal?'（'+he((f.transDepTerminal.match(/T\d+/)||[''])[0])+'出）':'')+'</span>':'',f.transferTax!=null?'<span title="飞猪列表价为不含机建燃油的裸价，出行总成本需另加此项">+机建燃油￥'+he(String(f.transferTax))+'</span>':'',f.ptripNote?he(f.ptripNote):'',_ad_txt(f.avgDelay),f.airlineTransfer?he(f.airlineTransfer):''].filter(Boolean).join(' ｜ ')}</div>`:''}${tgCap(f,k)}${f.view?`<a class="vw" href="${he(f.view)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="在${he(f.plat||'去哪儿')}查看该航线">↗</a>`:''}${f.route?`<span class="stl nw"> <span style="display:inline-block">${he(f.route)}</span><span class="tj" role="button" tabindex="0" title="查看该航线价格走势" data-r="${he(f.route)}" data-d="${he(f.date||'')}" onclick="event.stopPropagation();jumpRowTrend(this.dataset.r,this.dataset.d)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();jumpRowTrend(this.dataset.r,this.dataset.d)}">📈</span></span>`:''}</td><td>${f.depTime?he(f.depTime):'—'}</td>`+
+  `<td${((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null)||(f.childPrice!=null||f.infantPrice!=null)||f.distance!=null||(f.nearby&&f.nearby.length)||(f.trendRound&&f.trendRound.length))?` title="${he((f.labels||'').split('·').join(' · '))+(f.labels&&f.labelNote?'｜':'')+he(f.labelNote||'')+((f.labels||f.labelNote)&&f.baggage?'｜':'')+(f.baggage?he(f.baggage):'')+((f.labels||f.labelNote||f.baggage)&&f.carryon?'｜':'')+(f.carryon?he(f.carryon):'')+((f.labels||f.labelNote||f.baggage||f.carryon)&&f.bizPrice!=null?'｜':'')+(f.bizPrice!=null?he(f.bizCabin||'公务')+'￥'+he(String(f.bizPrice)):'')+((f.childPrice!=null||f.infantPrice!=null)?(((f.labels||f.labelNote||f.bizPrice!=null||f.baggage||f.carryon)?'｜':'')+(f.childPrice!=null?'儿童价￥'+he(String(f.childPrice)):'')+((f.childPrice!=null&&f.infantPrice!=null)?'｜':'')+(f.infantPrice!=null?'婴儿价￥'+he(String(f.infantPrice)):'')):'')+(f.distance!=null?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null)?'｜':'')+'航程'+he(String(f.distance))+'km':'')+(f.nearby&&f.nearby.length?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null||f.distance!=null)?'｜':'')+he(_nb_txt(f)):'')+(f.trendRound&&f.trendRound.length?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null||f.distance!=null||(f.nearby&&f.nearby.length))?'｜':'')+he(_rt_txt(f)):'')}"`:''}><div class="mmeta">${f.intl?'<span class="tag t-i" title="国际航线：价格为含税总价">国际</span>':''}${f.cal?'<span class="tag t-c" title="日历价：渠道日历最低含税价（非具体航班，时刻/航班号/航司不适用）">日历</span>':`<span class="tag ${f.transfer?'t-t':'t-d'}"${(f.transfer&&f.transferService)?` title="中转服务：${he(f.transferService)}"`:''}>${f.transfer?'中转':'直飞'}</span>`}<span class="mdat">${f.date?he(dSlash(f.date)):'—'}</span></div><span class="xind" aria-hidden="true"></span>${he(f.name)}${f.stop?`<span class="stoptag">经停${he(f.stopCity||'')}${f.stopTimeT?` 停${he(f.stopTimeT)}`:''}${f.stopWin?`(${he(f.stopWin)})`:''}</span>`:''}${f.bagState==='direct'?'<span class="bagtag">直挂</span>':(f.bagState==='recheck'?'<span class="stoptag" title="渠道标注行李需重新托运（中转不直挂）">需转运</span>':'')}${f.lcc?'<span class="stoptag" title="廉价航空：中转常需重新值机、行李托运受限">廉航</span>':''}${(f.cabinT||f.prate||f.meal||f.shareCarrier||f.codeShare||f.fewTicket||f.depTerminal||f.arrTerminal||f.depAirport||f.arrAirport||f.planeSize||f.ptripNote||f.airlineTransfer||f.avgDelay!=null||f.transTerminal||f.transDepTerminal||f.transferTax!=null||(f.leftTickets>0&&f.leftTickets<10)||f.intl)?`<div class="stl" style="margin-top:3px">${[((f.cabinT||f.cabinCode)?_cchip(f):''),f.intl?`<span title="国际行价格为含税总价口径，此为其中税费构成部分">含税${f.tax!=null?'￥'+he(String(f.tax)):''}</span>`:'',f.cabinCode?'<span title="舱位代码'+(f.seatTilt!=null?'｜座椅倾斜'+f.seatTilt+'°':'')+'">'+he(f.cabinCode)+'</span>':'',f.prate?'准点'+he(String(f.prate))+'%'+(f.cancelRate!=null?'·取消'+he(String(f.cancelRate))+'%':''):'',f.meal?he(f.meal):'',(FLT&&FLT.bagkg&&f.baggage)?(function(){const k=_bagKgs(f);return k.length?'<span class="nw" title="托运≥'+FLT.bagkg+'kg 筛选命中：本行免费额最大值">托运'+he(String(Math.max(...k)))+'kg</span>':'';})():'',f.planeSize?'<span class="nw" title="'+(f.plane?'机型'+he(f.plane)+(f.plane2?'｜二段机型'+he(f.plane2):'')+'｜':'')+'数据源：渠道连廊率/机龄">'+he(f.planeSize)+(f.planeSize2?'·二段'+he(f.planeSize2):'')+(f.bridgeRate!=null?'·廊桥'+he(String(f.bridgeRate))+'%':'')+(f.planeAge?'·机龄'+he(String(f.planeAge))+'年':'')+'</span>':'',f.codeShare?'<span title="共享航班：实际承运航司可能与票面不同">共享航班</span>':'',f.shareCarrier?'共享·'+he(f.shareAirline?f.shareAirline+f.shareCarrier:f.shareCarrier):(f.shareAirline?'承运·'+he(f.shareAirline):''),f.fewTicket?he(f.fewTicket):'',(f.leftTickets>0&&f.leftTickets<10)?'余'+he(String(f.leftTickets))+'张':'',(f.depTerminal||f.arrTerminal||f.depAirport||f.arrAirport)?'<span class="nw">'+he(((_ttc(f.depAirport,f.depTerminal,f.depAirportCode))&&(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode))&&_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)!==_ttc(f.depAirport,f.depTerminal,f.depAirportCode))?(_ttc(f.depAirport,f.depTerminal,f.depAirportCode)+'→'+_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)):(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)||_ttc(f.depAirport,f.depTerminal,f.depAirportCode)))+'</span>':'',f.transTerminal?'<span class="nw">换乘·'+he(f.transTerminal)+(f.transDepTerminal?'（'+he((f.transDepTerminal.match(/T\d+/)||[''])[0])+'出）':'')+'</span>':'',f.transferTax!=null?'<span title="飞猪列表价为不含机建燃油的裸价，出行总成本需另加此项">+机建燃油￥'+he(String(f.transferTax))+'</span>':'',f.ptripNote?he(f.ptripNote):'',_ad_txt(f.avgDelay),f.airlineTransfer?he(f.airlineTransfer):''].filter(Boolean).join(' ｜ ')}</div>`:''}${tgCap(f,k)}${f.view?`<a class="vw" href="${he(f.view)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="在${he(f.plat||'去哪儿')}查看该航线">↗</a>`:''}${f.route?`<span class="stl nw"> <span style="display:inline-block">${he(f.route)}</span><span class="tj" role="button" tabindex="0" title="查看该航线价格走势" data-r="${he(f.route)}" data-d="${he(f.date||'')}" onclick="event.stopPropagation();jumpRowTrend(this.dataset.r,this.dataset.d)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();jumpRowTrend(this.dataset.r,this.dataset.d)}">📈</span></span>`:''}</td><td>${f.depTime?he(f.depTime):'—'}</td>`+
   `<td>${f.arrTime?he(f.arrTime):'—'}${f.cross?`<span class="stl"> ${he(f.cross)}</span>`:''}</td>`+
   `<td>${he(durTxt(f.dur))||'—'}</td><td>${f.trans?he(f.trans):'—'}${(f.lay2dep||f.transGoDate)?`<div class="stl">二段 ${he([f.transGoDate&&dSlash(f.transGoDate),f.lay2dep].filter(Boolean).join(' '))} 起飞</div>`:''}${f.layoverT?`<div class="${f.layMin>0?('stl lay nw'+((+f.layoverM||0)>=f.layMin?' ok':'')):'stl nw'}"${f.layMin>0?' title="航线衔接下限 '+f.layMin+' 分钟"':''}>停${he(f.layoverT)}</div>`:''}</td>`+
   `<td><span class="pdot ${f.platKey||''}"></span>${he(f.plat)}${f.stale?`<span class="stl">·${he(f.stale)}h前</span>`:''}</td></tr>`+
-  tgrowHtml(f,k,TGOPEN===k)+xrowHtml(u,k,EXP===k,fp(f));
+  tgrowHtml(f,k,TGOPEN===k)+xrowHtml(u,k,EXP===k,fp(f),f.price);
  }
  return _CHUNKS[ci]=h;}
 function _tblAppend(){if(!_ROWS||_NDRAW*_CHUNK>=_ROWS.length)return false;
@@ -3273,8 +4281,16 @@ function _jumpTableBottom(){
    while(document.documentElement.scrollHeight<wy+window.innerHeight&&_tblAppend()){}
    window.scrollTo(0,wy);}
   if(fk){const fe=document.querySelector('[data-k="'+fk+'"]');if(fe)fe.focus({preventScroll:true});}
- $('fcnt').textContent=u.name+'：'+rows.length+' / '+u.flights.length+' 班';
- updFltN();mkactAll();}
+ const _q=rows.filter(f=>f.qual).length;
+ const _fd=document.getElementById('fdCount');if(_fd)_fd.textContent=rows.length;
+ const _qn=new Set(rows.filter(f=>!f.cal).map(f=>_flightUid(f))).size;
+ let _lo=null;rows.forEach(f=>{const p=Number(f.price);
+  /* r345：xphan（不可购/异常价）不参与「最低」口径——列表主数字与
+     行 title 的「不参与行情最优」曾双源矛盾 */
+  if(isFinite(p)&&p>0&&!f.xphan&&(_lo==null||p<_lo))_lo=p;});
+ $('fcnt').textContent=u.name+'：'+rows.length+' 条报价 / '+_qn+' 班'
+  +(rows.length?(' · 达标 '+_q+' 条'+(_lo!=null?' · 最低 ￥'+Math.round(_lo):'')):'');
+ updFltN();renderFltSum();mkactAll();}
  /* ===== 走势图：多航线可切（routesArr），单航线回落旧行为；48h/7d 范围 ===== */
  /* 擦边带宽单源（脚本顶层，chart() 的 TIER 与 drawHover() 的 fl 两处消费）：
     与 core.alerter NEAR_RATIO 同步律（前端无法 import），改必两处同步 */
@@ -4092,15 +5108,44 @@ async function api(act,msg,b){b=b||_evtT();if(!b)return;   /* 空锚静默 */
  catch(e){toast('❌ 请求失败','err');}
  b.classList.remove('busy');}
 /* 通用内联二次确认（删除类小按钮） */
-function armConfirm(el,fn){if(!el)return;   /* _evtT 空锚静默 */
- if(!el.dataset.arming){
- el.dataset.arming='1';el.dataset.label=el.textContent;
- el.style.minWidth=el.offsetWidth+'px';   /* 确认文案更短，锁首态宽防同排控件位移（api 同族） */
- el.textContent='⚠ 确认';el.classList.add('arming');
- setTimeout(()=>{if(el.dataset.arming){delete el.dataset.arming;
-  el.textContent=el.dataset.label;el.classList.remove('arming');el.style.minWidth='';}},3000);return;}
- delete el.dataset.arming;el.textContent=el.dataset.label;
- el.classList.remove('arming');el.style.minWidth='';fn();}
+/* 破坏性操作统一确认层（r343）：旧 armConfirm 把按钮文本原地改成
+   「⚠ 确认」3 秒后自动复原——用户稍一犹豫就复位，体感「点多次才删」；
+   且删除邮箱的入口藏在折叠卡体内，不可发现。改为独立确认对话框：
+   标题/对象/后果三段式，取消与确认并列，无超时、无盲点。 */
+let _CMFN=null,_CMFOCUS=null;
+function openConfirm(title,msg,label,fn,el){
+ _CMFN=typeof fn==='function'?fn:null;
+ _CMFOCUS=el||document.activeElement;
+ const m=$('confirmMask');if(!m)return;
+ $('cmTitle').textContent=title||'确认删除？';
+ $('cmText').textContent=msg||'此操作在保存配置后生效；保存前可通过「放弃更改」撤回。';
+ $('cmYes').textContent=label||'确认删除';
+ m.classList.add('on');document.body.style.overflow='hidden';
+ /* 默认焦点落「取消」：破坏性确认不把回车直接交给红色按钮。 */
+ setTimeout(()=>{const b=$('cmCancel');if(b)b.focus({preventScroll:true});},30);}
+function closeConfirm(restore){const m=$('confirmMask');if(!m)return;
+ m.classList.remove('on');document.body.style.overflow='';
+ _CMFN=null;
+ if(restore!==false&&_CMFOCUS&&document.contains(_CMFOCUS)){
+  try{_CMFOCUS.focus({preventScroll:true});}catch(e){}}
+ _CMFOCUS=null;}
+function runConfirm(){const fn=_CMFN;closeConfirm(false);
+ if(fn){try{fn();}catch(e){toast('❌ 操作失败：'+(e&&e.message||e),'err');}}}
+document.addEventListener('keydown',e=>{
+ const m=$('confirmMask');
+ if(!m||!m.classList.contains('on'))return;
+ if(e.key==='Escape'){e.preventDefault();closeConfirm();return;}
+ if(e.key==='Tab'){const f=[...m.querySelectorAll('button,a[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')]
+   .filter(x=>x.offsetParent!==null);
+  if(!f.length)return;
+  const first=f[0],last=f[f.length-1],ae=document.activeElement;
+  if(e.shiftKey&&ae===first){e.preventDefault();last.focus();}
+  else if(!e.shiftKey&&ae===last){e.preventDefault();first.focus();}}});
+function armConfirm(el,fn,opts){if(!el&&!opts)return;   /* 空锚静默 */
+ const o=opts||{};
+ openConfirm(o.title||'确认删除？',
+  o.message||'此操作在保存配置后生效；保存前可通过「放弃更改」撤回。',
+  o.label||'确认删除',fn,el||null);}
 /* ===== 渠道健康时间线：/api/health（monitor.log 解析，与状态同拍刷新） ===== */
 let HL=null;
 async function health(){try{const r=await fetch('/api/health');
@@ -4598,6 +5643,9 @@ function setFltOpen(open){/* 抽屉开合唯一入口：类切换+aria-expanded
   if(ftop<stick)window.scrollBy(0,ftop-stick);}}
 function togFlt(){const f=document.querySelector('.fbar');
  setFltOpen(!(f&&f.classList.contains('open')));}
+function closeFltShow(){setFltOpen(false);
+ const t=document.getElementById('tablecard');
+ if(t)try{t.scrollIntoView({behavior:'smooth',block:'start'});}catch(e){t.scrollIntoView();}}
 /* 特价雷达卡（r320）：/api/specials 轻端点 60s 节流拉取；无数据出
    教学空态；请求失败静默藏卡（烘焙静态站无此端点） */
 let _spTs=0;
@@ -4640,6 +5688,8 @@ function updFltN(){const el=$('fltN');if(!el)return;
  if(FLT.noshare)n++;
  if(FLT.safe)n++;
  if(FLT.laymin||FLT.laymax)n++;
+ if(FLT.wb)n++;              /* r341 审计补：仅大型机/托运≥kg 漏计，≤760 主徽标不亮 */
+ if(FLT.bagkg)n++;
  if(FLT.durmin||FLT.durmax)n++;
  if(FLT.prate)n++;
  if(FLT.age)n++;
@@ -4727,7 +5777,8 @@ load();setInterval(load,10000);setInterval(tick,1000);
    事件会伪真触发近底条件补片；页面侧窄档独占，动态查询放 handler 内
    （旋转跨档即时生效） */
 document.querySelector('#tablecard .tw').addEventListener('scroll',function(){
- this.classList.toggle('scrolled',this.scrollTop>2);   /* 表头滚动态投影开关（置首自愈：窄档内滚归零，类随下拍回落） */
+ this.classList.toggle('scrolled',this.scrollTop>2);
+ this.classList.toggle('xend',this.scrollLeft+this.clientWidth>=this.scrollWidth-2);   /* r339i 审计 P3-5：水平到底自愈——右缘渐隐 mask 只在未到底时在 */   /* 表头滚动态投影开关（置首自愈：窄档内滚归零，类随下拍回落） */
  if(window.innerWidth<=760)return;
  if(!_ROWS||_NDRAW*_CHUNK>=_ROWS.length)return;
  let n=0;
@@ -4754,7 +5805,9 @@ function cityPanelBuild(){
     dom=热门+字母导航+国内城市；intl=地区分组（港澳台/日韩/东南亚…）*/
  const py=CITYX.py||{},npy=CITYX.npy||{},hot=CITYX.hot||[];
  const item=n=>{const long=n.length>=6;
-  return `<span class="cp-city${long?' cspan2':''}" role="button" tabindex="0" data-n="${esc(n)}" onclick="cityPanelPick('${n}')" onkeydown="if(event.key==='Enter')cityPanelPick('${n}')">${n}</span>`;};
+  /* Enter/Space 由 build 尾 mkactAll 统一挂（全站惯例）——内联
+     Enter-only 会顶掉 mkact 双键监听（role=button 的 Space 失效） */
+  return `<span class="cp-city${long?' cspan2':''}" role="button" tabindex="0" data-n="${esc(n)}" onclick="cityPanelPick('${n}')">${n}</span>`;};
  let h='';
  if(_cpTab==='intl'){
   const byR={};
@@ -4765,10 +5818,10 @@ function cityPanelBuild(){
   order.forEach(r=>{
    h+=`<div class="cp-sec" data-l="INTL:${r}"><div class="cp-lhead">${r}</div><div class="cp-grid">`
     +byR[r].sort((a,b)=>a[1].localeCompare(b[1],'zh'))
-      .map(([c,n])=>`<span class="cp-city" role="button" tabindex="0" data-n="${esc(n)}" data-c="${esc(String(c).toLowerCase())}" title="${esc(c)}" onclick="cityPanelPick('${esc(n)}')" onkeydown="if(event.key==='Enter')cityPanelPick('${esc(n)}')">${n}</span>`).join('')
+      .map(([c,n])=>`<span class="cp-city" role="button" tabindex="0" data-n="${esc(n)}" data-c="${esc(String(c).toLowerCase())}" title="${esc(c)}" onclick="cityPanelPick('${esc(n)}')">${n}</span>`).join('')
     +'</div></div>';});
   h+='<div class="cp-none" id="cpNone">无匹配国际目的地——可直接输入三字码（如 NRT/ICN）后失焦保存</div>';
-  $('cpbody').innerHTML=h;return;
+  $('cpbody').innerHTML=h;mkactAll();return;
  }
  const byL={};
  Object.keys(CITY).forEach(n=>{const L=py[n]||'#';(byL[L]=byL[L]||[]).push(n)});
@@ -4779,6 +5832,10 @@ function cityPanelBuild(){
  h2+='<div class="cp-none" id="cpNone">无匹配城市——可直接输入三字码（如 LYG；切「🌐 国际」页签可搜国际目的地）后失焦保存</div>';
  h+=h2;
  $('cpbody').innerHTML=h;
+ /* lazy 构建路径补键盘可达：mkactAll 只挂 render/table/chart/render
+    尾，cityPanel 首开/切页签重建后 .cp-abc 整组不可 Tab 达——键盘
+    补拍必须在构建点就地完成（幂等，dataset.kbd 防重绑） */
+ mkactAll();
 }
 let _cpTab='dom';
 function cityPanelTab(t){_cpTab=t;
@@ -4822,7 +5879,18 @@ function cityPanelOpen(el){
  const p=$('citypanel');p.style.display='flex';
  const r=el.getBoundingClientRect();
  p.style.left=Math.max(8,Math.min(r.left,window.innerWidth-408))+'px';
- p.style.top=Math.min(r.bottom+6,window.innerHeight-60)+'px';
+ /* 下缘钳制+翻转：旧 `innerHeight-60` 只防顶缘出视口（60px 预算 vs
+    面板实高 ~524px 差一个量级），下半视口打开时面板主体整体在视口
+    外（实测 1440×700 裁 334px、1280×720 裁 404px）。首选输入框下
+    方；下方放不下翻转到上方；上下都放不下取最大可见位。≤760 抽屉
+    态（bottom:8px 落地段）不走此路径不受扰 */
+ const ph=p.offsetHeight||524;
+ let cpTop=r.bottom+6;
+ if(cpTop+ph>window.innerHeight-8){
+  const alt=r.top-ph-6;
+  cpTop=(alt>=8)?alt:Math.max(8,window.innerHeight-ph-8);
+ }
+ p.style.top=cpTop+'px';
  $('cpq').value='';cityPanelFilter('');
  setTimeout(()=>{try{$('cpq').focus()}catch(_){}},0);
 }
@@ -4997,6 +6065,7 @@ function cfgIsDirty(){return CFG&&(JSON.stringify(_canon(CFG,JSON.parse(CFG_CLEA
    const st=$('saveTxt');if(st){const t=n+' 处未保存的修改';
     if(st.textContent!==t)st.textContent=t;}   /* 同值跳过：textContent 无条件重写=每 800ms 删+插文本节点的常驻 childList 脉冲（MutationObserver 扩展被持续唤醒，nrSay 同律） */}
   if(VIEW!=='cfg')return;   /* 监控页跳过 cfgDirty/用户卡 DOM 巡检 */
+  try{refreshCfgChrome();}catch(e){}
   const el=$('cfgDirty');if(el){el.style.display=dirty?'':'none';
    const ct='● '+n+' 处未保存的修改';
    if(el.textContent!==ct)el.textContent=ct;}
@@ -5133,7 +6202,7 @@ try{if(location.hash.slice(1)==='cfg')switchView('cfg');}catch(e){}
 /* ===== 渠道登录：弹窗登录 + 会话保存（免命令行） ===== */
 const LOGIN_CN = {qunar:'去哪儿', ctrip:'携程', tongcheng:'同程',
  tuniu:'途牛', fliggy:'飞猪'};
-const LOGIN_NEED = {qunar:'必须', ctrip:'必须', tongcheng:'建议',
+const LOGIN_NEED = {qunar:'建议', ctrip:'必须', tongcheng:'建议',
  tuniu:'建议', fliggy:'无需'};
 let LGSIG='';   /* 登录态内容签名：轮询期状态无变化不重绘（重建按钮
    会打断用户正要点按的动作件——签名防抖+失败显式失效签名） */
@@ -5201,15 +6270,22 @@ async function loginFinish(p,b){if(b&&b.classList.contains('busy'))return;
  }catch(e){toast('请求失败','err');}
  if(b)b.classList.remove('busy');
  loadLogin(null,false);}
-let GLB={interval_minutes:30},GLB_CLEAN='';
+let GLB={interval_minutes:30},GLB_ABS={},GLB_CLEAN='';
+let GLB_STORE={},RUNTIME={},RESTART={};   /* r342 路径元数据/运行时身份/重启差量 */
+let CFGST='all';   /* 航线状态筛选：all/on/off/todo */
+let _AIRMODE={};   /* 航司快捷添加当前模式（in/out，按航线记忆） */
+let AIRALIAS={alias:{},name:{}};   /* 航司别称字典（/api/config airline_alias 下发，与后端 core.airlines 同源） */
 async function loadCfg(){try{
  const r=await fetch('/api/config');const j=await r.json();
  if(!j||!Array.isArray(j.users))throw new Error('配置接口响应异常');   // 500 错误体当数据曾静默渲染「0 用户+出厂全局参数」假界面（importCfg 同律守卫）
- CFG=j.users||[];CITY=j.city||{};CITYX=j.cityx||{};
+ CFG=j.users||[];CITY=j.city||{};CITYX=j.cityx||{};AIRALIAS=j.airline_alias||{alias:{},name:{}};
  INTL=j.intl||{map:{},hot:[],mainland:[]};
  INTLN=Object.fromEntries(Object.entries(INTL.map||{}).map(([c,n])=>[n,c]));
  INTL_LOADED=true;
  GLB=j.globals||{interval_minutes:30};
+ GLB_ABS=(GLB&&GLB.globals_abs)||j.globals_abs||{};delete GLB.globals_abs;
+ GLB_STORE=j.storage||{};RUNTIME=j.runtime||{};RESTART=j.restart||{};
+ _DATEVAL={};   /* 从服务端重读=放弃会话日期输入残留 */
  CFG_CLEAN=JSON.stringify(CFG);GLB_CLEAN=JSON.stringify(GLB);
  _cpBuilt=false;   /* 城市表重载后面板重建（289 城数据源可能扩容） */
  /* 重建销毁焦点中的脏输入会以 DOM 旧值迟到 change 写回模型（放弃
@@ -5245,8 +6321,251 @@ try{const _ou=JSON.parse(localStorage.getItem('jpcfguseropen'));
  if(typeof _ou==='number')OPEN_USER=_ou;}catch(e){}
 function setOpenUser(v){OPEN_USER=v;
  try{localStorage.setItem('jpcfguseropen',JSON.stringify(v))}catch(e){}}
+/* ===== r342 配置概览 / 状态筛选 / 重启可视化 ===== */
+function _fmtSize(n){n=Number(n)||0;
+ if(n>=1073741824)return (n/1073741824).toFixed(2)+' GB';
+ if(n>=1048576)return (n/1048576).toFixed(1)+' MB';
+ if(n>=1024)return Math.round(n/1024)+' KB';
+ return n+' B';}
+function _todayISO(){const d=new Date();
+ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'
+  +String(d.getDate()).padStart(2,'0');}
+function _routeIssues(r){/* 启用航线的配置完整度（停用草稿不计入，避免
+   复制后未改完的草稿把概览「待完善」长期点亮） */
+ if(!r||r.enabled===false)return [];
+ const out=[];
+ if(!r.from||!r.to)out.push('城市未配齐');
+ const ds=(r.dates||[]).slice().sort();
+ if(!ds.length)out.push('无出发日期');
+ else if(ds[ds.length-1]<_todayISO())out.push('日期已过期');
+ if(Number(r.alert_direct)<=0&&Number(r.alert_transfer)<=0)
+  out.push('未设心理价');
+ return out;}
+function _cfgStats(){const st={users:0,routes:0,on:0,off:0,dates:0,
+ issue:0,issueRoutes:[],dateFirst:'',dateLast:''};
+ const ds=[];
+ (CFG||[]).forEach(u=>{st.users++;
+  (u.routes||[]).forEach(r=>{st.routes++;
+   if(r.enabled===false)st.off++;else st.on++;
+   (r.dates||[]).forEach(d=>{if(d){st.dates++;ds.push(d);}});
+   if(r.enabled!==false&&_routeIssues(r).length){st.issue++;
+    st.issueRoutes.push(r);}});});
+ ds.sort();st.dateFirst=ds[0]||'';st.dateLast=ds[ds.length-1]||'';
+ return st;}
+function _restartLocalCount(){try{return _startupChanged().length;}catch(e){return 0;}}
+function _restartServerOnly(){const loc=new Set(_startupChanged());
+ return ((RESTART&&RESTART.changed)||[]).filter(k=>!loc.has(k));}
+function _restartServerCount(){return _restartServerOnly().length;}
+function _restartTodoCount(){try{return new Set([..._startupChanged(),
+ ...((RESTART&&RESTART.changed)||[])]).size;}catch(e){return _restartServerCount();}}
+function renderCfgOverview(){const box=$('cfgOverview');if(!box)return;
+ if(!CFG){box.innerHTML='';return;}
+ const s=_cfgStats(),pending=_restartTodoCount();
+ const card=(k,cls,label,val,sub,fn)=>'<div class="cfgk '+cls+'" data-ck="'+k
+  +'" role="button" tabindex="0" onclick="'+fn
+  +'" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();'+fn+'}">'
+  +'<div class="kl">'+label+'</div><div class="kv">'+val+'</div>'
+  +'<div class="ks">'+sub+'</div><div class="kbar"></div></div>';
+ box.innerHTML=
+  card('users','', '用户', s.users, s.routes+' 条航线', "cfgStatusSet('all')")
+  +card('on','ok', '监控中', s.on, s.off?('另有 '+s.off+' 条停用'):'全部在役', "cfgStatusSet('on')")
+  +card('dates','', '日期覆盖', s.dates, s.dateFirst?(s.dateFirst+' → '+s.dateLast):'尚未设置任何日期', "cfgStatusSet('all')")
+  +card('todo',s.issue?'warn':'ok', '待完善', s.issue, s.issue?('启用航线 · 点击筛出'):'启用航线配置完整', "cfgStatusSet('todo')")
+  +card('restart',pending?'warn':'', '重启待办', pending, pending?'点击查看差量与迁移':'当前无待生效启动项', 'openRestartCenter()');}
+function cfgStatusSet(st){CFGST=st;
+ document.querySelectorAll('#cfgScopeBar .cbst').forEach(el=>
+  el.classList.toggle('on',el.dataset.st===CFGST));
+ cfgScopeApply();
+ if(st==='todo'){const el=document.querySelector('.rline.needswork');
+  if(el)el.scrollIntoView({block:'center',behavior:'smooth'});
+  else toast('启用航线暂无待完善项','ok');}
+ else if(CFGPANEL==='users'){/* r346 高频：点概览数字直接落到航线卡，免穿用户基础/渠道段 */
+  const el=document.querySelector('#cfgform .rline[data-rk]');
+  if(el)try{el.scrollIntoView({block:'start',behavior:'smooth'});}catch(e){};}}
+function refreshCfgChrome(){const s=CFG?_cfgStats():{users:0,routes:0,on:0,off:0,dates:0,issue:0};
+ const dirty=typeof cfgIsDirty==='function'&&cfgIsDirty();
+ const n=dirty&&typeof cfgDirtyCount==='function'?cfgDirtyCount():0;
+ const p=_restartTodoCount();
+ const _txt=(el,t)=>{if(el&&el.textContent!==t)el.textContent=t;};
+ const cd=$('cfgChromeDirty');
+ if(cd){_txt(cd,dirty?('● '+n+' 处未保存'):'● 无未保存修改');
+  cd.classList.toggle('warn',!!dirty);cd.classList.toggle('ok',!dirty);}
+ const cr=$('cfgChromeRestart');
+ if(cr){_txt(cr,p?('♻ 重启待办 '+p):'♻ 无需重启');
+  cr.classList.toggle('warn',!!p);cr.classList.toggle('ok',!p);}
+ _txt($('cfgChromePath'),(RUNTIME&&RUNTIME.config_path)
+  ?((RUNTIME.version==='demo'?'demo':('v'+(RUNTIME.version||'—')))
+    +' · '+RUNTIME.config_path)
+  :'配置文件路径读取中…');
+ _txt($('navN-login'),'5 渠道');
+ _txt($('navN-users'),s.users+' 用户');
+ _txt($('navN-globals'),p?p+' 待重启':'热生效');
+ const nf=$('cfgNavFoot');
+ if(nf){const sig=p+'|'+((RUNTIME&&RUNTIME.root)||'');
+  if(nf.dataset.sig!==sig){nf.dataset.sig=sig;
+   nf.innerHTML='<b>配置透明化</b><br>'+esc((RUNTIME&&RUNTIME.root)||'')+'<br>'
+    +'重启待办 '+p+' 项 · <span role="button" tabindex="0" style="color:var(--blue);cursor:pointer" onclick="openRestartCenter()" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openRestartCenter()}">查看 ›</span>';}}}
+function openRestartCenter(){
+ const rc=$('restartCenter');if(!rc)return;
+ renderRestartCenter();
+ rc.classList.add('on');
+ document.body.style.overflow='hidden';
+ const btn=rc.querySelector('#rcRestartBtn');if(btn){btn.disabled=false;btn.classList.remove('busy');}
+ try{const x=rc.querySelector('.rcx');if(x)x.focus({preventScroll:true});}catch(e){}}
+function closeRestartCenter(){const rc=$('restartCenter');if(!rc)return;
+ rc.classList.remove('on');document.body.style.overflow='';
+ const btn=$('rcRestartBtn');if(btn){btn.disabled=false;btn.classList.remove('busy');}}
+document.addEventListener('keydown',e=>{
+ const rc=$('restartCenter');
+ if(e.key==='Escape'&&rc&&rc.classList.contains('on')){e.preventDefault();closeRestartCenter();}});
+function _restartDiffRows(){
+ const labels={db_path:'数据库',log_path:'运行日志',user_data_dir:'浏览器资料目录',browser_dir:'浏览器内核目录',host:'控制台监听地址',run_on_start:'启动即扫'};
+ const kindOf=k=>(k==='db_path'?'db':k==='log_path'?'log':k==='user_data_dir'?'ud':k==='browser_dir'?'bdir':'config');
+ const rows=[];
+ let clean={};try{clean=JSON.parse(GLB_CLEAN||'{}')||{};}catch(e){}
+ (_startupChanged()||[]).forEach(k=>{
+  const oldv=(clean[k]!=null?clean[k]:'');
+  rows.push({k,label:labels[k]||k,old:oldv,new:(GLB[k]!=null?GLB[k]:''),
+   state:'未保存',kind:kindOf(k)});});
+ ((RESTART&&RESTART.changed)||[]).forEach(k=>{
+  if(rows.some(r=>r.k===k))return;
+  rows.push({k,label:(RESTART.labels||{})[k]||labels[k]||k,
+   old:(RESTART.running||{})[k],new:(RESTART.saved||{})[k],
+   state:'已保存待重启',kind:kindOf(k)});});
+ return rows;}
+function renderRestartCenter(){const body=$('rcBody');if(!body)return;
+ const rows=_restartDiffRows();
+ if(!rows.length){
+  body.innerHTML='<div class="rc-empty">当前没有启动级差量——数据库、日志、登录态与内核目录均与运行进程一致。<br>改动这些路径后，这里会显示「旧 → 新」、迁移预案与重启按钮。</div>';
+  const btn=$('rcRestartBtn');if(btn)btn.style.display='none';
+  return;}
+ const btn=$('rcRestartBtn');if(btn)btn.style.display='';
+ const need=rows.some(r=>r.state==='已保存待重启');
+ body.innerHTML='<div class="rclead">'
+  +(need?'启动级配置已保存，当前进程仍在使用旧值。重启后生效；数据库/登录态等路径在启动时自动迁移（目标已存在则不覆盖），监听地址/启动即扫无文件搬迁。'
+    :'启动级配置有未保存修改。保存后重启进程才会生效；下方是旧 → 新与迁移预案。')
+  +'</div>'
+  +rows.map(r=>'<div class="rcdiff"><div class="rd-h">'+esc(r.label)
+   +'<span class="ptag '+(r.state==='未保存'?'warn':'restart')+'">'+esc(r.state)+'</span></div>'
+   +'<div class="rd-row"><span class="k">当前</span><span class="old">'+esc((r.old==null||r.old==='')?'（默认）':r.old)+'</span><span class="arr">→</span><span class="new">'+esc((r.new==null||r.new==='')?'（默认）':r.new)+'</span></div>'
+   +'<div class="pathpv" id="rcMig-'+r.k+'">迁移预案读取中…</div></div>').join('')
+  +'<div class="rclead">路径卡「打开文件/文件夹」只定位本机，不改动任何配置；重启会先拉起新实例再退出旧进程，页面自动刷新。</div>';
+ rows.forEach(r=>_rcMigration(r));}
+async function _rcMigration(r){const el=$('rcMig-'+r.k);if(!el)return;
+ if(r.kind==='config'){el.textContent='非路径启动项：保存后需重启进程生效，无文件搬迁。';return;}
+ try{const q='which='+encodeURIComponent(r.kind)+'&path='
+   +encodeURIComponent(r.new||'');
+  const res=await fetch('/api/path-check?'+q,{cache:'no-store'});
+  const j=await res.json();
+  if(!j||!j.ok){el.textContent='目标校验失败：'+((j&&j.err)||'未知错误');return;}
+  if(j.valid===false){el.innerHTML='<span class="warn">目标不可用：'
+   +esc(j.warning||'请先修正路径')+'（不会搬迁/不会生效）</span>';return;}
+  const parts=[];
+  parts.push('目标绝对路径：'+j.abs);
+  if(j.migration){
+   if(j.migration.will_move)parts.push(r.kind==='db'
+    ?('启动时将搬迁：'+_fmtSize((GLB_STORE[r.kind]||{}).size||0)+' 从旧位置到新位置')
+    :'启动时将搬迁：旧目录整体移动到新位置');
+   else if(j.migration.conflict)parts.push('目标已存在——启动时不会覆盖，将直接使用目标文件/目录');
+   else if(!j.migration.source_exists)parts.push('当前源不存在——启动时直接在新位置创建');
+   parts.push(j.migration.will_move
+    ?(r.kind==='db'?'迁移方式：整档搬迁（含 SQLite −wal/−shm）'
+      :'迁移方式：整目录搬迁（登录态子目录整体移动）')
+    :'迁移方式：不搬迁');}
+  else if(j.migration_mode==='new_file')parts.push('日志不搬迁：重启后在新位置新建，旧日志保留');
+  else if(j.migration_mode==='switch_only')parts.push('内核目录不搬迁：重启后按新位置查找/安装，旧缓存保留');
+  if(j.warning)parts.push(j.warning);
+  el.innerHTML=parts.map((p,i)=>'<span class="'+(i===0?'ok':'')+'">'+esc(p)+'</span>').join('<br>');
+ }catch(e){el.textContent='迁移预案请求失败（服务不可达）';}}
+function saveThenRestart(b){if(b){b.classList.add('busy');}
+ const done=()=>{if(cfgIsDirty()){toast('保存未完成，已取消重启','err');if(b)b.classList.remove('busy');return;}
+  doRestart(b);};
+ Promise.resolve(saveCfg()).then(()=>setTimeout(done,250)).catch(()=>{
+  toast('保存失败，已取消重启','err');if(b)b.classList.remove('busy');});}
+function _storeMetaHTML(kind){const m=(GLB_STORE||{})[kind];
+ if(!m||!m.ok)return '<span class="ptag" id="stmeta-'+kind+'">元数据读取中</span>';
+ return '<span class="ptag '+(m.exists?'ok':'warn')+'" id="stmeta-'+kind+'">当前 · '
+  +(m.default?'系统默认':(m.exists?(m.is_dir?'目录存在':'文件存在'):'待创建'))+'</span>';}
+function _pstatHTML(m){if(!m||!m.ok)return '';
+ const typ=m.default?'系统默认':(m.is_dir?'目录':'文件');
+ const size=(m.type==='file'&&m.exists)?_fmtSize(m.size):'—';
+ const can=m.exists?(m.writable!==false):!!(m.parent_writable||m.creatable);
+ const wr=m.exists?(can?'可写':'不可写')
+  :(can?'可写 · 待创建':'不可写');
+ return '<span class="ps"><b>类型</b><em>'+typ+'</em></span>'
+  +'<span class="ps"><b>体积</b><em>'+size+'</em></span>'
+  +'<span class="ps"><b>写入</b><em class="'+(can?'':'warn')+'">'+wr+'</em></span>';}
+function _storeCard(kind,label,id,onch,val,sub,fileBtn){
+ const meta=(GLB_STORE||{})[kind]||{};
+ let _dw='data-which="'+kind+'"';
+ if(kind==='bdir')_dw='data-which="bdir"';
+ let act='<button class="btn2" '+_dw+' title="在资源管理器打开当前已生效的文件夹（未保存的新路径在保存重启后生效）" onclick="openDataFolder(\''+kind+'\',\'folder\',this)">📂 文件夹</button>';
+ if(fileBtn)act+='<button class="btn2" '+_dw+' title="用系统默认应用打开当前已生效的文件（未保存的新路径在保存重启后生效）" onclick="openDataFolder(\''+kind+'\',\'file\',this)">📄 打开文件</button>';
+ act+='<button class="btn2" title="校验目标绝对路径与迁移预案（不写入、不创建）" onclick="pathPreview(\''+kind+'\',document.getElementById(\''+id+'\'),true)">🔍 校验目标</button>';
+ return '<div class="pathcard" data-pk="'+kind+'">'
+  +'<div class="ph"><b>'+label+'</b>'+_storeMetaHTML(kind)
+  +'<span class="ptag restart">♻ 重启生效</span></div>'
+  +'<input type="text" id="'+id+'" aria-label="'+label+'路径" autocomplete="off" spellcheck="false"'
+  +' value="'+val+'" placeholder="'+(kind==='bdir'?'空=系统默认 playwright 缓存位':'相对程序目录或绝对路径')+'"'
+  +' onchange="'+onch+'">'
+  +'<div id="glwrap-'+kind+'">'+glAbs(kind,'系统默认 playwright 缓存位')+'</div>'
+  +'<span class="pstat" id="pstat-'+kind+'">'+_pstatHTML(meta)+'</span>'
+  +'<div class="pmeta" id="pmeta-'+kind+'"></div>'
+  +'<div class="pact">'+act+'</div>'
+  +'<div class="pathpv" id="pathpv-'+kind+'" hidden></div>'
+  +'</div>';}
+async function pathPreview(kind,inp,verbose){
+ if(!inp)return;
+ const pv=$('pathpv-'+kind);
+ const raw=(inp.value||'').trim();
+ if(pv){pv.hidden=false;pv.textContent='目标校验中…';}
+ try{const r=await fetch('/api/path-check?which='+encodeURIComponent(kind)
+   +'&path='+encodeURIComponent(raw),{cache:'no-store'});
+  const j=await r.json();
+  if(!j||!j.ok){if(pv)pv.innerHTML='<span class="warn">'+esc((j&&j.err)||'校验失败')+'</span>';return;}
+  const w=$('glwrap-'+kind);
+  if(w)w.innerHTML='<div class="glabs" title="'+esc(j.abs||'')+'">→ 目标绝对路径：'+esc(j.abs||'—')+'</div>';
+  if(inp)inp.classList.toggle('bad', j.valid===false);
+  const st=$('pstat-'+kind);
+  if(st)st.innerHTML=_pstatHTML(Object.assign({},j,{ok:true}));
+  const sm=$('stmeta-'+kind);
+  if(sm){sm.className='ptag '+(j.exists?'ok':'warn');
+   sm.textContent='目标 · '+(j.exists?(j.is_dir?'目录已存在':'文件已存在'):'待创建');}
+  const m=$('pmeta-'+kind);
+  if(m){
+   if(j.valid===false){
+    m.innerHTML='目标 '+(j.exists?'已存在':'尚未创建')+' · <span class="warn">'
+     +esc(j.warning||'不可用')+'</span>';
+   }else{
+   const can=!!(j.parent_writable||j.creatable);
+   m.innerHTML='目标 '+(j.exists?'已存在':'尚未创建')+' · '
+    +(j.exists?(j.parent_writable?'父目录可写':'父目录不可写')
+      :(j.parent_exists?(j.parent_writable?'父目录可写，重启时自动创建':'父目录不可写')
+        :(can?'父目录尚不存在，重启时自动创建':'最近的可写祖先不存在，无法创建')))
+    +((j.warning&&j.warning.indexOf('父目录尚不存在')<0)?(' · '+esc(j.warning)):'');}}
+  if(pv){
+   const bits=['目标：'+esc(j.abs||'—')];
+   if(!j.valid)bits.push('目标不可用：请先修正后再保存/重启');
+   else if(j.same_as_current)bits.push('与当前生效路径一致，无需迁移');
+   else if(j.migration){
+    if(j.migration.will_move)bits.push('启动时自动搬迁旧'
+     +(kind==='ud'?'目录':'文件')+'（目标尚不存在）');
+    else if(j.migration.conflict)bits.push('目标已存在：启动时不覆盖，将直接使用目标');
+    else if(!j.migration.source_exists)bits.push('当前源不存在：启动时直接创建新位置');
+   }else if(j.migration_mode==='new_file'){
+    bits.push('日志不搬迁：重启后在新位置新建日志，旧日志保留');
+   }else if(j.migration_mode==='switch_only'){
+    bits.push('内核目录不搬迁：重启后按新位置查找/安装内核，旧缓存保留');
+   }
+   if(j.warning)bits.push(j.warning);
+   pv.innerHTML=bits.map((b,i)=>'<span class="'+(i===bits.length-1&&!j.valid?'warn':'')+'">'+b+'</span>').join('<br>');
+  }
+  if(verbose)toast(j.valid?'✅ 目标路径可用':'⚠ '+((j.warning)||'目标路径不可用'),j.valid?'ok':'err');
+ }catch(e){if(pv)pv.innerHTML='<span class="warn">校验请求失败（服务不可达）</span>';}}
 function buildForm(){if(!CFG)return;let h='',gh='';
  if(OPEN_USER>=CFG.length)OPEN_USER=CFG.length-1;   /* 槽值恢复越界钳回有效域（删用户/换配置后） */
+ try{document.querySelectorAll('#cfgform input[type=date]').forEach(el=>{
+  if(!el.id)return;if(el.value)_DATEVAL[el.id]=el.value;else delete _DATEVAL[el.id];});}catch(e){}
  const _fae=document.activeElement,_fkid=(_fae&&_fae.id)?_fae.id:null;   /* 重建不丢键盘焦点：回车加日期等承诺通道连续录入不坠 body（render/table data-k 先例的 id 版） */
  const glab=(no,zh,en,sum)=>'<div class="grouplab" data-sec="'+no+'" role="button" onclick="foldSec(this)" title="点击收起/展开该分区">'
   +'<span class="no">'+no+'</span>'
@@ -5276,7 +6595,7 @@ function buildForm(){if(!CFG)return;let h='',gh='';
   +glcell('扫描周期','glbIv','GLB.interval_minutes=Math.max(5,parseInt(this.value)||30)',esc(GLB.interval_minutes),'5–720 · 改动即重排下一轮',null,'分钟')
   +glcell('随机扰动','glbJt','GLB.jitter_minutes=Math.max(0,parseInt(this.value)||0)',esc(GLB.jitter_minutes||0),'错峰防规律抓取',null,'分钟')
   +glcell('控制台端口','glbPort','GLB.port=Math.max(1024,parseInt(this.value)||8765)',esc(GLB.port||8765),'1024–65535 · 原地热切换')
-  +glcell('监听地址','glbHost','GLB.host=this.value',esc(GLB.host||'127.0.0.1'),'127.0.0.1=仅本机；0.0.0.0=局域网可达（手机开推送详情）· ♻ 重启生效','text')
+  +glcell('监听地址','glbHost','setHost(this)',esc(GLB.host||'127.0.0.1'),'127.0.0.1=仅本机；0.0.0.0=局域网可达（手机开推送详情）· ♻ 重启生效','text')
   +glcell('详情基址 base_url','glbBu','GLB.base_url=this.value',esc(GLB.base_url||''),'钉钉「完整详情」的可达性取决于它；手机要看请配局域网地址（监听地址须非 127.0.0.1）','text')
   +glcell('启动即扫','glbRos','GLB.run_on_start=this.checked',GLB.run_on_start!==false,'进程启动时立即扫一轮（下次启动生效）','check')
   +'</div>'
@@ -5293,11 +6612,25 @@ function buildForm(){if(!CFG)return;let h='',gh='';
   +'<div class="glgrid">'
   +glcell('浏览器 User-Agent（空=内置默认）','glbUa','GLB.user_agent=this.value',esc(GLB.user_agent||''),'全渠道共用的桌面 UA；风控策略变化时无需改码即可更换','text')
   +'</div>'
-  +glsec('♻ 启动级配置 · 编辑 config.yaml 后重启进程生效')
-  +'<div class="glgrid">'
-  +glcell('数据库','glbDbp','',esc(GLB.db_path||'data/prices.db'),'SQLite 路径 · ♻ 只读','ro')
-  +glcell('运行日志','glbLgp','',esc(GLB.log_path||'logs/monitor.log'),'日志文件 · ♻ 只读','ro')
-  +glcell('浏览器资料目录','glbUdd','',esc(GLB.user_data_dir||'user_data'),'登录态存放 · ♻ 只读','ro')
+  +glsec('💾 启动级 · 运行与存储 · 路径可迁移 · 保存后重启生效 <button class="btn2" style="float:right;padding:2px 10px;font-size:11px" title="打开重启与迁移中心：查看差量、迁移预案并重启" onclick="openRestartCenter()">♻ 重启中心</button>')
+  +'<div class="storehead"><span class="sh-t">配置文件</span><span class="sh-path" title="'+esc((RUNTIME&&RUNTIME.config_path)||'')+'">'+esc((RUNTIME&&RUNTIME.config_path)||'config.yaml')+'</span>'
+  +'<button class="btn2" style="padding:4px 9px;font-size:11px" onclick="openDataFolder(\'cfg\',\'file\',this)">📄 打开配置</button>'
+  +'<button class="btn2" style="padding:4px 9px;font-size:11px" onclick="openDataFolder(\'cfg\',\'folder\',this)">📂 所在文件夹</button>'
+  +'<span class="sh-meta"><b>PID '+(RUNTIME.pid||'—')+'</b> · '+esc(RUNTIME.version==='demo'?'demo':('v'+(RUNTIME.version||'—')))
+  +' · 配置 '+(RUNTIME.config_exists?_fmtSize(RUNTIME.config_size):'尚未创建')
+  +(RUNTIME.config_mtime?(' · 修改于 '+new Date(RUNTIME.config_mtime*1000).toLocaleString('zh-CN',{hour12:false})):'')
+  +' · 程序目录 '+esc(RUNTIME.root||'—')
+  +(RUNTIME.listen?('<br>监听 <b>'+esc(RUNTIME.listen)+'</b>'):'')
+  +(RUNTIME.started_at?(' · 启动于 '+esc(RUNTIME.started_at)):'')
+  +(RUNTIME.tz?(' · 时区 '+esc(RUNTIME.tz)):'')
+  +(RUNTIME.argv&&RUNTIME.argv.length?(' · 命令 '+esc(RUNTIME.argv.join(' '))):'')
+  +' <span class="chip schip" role="button" tabindex="0" title="复制配置文件绝对路径" onclick="copyText(this)" data-copy="'+esc((RUNTIME&&RUNTIME.config_path)||'')+'">复制路径</span></span></div>'
+  +'<div id="restartHint" class="rhint" style="display:none"></div>'
+  +'<div class="pathgrid">'
+  +_storeCard('db','数据库','glbDbp','GLB.db_path=this.value;syncRestartHint();pathPreview(\'db\',this)',esc(GLB.db_path||'data/prices.db'),'SQLite 文件 · 相对=程序目录，可绝对路径；改路径后重启自动搬迁（目标已存在则不覆盖）',true)
+  +_storeCard('log','运行日志','glbLgp','GLB.log_path=this.value;syncRestartHint();pathPreview(\'log\',this)',esc(GLB.log_path||'logs/monitor.log'),'文本日志文件 · 重启后按新路径写入；旧日志不会被删除，迁移仅针对数据库与登录态目录',true)
+  +_storeCard('ud','浏览器资料目录','glbUdd','GLB.user_data_dir=this.value;syncRestartHint();pathPreview(\'ud\',this)',esc(GLB.user_data_dir||'user_data'),'各渠道登录态目录 · 重启时整目录自动搬迁（目标已存在/非空则不覆盖）',false)
+  +_storeCard('bdir','浏览器内核目录','glbBdir','GLB.browser_dir=this.value;syncRestartHint();pathPreview(\'bdir\',this)',esc(GLB.browser_dir||''),'chromium 内核缓存位 · 空=playwright 系统默认（约 500MB，通常在 C 盘用户目录）；数据盘可改如 D:/pw-cache',false)
   +'</div>';
  /* scope 分 Tab 计数（R34 设计审计对齐 ctrip/去哪儿 国内/国际双 Tab
     习惯）：按城市码自动判定分组；cfgScopeSet 切换过滤 .rline 卡片 */
@@ -5308,11 +6641,14 @@ function buildForm(){if(!CFG)return;let h='',gh='';
   +'<button class="btn2" onclick="addUser()">➕ 添加用户</button>'
   +'<button class="btn2" style="border-color:var(--warn);color:var(--warn)" onclick="saveCfg()">💾 保存全部并生效</button>'
   +'</div>'
-  +'<div class="rline" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap" id="cfgScopeBar">'
-  +'<span class="chiplab" style="flex:none">航线范围</span>'
+  +'<div class="cfgbar" id="cfgScopeBar">'
+  +'<span class="cb-lab">航线范围</span>'
   +[['all','全部',_dn+_in],['intl','🌐 国际',_in],['dom','国内',_dn]]
     .map(sc=>`<span class="chip schip${CFGS===sc[0]?' on':''}" role="button" tabindex="0" data-sc="${sc[0]}" onclick="cfgScopeSet('${sc[0]}')" onkeydown="if(event.key==='Enter')cfgScopeSet('${sc[0]}')">${sc[1]} ${sc[2]}</span>`).join('')
-  +'<span class="muted" style="font-size:12px">国际=任一端在大陆码集外（自动判定，零配置）</span></div>';
+  +'<span class="cbsp"></span><span class="cb-lab">状态</span>'
+  +[['all','全部'],['on','启用'],['off','停用'],['todo','待完善']]
+    .map(st=>`<span class="chip schip cbst${CFGST===st[0]?' on':''}" role="button" tabindex="0" data-st="${st[0]}" onclick="cfgStatusSet('${st[0]}')" onkeydown="if(event.key==='Enter')cfgStatusSet('${st[0]}')">${st[1]}</span>`).join('')
+  +'<span class="muted" style="font-size:11px">国际=任一端在大陆码集外（自动判定，零配置）</span></div>';
   if(!CFG.length){/* 空态引导：教新用户第一步怎么走 */
    h+='<div class="ucard" style="text-align:center;padding:46px 20px">'
     +'<div style="font-size:34px;margin-bottom:10px">🧭</div>'
@@ -5323,12 +6659,27 @@ function buildForm(){if(!CFG)return;let h='',gh='';
   CFG.forEach((u,i)=>{
   const dt=u.notifier&&u.notifier.dingtalk||{};
   const ih=u.notifier&&u.notifier.image_host||{};
+  const _emList=ems(i);
+  const _chOK={
+   dingtalk:_chReady('dingtalk',u),ntfy:_chReady('ntfy',u),bark:_chReady('bark',u),
+   aliyun:_chReady('aliyun',u),serverchan:_chReady('serverchan',u),
+   email:_emList.map(em=>_chReady('email',u,em)),
+   imghost:_chReady('imghost',u)};
+  const _pushOn=!!(dt.enabled||((u.notifier||{}).ntfy||{}).enabled
+   ||((u.notifier||{}).bark||{}).enabled||((u.notifier||{}).aliyun||{}).enabled
+   ||((u.notifier||{}).serverchan||{}).enabled||_emList.some(e=>e.enabled));
+  const _pushReady=!!(dt.enabled&&_chOK.dingtalk)||!!((u.notifier||{}).ntfy||{}).enabled&&_chOK.ntfy
+   ||!!((u.notifier||{}).bark||{}).enabled&&_chOK.bark
+   ||!!((u.notifier||{}).aliyun||{}).enabled&&_chOK.aliyun
+   ||!!((u.notifier||{}).serverchan||{}).enabled&&_chOK.serverchan
+   ||_chOK.email.some(Boolean);
   const nR=(u.routes||[]).length;
   /* 徽标有效性（Soldier P3#11）：条目在场但缺出发地=后端会整条丢弃
      的无效订阅，按「关」显示不谎报 */
   const _sp0=(u.specials||[])[0],
-        _spOn=!!(_sp0&&_sp0.enabled!==false&&(_sp0.from||_sp0.from_name));
+        _spOn=!!(_sp0&&_sp0.enabled!==false&&(_sp0.from||_sp0.from_name)&&Number(_sp0.max_price)>0);   /* r339i 审计 P3：价位 0/缺=配置未完形，徽标不得报「开」 */
   const open=(OPEN_USER===i);
+  const _uIssues=(u.routes||[]).filter(r=>_routeIssues(r).length);
   h+='<div class="ucard" style="margin:10px 0;padding:0;overflow:hidden">'
    +'<div class="uhead2" role="button" data-u="'+i+'" aria-expanded="'+(open?'true':'false')+'" onclick="toggleUser(this)">'
    +'<span class="uava">'+esc((u.name||'?').slice(0,1))+'</span>'
@@ -5336,7 +6687,8 @@ function buildForm(){if(!CFG)return;let h='',gh='';
    +'<span class="upill">'+nR+' 航线</span>'
    +'<span class="upill'+(_spOn?' ok':'')+'">🎯特价'+(_spOn?'开':'关')+'</span>'
    +'<span class="upill'+((u.notifier||{}).win_toast!==false?' ok':'')+'">🔔弹窗'+((u.notifier||{}).win_toast!==false?'开':'关')+'</span>'
-   +'<span class="upill'+(dt.enabled?' ok':'')+'">'+(dt.enabled?'推送已启用':'推送未启用')+'</span>'
+   +'<span class="upill'+(_pushReady?' ok':'')+(_pushOn&&!_pushReady?' warn':'')+'">'+(_pushReady?'推送已就绪':(_pushOn?'推送待完善':'未配推送通道'))+'</span>'
+   +(_uIssues.length?'<span class="upill warn" title="'+esc(_uIssues.map(r=>(r.from_name||r.from)+'→'+(r.to_name||r.to)+'：'+_routeIssues(r).join('、')).join('；'))+'">⚠ '+_uIssues.length+' 条待完善</span>':'')
    +'<span class="upill warn udirty" id="udirty-'+i+'">● 未保存</span>'
    +'<span class="chev'+(open?' open':'')+'">▾</span></div>'
    +'<div style="'+(open?'padding:4px 16px 14px':'display:none')+'">';   /* 单标签三元——原双分支各写一份开标签，源码 div 开闭差虚高 1 */
@@ -5363,30 +6715,58 @@ function buildForm(){if(!CFG)return;let h='',gh='';
         _dis=(u.routes||[]).length-_en;
   h+=glab('C','航线','ROUTES','<span id="csum-'+i+'">'+_en+' 条监控中'+(_dis?' · '+_dis+' 条已停用':'')+'</span>');
   (u.routes||[]).forEach((r,j)=>{
-   h+=`<div class="rline${r.enabled===false?' off':''}" data-rk="${i}:${j}">
-    <div class="rhead" role="button" onclick="foldRoute(this)"><span class="rtcode">${esc(r.from||'')}→${esc(r.to||'')}</span>
-     <b>${esc(r.from_name)} → ${esc(r.to_name)}</b>
+   const _ri=_routeIssues(r),_fn=_rfCount(r);
+   h+=`<div class="rline${r.enabled===false?' off':''}${_ri.length?' needswork':''}" data-rk="${i}:${j}">
+    <div class="rhead" role="button" onclick="foldRoute(this)"><span class="rtcode">${esc(r.from||'')}${_rtOn(r)?'⇄':'→'}${esc(r.to||'')}</span>
+     <b>${esc(r.from_name)} ${_rtOn(r)?'⇄':'→'} ${esc(r.to_name)}</b>
      <span class="rintl" style="display:${(isIntlCode(r.from)||isIntlCode(r.to))?'':'none'}" title="国际航线：按城市码自动判定（任一端在大陆码集外即国际），采集走各渠道国际端点、价格恒含税口径">🌐 国际</span>
-     <span class="rrt" style="display:${r.ret_date?'':'none'}" title="往返监控：价格=往返总价含税（回程日 ${esc(r.ret_date||'')}）">🔁 往返</span>
+     <span class="rrt" style="display:${_rtOn(r)?'':'none'}" title="往返票：价格=往返总价含税（可配多个返程日）">🔁 往返票</span>
      <span class="rbadge">${r.enabled===false?'已停用':''}</span>
+     ${_ri.length?`<span class="rneed" title="${esc(_ri.join('、'))}">待完善 · ${esc(_ri[0])}</span>`:''}
+     <span class="rfltbadge" style="display:${_fn?'':'none'}" title="已启用的航线级筛选数量（展开「筛选与时段约束」查看）">${_fn?'筛 '+_fn+' 项':''}</span>
      <span class="muted">${_rsum(r)}</span><span class="chev open">▾</span>`
     +`<span class="rop" onclick="event.stopPropagation()">`
     +`<input type="checkbox" class="switch" title="启用/停用该航线：停用保留全部配置，调度跳过，随时可恢复" ${r.enabled===false?'':'checked'} onchange="setRouteEnabled(${i},${j},this.checked)">`
+    +`<button class="ropbtn" title="一键生成反向航线（交换出发/到达，日期阈值全量随迁，默认停用）——分别盯两个方向的最低价用这个；盯往返票总价请用航线内「🔁 往返票」开关" onclick="reverseRoute(${i},${j},this)">⇄ 反向</button>`
     +`<button class="ropbtn" title="复制该航线全部配置为新航线（改出发到达即可用）" onclick="copyRoute(${i},${j},this)">⧉ 复制</button>`
     +`<button class="danger" onclick="delRoute(${i},${j},this)">✕ 删除</button></span></div>
-    <div class="srow"><div class="slab"><b>出发 → 到达城市</b><div class="shint">全国机场城市：点击选择、搜索或直接输三字码</div></div><div class="sctl"><input style="width:108px" value="${esc(r.from_name)}" onclick="cityPanelOpen(this)" onchange="setRoute(${i},${j},'from_name',this.value)"><span class="sunit">→</span><input style="width:108px" value="${esc(r.to_name)}" onclick="cityPanelOpen(this)" onchange="setRoute(${i},${j},'to_name',this.value)"><input type="date" value="${esc(r.ret_date||'')}" style="width:132px" title="往返回程日期（可选，留空=单程监控；填写后采集走往返通道、价格=往返总价含税）" onchange="setRoute(${i},${j},'ret_date',this.value)"></div></div>
-    <div class="srow"><div class="slab"><b>心理价 · 直飞 / 中转</b><div class="shint">低于此价即触发 🚨 强提醒（0=关）；中转还须满足到达约束</div></div><div class="sctl"><span class="sunit">￥</span><input type="number" min="0" step="10" style="width:88px" value="${esc(r.alert_direct||0)}" onchange="setRoute(${i},${j},'alert_direct',this.value)"><span class="sunit">/</span><span class="sunit">￥</span><input type="number" min="0" step="10" style="width:88px" value="${esc(r.alert_transfer||0)}" onchange="setRoute(${i},${j},'alert_transfer',this.value)"></div></div>
-    <div class="srow"><div class="slab"><b>中转最晚到达</b><div class="shint">次日该时刻前到达的中转才算达标</div></div><div class="sctl"><input type="time" value="${esc(r.transfer_arrival_max||'02:00')}" onchange="setRoute(${i},${j},'transfer_arrival_max',this.value)"></div></div>
-    <div class="srow"><div class="slab"><b>中转最短衔接</b><div class="shint">衔接不足该分钟数的中转不达标；需托运建议 ≥90（0=不限）</div></div><div class="sctl"><input type="number" min="0" step="10" style="width:88px" value="${esc(r.transfer_layover_min||0)}" onchange="setRoute(${i},${j},'transfer_layover_min',this.value)"><span class="sunit">分钟</span></div></div>
-    <div class="srow"><div class="slab"><b>🧳 中转行李直挂</b><div class="shint">仅认渠道标注「中转行李免提」（两段含免费托运）的班次，未标注的视为不满足 · ⚠ 渠道直挂标注极少，开启后中转最优可能长期为空</div></div><div class="sctl"><input type="checkbox" class="switch" ${r.transfer_baggage==='direct'?'checked':''} onchange="setRoute(${i},${j},'transfer_baggage',this.checked?'direct':'')"></div></div>
-    <div class="srow"><div class="slab"><b>出发时段窗口</b><div class="shint">快捷挡一点即填；也可手输精确时间（两端留空 = 不限）</div></div><div class="sctl" style="flex-wrap:wrap;justify-content:flex-end;gap:5px;max-width:62%">`
+    <div class="srow"><div class="slab"><b>出发 → 到达城市</b><div class="shint">全国机场城市：点击选择、搜索或直接输三字码</div></div><div class="sctl"><input style="width:108px" value="${esc(r.from_name)}" onclick="cityPanelOpen(this)" onchange="setRoute(${i},${j},'from_name',this.value)"><span class="sunit">→</span><input style="width:108px" value="${esc(r.to_name)}" onclick="cityPanelOpen(this)" onchange="setRoute(${i},${j},'to_name',this.value)"><span class="chip schip${_rtOn(r)?' on':''}" title="往返票（去回同订一张订单）：盯「往返总价」低于心理价。想分别盯两个方向的最低价？点卡片右上「⇄ 反向」生成反向航线" onclick="toggleRT(${i},${j},this)">🔁 往返票</span></div></div>`
+    +_dateRowHTML(i,j,'d')
+    +(_rtOn(r)?_dateRowHTML(i,j,'r'):'')
+    +`
+    <div class="srow"><div class="slab"><b>心理价</b><div class="shint">低于即触发 🚨 强提醒 · 0=关（按明细展示价判定，含税渠道已含税）</div></div><div class="sctl" style="flex-wrap:wrap;justify-content:flex-end;gap:6px;max-width:62%"><span class="sunit" style="font-weight:700">￥直飞</span><input type="number" min="0" step="10" class="keyin" value="${esc(r.alert_direct||0)}" onchange="setRoute(${i},${j},'alert_direct',this.value)"><span class="chip schip${r.direct_only?' on':''}" title="只盯直飞：关闭中转提醒并收起中转价，再点恢复" onclick="toggleDirectOnly(${i},${j},this)">✈ 只要直飞</span><span class="sunit trlab" style="display:${r.direct_only?'none':''}">/ ￥中转</span><input type="number" min="0" step="10" class="trprice" style="width:88px;display:${r.direct_only?'none':''}" value="${esc(r.alert_transfer||0)}" onchange="setRoute(${i},${j},'alert_transfer',this.value)"></div></div>
+    <div class="rthead" role="button" tabindex="0" aria-expanded="false" onclick="foldRtadv(this)" title="智能预设/航司白名单(!排除)/排除廉航/经停/共享/行李直挂/衔接窗口/最晚到达/价格上限/最长飞行时长/排除跨天/出发与到达时段——精准需求展开微调，默认值即可用"><b>⚙ 筛选与时段约束</b><span class="rfsum" id="rfsum-${i}-${j}">${esc(_rfSummary(r))}</span><span class="rfltbadge" id="rfdcnt-${i}-${j}" style="display:${_rfCount(r)?'':'none'}">${_rfCount(r)?'筛 '+_rfCount(r)+' 项':''}</span><span class="chev">▾</span></div>
+    <div class="rfpresets"><span class="rfl">智能预设</span>
+     <span class="chip schip${_presetOn(r,'easy')?' on':''}" title="只看直飞：关闭中转提醒并剔除经停/共享/廉航" onclick="applyRoutePreset(${i},${j},'easy',this)">✈ 省心直飞</span>
+     <span class="chip schip${_presetOn(r,'day')?' on':''}" title="白天出发 06:00–18:00、06:00–23:59 到达、不跨天——不开夜车" onclick="applyRoutePreset(${i},${j},'day',this)">☀ 白天出行</span>
+     <span class="chip schip${_presetOn(r,'lowlay')?' on':''}" title="中转衔接 60–240 分钟：太短赶不上，太长等太久" onclick="applyRoutePreset(${i},${j},'lowlay',this)">⏱ 少中转久等</span>
+     <span class="chip schip${_presetOn(r,'bag')?' on':''}" title="免费托运 ≥20kg 且只认渠道标注两段直挂——行李优先" onclick="applyRoutePreset(${i},${j},'bag',this)">🧳 行李优先</span>
+     <span class="chip schip" title="清空本条航线的全部筛选约束（心理价与日期保留）" onclick="applyRoutePreset(${i},${j},'clear',this)">↺ 清空筛选</span>
+    </div>
+    ${(_rtOn(r)||r.direct_only)?'':`<div class="rfgrp">中转与衔接</div>
+    <div class="srow"><div class="slab"><b>中转最晚到达</b><div class="shint">次日该时刻前到达的中转才算达标；当日达不受此限；跨天国际段按到达当地钟面判</div></div><div class="sctl"><input type="time" value="${esc(r.transfer_arrival_max||'02:00')}" onchange="setRoute(${i},${j},'transfer_arrival_max',this.value)"></div></div>
+    <div class="srow"><div class="slab"><b>中转衔接窗口</b><div class="shint">最短/最长衔接；需托运建议 ≥90 分钟。两头可单填，0/空=不限；未知衔接按不满足/不误杀分别处理</div></div><div class="sctl"><span class="sunit">最短</span><input type="number" min="0" step="10" style="width:78px" value="${esc(r.transfer_layover_min||0)}" onchange="setRoute(${i},${j},'transfer_layover_min',this.value)"><span class="sunit">– 最长</span><input type="number" min="0" step="10" style="width:78px" value="${esc(r.transfer_layover_max||0)}" onchange="setRoute(${i},${j},'transfer_layover_max',this.value)"><span class="sunit">分钟</span></div></div>`}
+    <div class="rfgrp">航司与行程</div>
+    <div class="srow airrow"><div class="slab"><b>航司白名单</b><div class="shint"><b>东航 = 东方航空 = MU</b>：码 / 全称 / 简称 三写法等价。点常用 chip 或直接输入，下方即时解析；<b>! 前缀排除</b>（如 <b>!9C,!春秋</b> 只剔这两家）；留空=不限</div></div><div class="sctl airbox"><div class="airfield"><span class="airmode" id="airmode-${i}-${j}" role="group" aria-label="快捷添加航司模式"><span class="on" data-m="in" role="button" tabindex="0" onclick="airMode(${i},${j},'in',this)" onkeydown="if(event.key==='Enter')airMode(${i},${j},'in',this)">只看</span><span data-m="out" role="button" tabindex="0" onclick="airMode(${i},${j},'out',this)" onkeydown="if(event.key==='Enter')airMode(${i},${j},'out',this)">排除</span></span><input type="text" placeholder="如 MU,东航,!9C" title="东航=东方航空=MU；码 / 全称 / 简称三写法等价；! 前缀=排除" style="width:100%;text-align:left" value="${esc(r.airlines||'')}" onchange="setRoute(${i},${j},'airlines',this.value);airCloseSug(${i},${j})" oninput="airPreview(${i},${j},this)" onblur="airBlur(${i},${j})" onkeydown="airKey(event,${i},${j},this)" aria-label="航司白名单表达式" autocomplete="off"></div><div class="airquick"><span class="aq-lab">常用</span>${_airQuickHTML(i,j)}</div><div class="airsug" id="airsug-${i}-${j}"></div><div class="airchips" id="airchips-${i}-${j}">${airChipsHTML(r.airlines||'',i,j)}</div><div class="airpv" id="airpv-${i}-${j}"${airHasUnknown(r.airlines||'')?"":' style="display:none"'}>${airHasUnknown(r.airlines||'')?airPreviewHTML(r.airlines||''):''}</div></div></div>
+    <div class="srow"><div class="slab"><b>排除廉航</b><div class="shint">渠道标注廉航（行李/退改受限）的班次不参达标与明细</div></div><div class="sctl"><input type="checkbox" class="switch" ${r.no_lcc?'checked':''} onchange="setRoute(${i},${j},'no_lcc',this.checked)"></div></div>
+    <div class="srow"><div class="slab"><b>排除经停 / 共享</b><div class="shint">经停=同机号中途落地；共享=实际承运与票面不同。仅按渠道明确标注剔除，未标注不误杀</div></div><div class="sctl" style="gap:14px"><label class="swx"><input type="checkbox" class="switch" ${r.exclude_stop?'checked':''} onchange="setRoute(${i},${j},'exclude_stop',this.checked)"> 排除经停</label><label class="swx"><input type="checkbox" class="switch" ${r.exclude_share?'checked':''} onchange="setRoute(${i},${j},'exclude_share',this.checked)"> 排除共享</label></div></div>`
+    +((isIntlCode(r.from)||isIntlCode(r.to))?`
+    <div class="srow"><div class="slab"><b>免费托运 ≥</b><div class="shint">国际线高频筛选：行李词面无 kg 数的行按不满足剔除（渠道直挂标注极少，过高会长期无达标）</div></div><div class="sctl"><input type="number" min="0" step="5" style="width:88px" value="${esc(r.min_baggage||0)}" onchange="setRoute(${i},${j},'min_baggage',this.value)"><span class="sunit">kg（0=不限）</span></div></div>
+    <div class="srow"><div class="slab"><b>仅大型机</b><div class="shint">剔出明确标注中小型机的班次；未标注机型的行保留（渠道机型覆盖不全，缺席剔除会整渠道误杀）</div></div><div class="sctl"><input type="checkbox" class="switch" ${r.widebody_only?'checked':''} onchange="setRoute(${i},${j},'widebody_only',this.checked)"></div></div>`:'')
+    +`<div class="srow"><div class="slab"><b>🧳 中转行李直挂</b><div class="shint">仅认渠道标注「中转行李免提」（两段含免费托运）的班次，未标注的视为不满足 · ⚠ 渠道直挂标注极少，开启后中转最优可能长期为空</div></div><div class="sctl"><input type="checkbox" class="switch" ${r.transfer_baggage==='direct'?'checked':''} onchange="setRoute(${i},${j},'transfer_baggage',this.checked?'direct':'')"></div></div>
+    <div class="srow"><div class="slab"><b>出发时段窗口</b><div class="shint">快捷挡一点即填；也可手输精确时间（两端留空 = 不限；<b>支持跨零点</b>，如 22:00–02:00）</div></div><div class="sctl" style="flex-wrap:wrap;justify-content:flex-end;gap:5px;max-width:62%">`
     +DEPWINS.map(([n,lo,hi])=>{
       const on=((r.dep_time_min||'')===(lo||''))&&((r.dep_time_max||'')===(hi||''));
       return `<span class="chip schip${on?' on':''}" title="${lo?lo+'–'+hi:'不限'}" onclick="quickDep(${i},${j},this,'${lo}','${hi}')">${n}</span>`;}).join('')
     +`<input type="time" value="${esc(r.dep_time_min||'')}" onchange="setRoute(${i},${j},'dep_time_min',this.value);customDepWin(this)"><span class="sunit">→</span><input type="time" value="${esc(r.dep_time_max||'')}" onchange="setRoute(${i},${j},'dep_time_max',this.value);customDepWin(this)"></div></div>
-    <div class="srow"><div class="slab"><b>出发日期</b><div class="shint">可加多个，各日期独立监控与推送；点日期片 ✕ 删除；支持只输「10-08」自动补年</div></div><div class="sctl" style="flex-wrap:wrap;justify-content:flex-end;gap:6px;max-width:62%"><span class="dchips" id="dchips-${i}-${j}">`
-    +(r.dates||[]).map(d=>`<span class="chip on dchip">${esc(d)}<i class="dx" title="删除该日期" onclick="delDate(${i},${j},'${esc(d)}')">✕</i></span>`).join('')
-    +`</span><input type="text" id="dpick-${i}-${j}" placeholder="如 2026-10-08" style="width:128px" onkeydown="if(event.key==='Enter')addDate(${i},${j})"><button class="btn2" title="日历选择" onclick="pickDate(${i},${j})">📅</button><input type="date" id="dreal-${i}-${j}" class="dreal" tabindex="-1"><button class="btn2" style="margin-right:0" onclick="addDate(${i},${j})">➕ 加日期</button></div></div>
+    <div class="srow"><div class="slab"><b>价格上限</b><div class="shint">只盯 ≤ 此价的班次（达标/明细同步剪枝）· 0=不限 · 票价不可解析的行保留（防整渠道误杀）</div></div><div class="sctl"><span class="sunit" style="font-weight:700">￥≤</span><input type="number" min="0" step="50" style="width:96px" value="${esc(r.price_max||0)}" onchange="setRoute(${i},${j},'price_max',this.value)"></div></div>
+    <div class="srow"><div class="slab"><b>最长飞行时长</b><div class="shint">总时长（含中转全程）超过此值的班次不达标 · 小时，可填 0.5 · 0=不限 · 渠道未标注时长的班次按不满足剔除</div></div><div class="sctl"><span class="sunit" style="font-weight:700">≤</span><input type="number" min="0" step="0.5" style="width:80px" value="${esc(r.max_duration_h||0)}" onchange="setRoute(${i},${j},'max_duration_h',this.value)"><span class="sunit">小时</span></div></div>
+    <div class="srow"><div class="slab"><b>排除跨天</b><div class="shint">跨天到达（含深夜红眼落地）的班次不参达标与明细 · 跨天数由解析恒落键，全渠道普适</div></div><div class="sctl"><input type="checkbox" class="switch" ${r.no_cross?'checked':''} onchange="setRoute(${i},${j},'no_cross',this.checked)"></div></div>
+    <div class="srow"><div class="slab"><b>到达时段窗口</b><div class="shint">快捷挡一点即填（红眼落地嫌弃用）；也可手输精确时间（两端留空 = 不限；<b>支持跨零点</b>，如 22:00–06:00）</div></div><div class="sctl" style="flex-wrap:wrap;justify-content:flex-end;gap:5px;max-width:62%">`
+    +DEPWINS.map(([n,lo,hi])=>{
+      const on=((r.arr_time_min||'')===(lo||''))&&((r.arr_time_max||'')===(hi||''));
+      return `<span class="chip schip${on?' on':''}" title="${lo?lo+'–'+hi:'不限'}" onclick="quickArr(${i},${j},this,'${lo}','${hi}')">${n}</span>`;}).join('')
+    +`<input type="time" value="${esc(r.arr_time_min||'')}" onchange="setRoute(${i},${j},'arr_time_min',this.value);customArrWin(this)"><span class="sunit">→</span><input type="time" value="${esc(r.arr_time_max||'')}" onchange="setRoute(${i},${j},'arr_time_max',this.value);customArrWin(this)"></div></div>
    </div>`;});
    h+=`<button class="btn2 addrbtn" onclick="addRoute(${i})">➕ 添加航线</button>`;
   /* —— D 特价监控（r319）：发现模式订阅。单条 specials[0] 承载
@@ -5400,43 +6780,52 @@ function buildForm(){if(!CFG)return;let h='',gh='';
    <div class="srow"><div class="slab"><b>未来天数</b><div class="shint">只认未来 N 天内的出发日期（缺省 30，上限 180）</div></div><div class="sctl"><input type="number" min="1" max="180" placeholder="30" data-sp="days" style="width:90px" value="${esc(_sp0&&_sp0.days!=null?_sp0.days:'')}" onchange="setSp(${i},'days',this.value)"></div></div>
    <div class="srow"><div class="slab"><b>🪃 返程配对</b><div class="shint">往返特价直接成对收；单程特价自动查反向低价日历配返程（推送带返程段与双深链）</div></div><div class="sctl"><input type="checkbox" class="switch" data-sp="round_trip" ${!_sp0||_sp0.round_trip!==false?'checked':''} onchange="setSp(${i},'round_trip',this.checked)"><span class="sunit">返程窗</span><input type="number" min="0" max="30" placeholder="7" data-sp="round_trip_days" style="width:70px" value="${esc(_sp0&&_sp0.round_trip_days!=null?_sp0.round_trip_days:'')}" onchange="setSp(${i},'round_trip_days',this.value)"><span class="sunit">天</span></div></div>`;
    h+=glab('E','通知渠道','CHANNELS',[
-      dt.enabled?'钉钉✓':'钉钉×',
-      ((u.notifier||{}).ntfy||{}).enabled?'ntfy✓':null,
-      ((u.notifier||{}).aliyun||{}).enabled?'电话✓':null,
-      ((u.notifier||{}).serverchan||{}).enabled?'微信✓':null,
-      (ems(i).filter(e=>e.enabled).length?'邮件✓×'+ems(i).filter(e=>e.enabled).length:null)
+      _chOK.dingtalk?'钉钉✓':(dt.enabled?'钉钉待完善':'钉钉×'),
+      ((u.notifier||{}).ntfy||{}).enabled?(_chOK.ntfy?'ntfy✓':'ntfy待完善'):null,
+      ((u.notifier||{}).bark||{}).enabled?(_chOK.bark?'Bark✓':'Bark待完善'):null,
+      ((u.notifier||{}).aliyun||{}).enabled?(_chOK.aliyun?'电话✓':'电话待完善'):null,
+      ((u.notifier||{}).serverchan||{}).enabled?(_chOK.serverchan?'微信✓':'微信待完善'):null,
+      (_emList.filter(e=>e.enabled).length
+        ?('邮件✓×'+_chOK.email.filter(Boolean).length+( _emList.filter(e=>e.enabled).length>_chOK.email.filter(Boolean).length?' · 待完善':'') )
+        :null)
      ].filter(Boolean).join(' · ')||'未配置任何渠道')+`
    <div class="chgrid">
-   <div class="chcard${dt.enabled?' on':''}" data-ch="dingtalk"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${dt.enabled?' on':''}"></span>钉钉机器人<span class="muted">${dt.enabled?'已启用':'未启用'}</span><span class="chev open">▾</span></div>
+   <div class="chcard${_chOK.dingtalk?' on':(dt.enabled?' todo':'')}" data-ch="dingtalk"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${_chOK.dingtalk?' on':(dt.enabled?' mid':'')}"></span>钉钉机器人<span class="muted">${_chLbl(!!dt.enabled,_chOK.dingtalk)}</span><span class="chev open">▾</span></div>
     <div class="srow"><div class="slab"><b>启用钉钉推送</b><div class="shint">关闭后该用户不再向此群推送</div></div><div class="sctl"><input type="checkbox" class="switch" ${dt.enabled?'checked':''} onchange="setDt(${i},'enabled',this.checked);chSync(this,${i},'dingtalk')"></div></div>
     <div class="srow"><div class="slab"><b>Webhook</b><div class="shint">群设置 → 智能群助手 → 自定义机器人获取</div></div><div class="sctl" style="flex:1;min-width:0"><input type="url" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." style="width:100%;text-align:left" value="${esc(dt.webhook||'')}" onchange="setDt(${i},'webhook',this.value)"></div></div>
-    <div class="srow"><div class="slab"><b>加签密钥 SEC…</b><div class="shint">机器人安全设置选「加签」后获得</div></div><div class="sctl" style="flex:1;min-width:0"><input autocomplete="off" placeholder="SEC 开头的加签密钥" style="width:100%;text-align:left" value="${esc(dt.secret||'')}" onchange="setDt(${i},'secret',this.value)"></div></div>
+    <div class="srow"><div class="slab"><b>加签密钥 SEC…</b><div class="shint">机器人安全设置选「加签」后获得；默认隐藏，可点「显示」核对</div></div><div class="sctl" style="flex:1;min-width:0;gap:6px"><input id="dtsecret-${i}" type="password" autocomplete="off" placeholder="SEC 开头的加签密钥" style="width:100%;min-width:0;text-align:left" value="${esc(dt.secret||'')}" onchange="setDt(${i},'secret',this.value)"><span class="chip schip" role="button" tabindex="0" onclick="togglePw('dtsecret-${i}',this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();togglePw('dtsecret-${i}',this)}">显示</span></div></div>
     <div class="srow"><div class="slab"><b>达标 @ 手机号</b><div class="shint">达标推送时 @ 这个号码</div></div><div class="sctl"><input type="tel" placeholder="13800000000" style="width:140px" value="${esc(dt.at_mobile||'')}" onchange="setDt(${i},'at_mobile',this.value)"></div></div>
     <div class="srow"><div class="slab"><b>通路验证</b><div class="shint">发一条测试消息到群里，验证 Webhook 可用；凭据仅存本机 config.yaml</div></div><div class="sctl"><button class="btn2" onclick="testPush(${i},this)">🔔 测试推送（用表单当前值）</button></div></div>
    </div><!-- 此闭合标签必须保留：ntfy/aliyun/serverchan 三卡嵌进钉钉卡内部，foldCh 按 parentElement 取 ch 键——缺行会折一连藏三 -->
-   <div class="chcard${((u.notifier||{}).ntfy||{}).enabled?' on':''}" data-ch="ntfy"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${((u.notifier||{}).ntfy||{}).enabled?' on':''}"></span>ntfy 手机弹窗<span class="muted">${((u.notifier||{}).ntfy||{}).enabled?'已启用':'未启用'}</span><span class="chev open">▾</span></div>
+   <div class="chcard${_chOK.ntfy?' on':(((u.notifier||{}).ntfy||{}).enabled?' todo':'')}" data-ch="ntfy"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${_chOK.ntfy?' on':(((u.notifier||{}).ntfy||{}).enabled?' mid':'')}"></span>ntfy 手机弹窗<span class="muted">${_chLbl(!!((u.notifier||{}).ntfy||{}).enabled,_chOK.ntfy)}</span><span class="chev open">▾</span></div>
     <div class="srow"><div class="slab"><b>主题</b><div class="shint">手机 ntfy App 订阅同名主题；留空关闭</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="my-flight-alert" style="width:100%;text-align:left" value="${esc(((u.notifier||{}).ntfy||{}).topic||'')}" onchange="setNtfy(${i},'topic',this.value);chSync(this,${i},'ntfy')"></div></div>
     <div class="srow"><div class="slab"><b>优先级</b><div class="shint">5 = 最强（系统级弹窗+铃声+穿透免打扰，仅达标触发）</div></div><div class="sctl"><input type="number" min="1" max="5" style="width:70px" value="${esc(((u.notifier||{}).ntfy||{}).priority||5)}" onchange="setNtfy(${i},'priority',this.value)"></div></div>
     <div class="srow"><div class="slab"><b>通路验证</b><div class="shint">发一条测试到手机 ntfy，验证链路可用</div></div><div class="sctl"><button class="btn2" onclick="testNtfy(${i},this)">🔔 测试 ntfy（用表单当前值）</button></div></div>
     <div class="hint"><a href="https://ntfy.sh" target="_blank" rel="noopener" style="color:var(--blue)">ntfy.sh</a> 免费无需注册，手机装 App 订阅同名主题即收。</div></div>
-   <div class="chcard${((u.notifier||{}).aliyun||{}).enabled?' on':''}" data-ch="aliyun"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${((u.notifier||{}).aliyun||{}).enabled?' on':''}"></span>阿里云电话/短信<span class="muted">${((u.notifier||{}).aliyun||{}).enabled?'已启用':'未启用'}</span><span class="chev open">▾</span></div>
+   <div class="chcard${_chOK.bark?' on':(((u.notifier||{}).bark||{}).enabled?' todo':'')}" data-ch="bark"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${_chOK.bark?' on':(((u.notifier||{}).bark||{}).enabled?' mid':'')}"></span>Bark·iPhone 推送<span class="muted">${_chLbl(!!((u.notifier||{}).bark||{}).enabled,_chOK.bark)}</span><span class="chev open">▾</span></div>
+    <div class="srow"><div class="slab"><b>启用 Bark 推送</b><div class="shint">iOS 装 Bark App 拿 Key；达标即系统级弹窗，与 ntfy 并联各推各的</div></div><div class="sctl"><input type="checkbox" class="switch" ${((u.notifier||{}).bark||{}).enabled?'checked':''} onchange="setBark(${i},'enabled',this.checked);chSync(this,${i},'bark')"></div></div>
+    <div class="srow"><div class="slab"><b>Bark Key</b><div class="shint">Bark App 首页复制；凭据仅存本机 config.yaml</div></div><div class="sctl" style="flex:1;min-width:0"><input type="password" autocomplete="off" placeholder="Bark App 复制的推送 Key" style="width:100%;text-align:left" value="${esc(((u.notifier||{}).bark||{}).key||'')}" onchange="setBark(${i},'key',this.value);chSync(this,${i},'bark')"></div></div>
+    <div class="srow"><div class="slab"><b>服务器（可选）</b><div class="shint">自托管 Bark Server 填这里；留空=官方 api.day.app</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="https://api.day.app" style="width:100%;text-align:left" value="${esc(((u.notifier||{}).bark||{}).server||'')}" onchange="setBark(${i},'server',this.value)"></div></div>
+    <div class="srow"><div class="slab"><b>通路验证</b><div class="shint">真实推一条到 iPhone，验证 Key 与服务器可用</div></div><div class="sctl"><button class="btn2" onclick="testBark(${i},this)">🔔 测试 Bark（用表单当前值）</button></div></div>
+    <div class="hint"><a href="https://github.com/finb/bark" target="_blank" rel="noopener" style="color:var(--blue)">finb/bark</a> 开源免费 iOS 推送：App 内复制 Key 填入即用，达标即铃声弹窗。</div></div>
+   <div class="chcard${_chOK.aliyun?' on':(((u.notifier||{}).aliyun||{}).enabled?' todo':'')}" data-ch="aliyun"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${_chOK.aliyun?' on':(((u.notifier||{}).aliyun||{}).enabled?' mid':'')}"></span>阿里云电话/短信<span class="muted">${_chLbl(!!((u.notifier||{}).aliyun||{}).enabled,_chOK.aliyun)}</span><span class="chev open">▾</span></div>
     <div class="srow"><div class="slab"><b>云监控事件回调 URL</b><div class="shint">留空关闭；云监控 CRITICAL 事件触发电话/短信</div></div><div class="sctl" style="flex:1;min-width:0"><input style="width:100%;text-align:left" value="${esc(((u.notifier||{}).aliyun||{}).url||'')}" onchange="setAy(${i},'url',this.value);chSync(this,${i},'aliyun')"></div></div>
     <div class="srow"><div class="slab"><b>AccessKey ID / Secret</b><div class="shint">建议只授云监控只读权限，仅存本机 config.yaml</div></div><div class="sctl"><input autocomplete="off" placeholder="ID" style="width:110px" value="${esc(((u.notifier||{}).aliyun||{}).user||'')}" onchange="setAy(${i},'user',this.value)"><input autocomplete="off" type="password" placeholder="Secret" style="width:110px" value="${esc(((u.notifier||{}).aliyun||{}).password||'')}" onchange="setAy(${i},'password',this.value)"></div></div>
     <div class="hint">达标时拨打一次，风暴不重复。</div></div>
-   <div class="chcard${((u.notifier||{}).serverchan||{}).enabled?' on':''}" data-ch="serverchan"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${((u.notifier||{}).serverchan||{}).enabled?' on':''}"></span>Server酱·微信<span class="muted">${((u.notifier||{}).serverchan||{}).enabled?'已启用':'未启用'}</span><span class="chev open">▾</span></div>
+   <div class="chcard${_chOK.serverchan?' on':(((u.notifier||{}).serverchan||{}).enabled?' todo':'')}" data-ch="serverchan"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${_chOK.serverchan?' on':(((u.notifier||{}).serverchan||{}).enabled?' mid':'')}"></span>Server酱·微信<span class="muted">${_chLbl(!!((u.notifier||{}).serverchan||{}).enabled,_chOK.serverchan)}</span><span class="chev open">▾</span></div>
     <div class="srow"><div class="slab"><b>SendKey</b><div class="shint">微信扫码获取；留空关闭</div></div><div class="sctl" style="flex:1;min-width:0"><input type="password" autocomplete="off" placeholder="sct.ftqq.com 微信扫码获取" style="width:100%;text-align:left" value="${esc(((u.notifier||{}).serverchan||{}).send_key||'')}" onchange="setSc(${i},'send_key',this.value);chSync(this,${i},'serverchan')"></div></div>
     <div class="srow"><div class="slab"><b>通道</b><div class="shint">留空 = 默认通道</div></div><div class="sctl"><input style="width:140px" value="${esc(((u.notifier||{}).serverchan||{}).channel||'')}" onchange="setSc(${i},'channel',this.value)"></div></div>
     <div class="hint">钉钉之外的微信触达备份：Server酱·Turbo 免费每日 5 条，
     <a href="https://sct.ftqq.com" target="_blank" rel="noopener" style="color:var(--blue)">sct.ftqq.com</a> 扫码即得 SendKey。凭据仅存本机。</div></div>
    ${ems(i).map((em,k)=>`
-   <div class="chcard${em.enabled?' on':''}" data-ch="email${k}"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${em.enabled?' on':''}"></span>邮件·${esc(em.user||'邮箱通道'+(k+1))}<span class="muted">${em.enabled?'已启用':'未启用'}</span><span class="chev open">▾</span></div>
+   <div class="chcard${_chOK.email[k]?' on':(em.enabled?' todo':'')}" data-ch="email${k}"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${_chOK.email[k]?' on':(em.enabled?' mid':'')}"></span><span class="ch-title">邮件·${esc(em.user||'邮箱通道'+(k+1))}</span><span class="muted">${_chLbl(!!em.enabled,_chOK.email[k])}</span><span class="chdel" role="button" tabindex="0" title="删除此邮箱通道（保存后生效）" onclick="event.stopPropagation();delEm(${i},${k},this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();delEm(${i},${k},this)}">删除</span><span class="chev open">▾</span></div>
     <div class="srow"><div class="slab"><b>启用此邮件通道</b><div class="shint">与钉钉/其他邮件通道并联（都发）；163/QQ 各配各的，自发自收互不依赖</div></div><div class="sctl"><input type="checkbox" class="switch" ${em.enabled?'checked':''} onchange="setEm(${i},${k},'enabled',this.checked);chSync(this,${i},'email${k}')"></div></div>
     <div class="srow"><div class="slab"><b>SMTP 服务器</b><div class="shint">163：网页版设置→POP3/SMTP→开启服务→获授权码；QQ 同理</div></div><div class="sctl" style="flex:1;min-width:0;flex-wrap:wrap;gap:6px"><span class="chip schip emhchip${(em.host||'smtp.163.com')!=='smtp.qq.com'?' on':''}" onclick="emHost(this,'smtp.163.com',${i},${k})">163</span><span class="chip schip emhchip${em.host==='smtp.qq.com'?' on':''}" onclick="emHost(this,'smtp.qq.com',${i},${k})">QQ</span><input class="emhost" placeholder="smtp.163.com" style="width:150px;text-align:left" value="${esc(em.host||'')}" onchange="setEm(${i},${k},'host',this.value)"></div></div>
-    <div class="srow"><div class="slab"><b>端口（SSL）</b><div class="shint">465 = SMTP_SSL；host 留空默认 smtp.163.com</div></div><div class="sctl"><input type="number" style="width:80px" value="${esc(em.port||465)}" onchange="setEm(${i},${k},'port',parseInt(this.value)||465)"></div></div>
+    <div class="srow"><div class="slab"><b>端口（SSL）</b><div class="shint">连接恒走 SMTP_SSL（端口默认 465；587 STARTTLS 不支持勿填）；host 留空默认 smtp.163.com</div></div><div class="sctl"><input type="number" style="width:80px" value="${esc(em.port||465)}" onchange="setEm(${i},${k},'port',parseInt(this.value)||465)"></div></div>
     <div class="srow"><div class="slab"><b>发件账号</b><div class="shint">完整邮箱地址；须与授权码同属一账号；填自己=自发自收，一个账号即可</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="you@163.com" style="width:100%;text-align:left" value="${esc(em.user||'')}" onchange="setEm(${i},${k},'user',this.value);chSync(this,${i},'email${k}')"></div></div>
     <div class="srow"><div class="slab"><b>SMTP 授权码</b><div class="shint">非登录密码！邮箱设置开启 SMTP 后生成；凭据仅存本机 config.yaml</div></div><div class="sctl" style="flex:1;min-width:0"><input type="password" autocomplete="off" placeholder="16 位授权码" style="width:100%;text-align:left" value="${esc(em.password||'')}" onchange="setEm(${i},${k},'password',this.value)"></div></div>
     <div class="srow"><div class="slab"><b>收件邮箱</b><div class="shint">多个逗号分隔；填发件账号自己=自发自收；加家人邮箱即可同收</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="you@163.com 或多个" style="width:100%;text-align:left" value="${esc(em.to||'')}" onchange="setEm(${i},${k},'to',this.value)"></div></div>
-    <div class="srow"><div class="slab"><b>通路验证</b><div class="shint">真实发一封测试邮件（正文=控制台整页截图，与正式推送同形态），授权码对错一试便知</div></div><div class="sctl"><button class="btn2" onclick="testEm(${i},${k},this)">📩 测试邮件（用表单当前值）</button><button class="danger" style="margin-left:6px" onclick="delEm(${i},${k},this)">✕ 删除</button></div></div>
+    <div class="srow"><div class="slab"><b>通路验证</b><div class="shint">真实发一封测试邮件（正文=控制台整页截图，与正式推送同形态），授权码对错一试便知</div></div><div class="sctl"><button class="btn2" onclick="testEm(${i},${k},this)">📩 测试邮件（用表单当前值）</button><button class="danger" style="margin-left:6px" onclick="delEm(${i},${k},this)">🗑 删除此邮箱通道</button></div></div>
     <div class="hint">免费方案：163/QQ 邮箱网页版设置开启 SMTP 拿「授权码」即可。邮件正文=控制台整页截图直嵌（与网页 100% 同视觉），渲染失败自动降级纯文字。可添加多个邮箱通道并联发送。</div></div>`).join('')}
    <div class="chcard ih-${ih.provider==='ghimg'?'ghimg':(ih.provider==='smms'?'smms':'free')}" data-ch="imghost"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot on"></span>推送图床<span class="muted">${({ghimg:'GitHub 图库',smms:'sm.ms'})[ih.provider]||'freeimage'}</span><span class="chev open">▾</span></div>
     <div class="srow"><div class="slab"><b>图床服务</b><div class="shint">推送图文里图片的存放处；钉钉图空白/裂图 = 当前图床拉不到，切这里换床</div></div><div class="sctl"><span class="chip schip ihchip${ih.provider==='ghimg'?' on':''}" data-p="ghimg" onclick="setIh(${i},'provider','ghimg',this)">GitHub 图库</span><span class="chip schip ihchip${(ih.provider||'freeimage')!=='smms'&&ih.provider!=='ghimg'?' on':''}" data-p="freeimage" onclick="setIh(${i},'provider','freeimage',this)">freeimage</span><span class="chip schip ihchip${ih.provider==='smms'?' on':''}" data-p="smms" onclick="setIh(${i},'provider','smms',this)">sm.ms</span></div></div>
@@ -5447,16 +6836,29 @@ function buildForm(){if(!CFG)return;let h='',gh='';
     <span class="srow"><span class="slab"><b>通路验证</b><span class="shint" style="display:block">传一张 1px 测试图，验证当前所选图床真实可上传（不走降级链，失败即如实报错）</span></span><span class="sctl"><button class="btn2" onclick="testImghost(${i},this)">🔍 测试上传（用表单当前值）</button></span></span>
     <span class="ihtest" id="ihtest-${i}" style="display:none"></span>
     <div class="hint">GitHub 图库=主通路（token 上传自家公开仓库，显示端读者网络直连 jsDelivr）。freeimage 上传端已停（历史备案，不选为宜）；sm.ms 需<a href="https://sm.ms" target="_blank" rel="noopener" style="color:var(--blue)">注册</a>后取 <a href="https://sm.ms/home/apitoken" target="_blank" rel="noopener" style="color:var(--blue)">API Token</a>。推送图空白？先「测试上传」如实验当前床。</div></div>
-   <button class="btn2" onclick="addEm(${i})">➕ 添加邮箱通道</button>
+   <button class="btn2 chemadd" onclick="addEm(${i})">➕ 添加邮箱通道</button>
    </div>
    <button class="danger" onclick="delUser(${i},this)">✕ 删除用户 ${esc(u.name)}</button></div></div>`;});
  $('cfgform').innerHTML=h;
  $('cfgglobals').innerHTML=gh;
+ /* 多邮箱通道归位到渠道列表末尾（图床之后、添加按钮之前）：新增
+    渠道不再插进列表中部；DOM 重排同时校正键盘 Tab 序。 */
+ try{document.querySelectorAll('#cfgform .chgrid').forEach(g=>{
+  const add=g.querySelector('.chemadd');
+  if(!add)return;
+  g.querySelectorAll('[data-ch^="email"]').forEach(c=>g.insertBefore(c,add));
+ });}catch(e){}
+ try{Object.entries(_DATEVAL).forEach(([id,v])=>{
+  const el=document.getElementById(id);if(el&&!el.value)el.value=v;});}catch(e){}
  applyFolds();mkactAll();   /* 折叠头（role=button）/日期片 ✕ 补键盘可达 */
  cfgScopeApply();   /* scope 分 Tab：重渲后保持当前过滤（R34） */
  /* 初始渲染链应用行头同步（r326 P1-3）：存量国际航线打开配置页徽标
     即亮——syncRouteHead 单源判定，与 setRoute/quickDep 写点同源 */
  CFG.forEach((u,_ui)=>(u.routes||[]).forEach((_r,_uj)=>syncRouteHead(_ui,_uj)));
+ syncAirModes();
+ renderCfgOverview();
+ refreshCfgChrome();
+ try{syncRestartHint();}catch(e){}
  if(CFGQ)cfgFilter(CFGQ);
  if(_fkid){const _fe=document.getElementById(_fkid);if(_fe)_fe.focus({preventScroll:true});}}
 /* ===== 子卡折叠：分区(A-D)/航线卡/通道卡 点击标题行收展。
@@ -5464,7 +6866,7 @@ function buildForm(){if(!CFG)return;let h='',gh='';
    默认态：分区展开、航线卡与通道卡收起（标题行已含关键摘要） ===== */
 let FOLD={sec:{},route:{},ch:{}};
 try{const _f=JSON.parse(localStorage.getItem('jpcfgfold'));if(_f)FOLD=_f;}catch(e){}
-FOLD.sec=FOLD.sec||{};FOLD.route=FOLD.route||{};FOLD.ch=FOLD.ch||{};
+FOLD.sec=FOLD.sec||{};FOLD.route=FOLD.route||{};FOLD.ch=FOLD.ch||{};FOLD.rtadv=FOLD.rtadv||{};
 function saveFold(){try{localStorage.setItem('jpcfgfold',JSON.stringify(FOLD))}catch(e){}}
 function _foldSibs(h){const body=[];let n=h.nextElementSibling;
  while(n&&!n.classList.contains('grouplab')&&!n.classList.contains('danger')){
@@ -5493,7 +6895,13 @@ function foldSec(g){const body=_foldSibs(g);
 function foldRoute(rh){const _t=_evtT();if(_t&&_t.closest('.danger,.rop'))return;
  const hide=!_isFolded(rh);
  _setFold(rh,_foldSibs(rh),hide);
- FOLD.route[rh.parentElement.dataset.rk]=hide;saveFold();}
+ FOLD.route[rh.parentElement.dataset.rk]=hide;saveFold();
+ /* A1 审计 P1：路由体平坦兄弟链含 rthead 折叠体——外层展开的
+    _setFold 逐件 display:'' 会把内层折叠态一并清空（头报收起、
+    内容全开=击穿），展开分支尾部按存档重放内层折叠（与 applyFolds
+    同句语义，live/重建两路单源） */
+ const rt=rh.parentElement.querySelector('.rthead');
+ if(rt)_setFold(rt,_foldSibs(rt),FOLD.rtadv[rh.parentElement.dataset.rk]!==false);}
 function foldCh(ch){const hide=!_isFolded(ch);
  _setFold(ch,_foldSibs(ch),hide);
  FOLD.ch[ch.parentElement.dataset.ch]=hide;saveFold();
@@ -5508,13 +6916,17 @@ function applyFolds(){
   const ch=c.querySelector('.chhead');
   const fold=FOLD.ch[c.dataset.ch]!==false;
   _setFold(ch,_foldSibs(ch),fold);
-  c.classList.toggle('expanded',!fold);});}
+  c.classList.toggle('expanded',!fold);});
+ /* 航线卡高级约束折叠（r339）：默认收起（无存档即 fold）——
+    低频项（行李直挂/最短衔接/最晚到达/出发时段）默认值即用 */
+ document.querySelectorAll('#cfgform .rthead').forEach(h=>
+  _setFold(h,_foldSibs(h),FOLD.rtadv[h.closest('.rline').dataset.rk]!==false));}
 function expandFolds(){/* 搜索态临时全开，清空后 cfgSearchClear 还原。
    用户卡头也纳入：容器壳扫会按命中可见性强展折叠卡 body，头若不
    随动即「头报收起、内容却显示」的状态分裂——aria/chev 由 _setFold
    单源同步；显式单 body（手风琴卡结构，_foldSibs 会越过 ucard 边界）*/
  document.querySelectorAll('#cfgform .grouplab[data-sec],'
-  +'#cfgform .rline .rhead,#cfgform .chcard .chhead').forEach(
+  +'#cfgform .rline .rhead,#cfgform .chcard .chhead,#cfgform .rthead').forEach(
   h=>_setFold(h,_foldSibs(h),false));
  document.querySelectorAll('#cfgform .uhead2').forEach(h=>{
   const b=h.nextElementSibling;if(b)_setFold(h,[b],false);});}
@@ -5528,25 +6940,50 @@ function toggleUser(h){/* 用户卡收展：纯 display 翻转，不重建表单
  _setFold(h,[body],!willOpen);
  setOpenUser(willOpen?u:-1);}
 function setN(i,k,v){CFG[i].notifier=CFG[i].notifier||{};CFG[i].notifier[k]=_coerce(CFG[i].notifier[k],v);syncUserHead(i);}
+function setHost(el){const v=(el.value||'').trim();
+ const ip=/^(\d{1,3}\.){3}\d{1,3}$/;
+ const host=/^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,62})$/;
+ let bad='';
+ if(!v)bad='监听地址不能为空（本机仅回环请填 127.0.0.1）';
+ else if(ip.test(v)&&v.split('.').some(x=>+x>255))bad='IPv4 每段须在 0–255';
+ else if(!ip.test(v)&&!host.test(v))bad='只支持 IPv4 或主机名';
+ if(bad){el.classList.add('bad');el.focus();toast('❌ '+bad,'err');return;}
+ el.classList.remove('bad');GLB.host=v;syncRestartHint();refreshCfgChrome();}
 /* 无头开关文字联动 / 通道卡状态灯随启用联动 */
+function copyText(el){const t=(el&&el.dataset.copy)||'';if(!t)return;
+ const ok=()=>toast('已复制路径','ok');
+ if(navigator.clipboard&&navigator.clipboard.writeText)
+  navigator.clipboard.writeText(t).then(ok).catch(()=>_copyFallback(t));
+ else _copyFallback(t);}
+function _copyFallback(t){try{const ta=document.createElement('textarea');
+ ta.value=t;ta.style.position='fixed';ta.style.opacity='0';
+ document.body.appendChild(ta);ta.select();document.execCommand('copy');
+ ta.remove();toast('已复制路径','ok');}
+ catch(e){toast('复制失败，请手动选择路径','err');}}
+function glAbs(k,emptyTip){/* 绝对路径只读展示（r341 一切配置透明化；
+ r342 storage 元数据优先：bdir 空也显示 playwright 默认位的绝对路径） */
+ const _m=(GLB_STORE||{})[k]||{};
+ const a=_m.abs||(GLB_ABS||{})[k]||'';
+ if(!a)return '<div class="glabs">'+(emptyTip||'')+'</div>';
+ return '<div class="glabs" title="'+esc(a)+'">→ 绝对路径：'+esc(a)+'</div>';}
 function glbHlChk(el){GLB.headless=el.checked;
  const t=$('glbHlTxt');if(t)t.textContent=el.checked?'后台静默采集':'弹窗可见调试';}
 function chSync(el,i,key){const c=el.closest('.chcard');if(!c)return;
  /* 邮件卡真值在 notifier.emails[k]（多通道数组）：key 形如 email0，
     按单对象键直查恒 miss——勾选「启用此邮件通道」后卡片灯当场熄灭
    （配置值正确、推送正常、刷新恢复） */
- const en=key.indexOf('email')===0
-  ? !!((((CFG[i].notifier||{}).emails)||[])[+key.slice(5)]||{}).enabled
-  : !!(((CFG[i].notifier||{})[key]||{}).enabled);
- c.classList.toggle('on',en);
- const d=c.querySelector('.lgdot');if(d)d.classList.toggle('on',en);
- const m=c.querySelector('.chhead .muted');if(m)m.textContent=en?'已启用':'未启用';
+ const em=key.indexOf('email')===0?((((CFG[i].notifier||{}).emails)||[])[+key.slice(5)]||{}):null;
+ const en=em?!!em.enabled:!!(((CFG[i].notifier||{})[key]||{}).enabled);
+ const ready=_chReady(key.indexOf('email')===0?'email':key,CFG[i],em);
+ c.classList.toggle('on',ready);c.classList.toggle('todo',en&&!ready);
+ const d=c.querySelector('.lgdot');if(d){d.classList.toggle('on',ready);
+  d.classList.toggle('mid',en&&!ready);}
+ const m=c.querySelector('.chhead .muted');if(m)m.textContent=_chLbl(en,ready);
  /* 卡头标题随 user 键刷新（r324 C8）：标题是 lgdot 后的裸文本节点，
     chSync 曾只触灯/muted——填发件账号后「邮件·邮箱通道N」停旧值 */
  if(key.indexOf('email')===0){
   const em=((CFG[i].notifier||{}).emails||[])[+key.slice(5)]||{};
-  const tn=[...c.querySelectorAll('.chhead')[0].childNodes]
-    .find(n=>n.nodeType===3&&(n.textContent||'').indexOf('邮件·')===0);
+  const tn=c.querySelector('.chhead .ch-title');
   if(tn)tn.textContent='邮件·'+(em.user||'邮箱通道'+(+key.slice(5)+1));}}
 function togPlat(i,p,el){CFG[i].platforms=CFG[i].platforms||[];
  const k=CFG[i].platforms.indexOf(p);
@@ -5563,6 +7000,10 @@ function setNtfy(i,k,v){CFG[i].notifier=CFG[i].notifier||{};
  CFG[i].notifier.ntfy[k]=v;
  CFG[i].notifier.ntfy.enabled=!!(CFG[i].notifier.ntfy.topic||'').trim();
  syncUserHead(i);}
+function setBark(i,k,v){CFG[i].notifier=CFG[i].notifier||{};
+ CFG[i].notifier.bark=CFG[i].notifier.bark||{};
+ CFG[i].notifier.bark[k]=v;   /* enabled=显式开关；key/server 字符串直存 */
+ syncUserHead(i);}
 function setSc(i,k,v){CFG[i].notifier=CFG[i].notifier||{};
  CFG[i].notifier.serverchan=CFG[i].notifier.serverchan||{};
  CFG[i].notifier.serverchan[k]=v;
@@ -5574,15 +7015,58 @@ function setSc(i,k,v){CFG[i].notifier=CFG[i].notifier||{};
 function ems(i){const n=(CFG[i].notifier=CFG[i].notifier||{});
  if(n.emails)return n.emails;
  return (n.email&&Object.keys(n.email).length)?[n.email]:[];}
+/* 通道可用性=启用开关×后端实际消费所需的必填键（core/notifier 同源）：
+   只开开关不填凭据的后端会静默跳过——UI 曾报「已启用」的假绿。 */
+function _chReady(typ,u,em){
+ const n=(u||{}).notifier||{};
+ const s=v=>(v==null?'':''+v).trim();
+ if(typ==='dingtalk'){const x=n.dingtalk||{};return !!(x.enabled&&s(x.webhook));}
+ if(typ==='ntfy'){const x=n.ntfy||{};return !!(x.enabled&&s(x.topic));}
+ if(typ==='bark'){const x=n.bark||{};return !!(x.enabled&&s(x.key));}
+ if(typ==='aliyun'){const x=n.aliyun||{};return !!(x.enabled&&s(x.url)&&s(x.user));}
+ if(typ==='serverchan'){const x=n.serverchan||{};return !!(x.enabled&&s(x.send_key));}
+ if(typ==='email'){return !!(em&&em.enabled&&s(em.user)&&s(em.password)&&s(em.to));}
+ if(typ==='imghost'){const x=n.image_host||{};
+  if((x.provider||'freeimage')==='ghimg')return !!(s(x.repo)&&s(x.token));
+  if(x.provider==='smms')return !!s(x.token);return false;}
+ return false;}
+function _chLbl(on,ready){return ready?'已启用':(on?'待完善':'未启用');}
+function togglePw(id,el){
+ const i=document.getElementById(id);if(!i)return;
+ const show=i.type==='password';i.type=show?'text':'password';
+ if(el)el.textContent=show?'隐藏':'显示';}
 function emMig(i){const n=(CFG[i].notifier=CFG[i].notifier||{});
  if(!n.emails){n.emails=(n.email&&Object.keys(n.email).length)?
   [n.email]:[];delete n.email;}
  return n.emails;}
 function setEm(i,k,f,v){emMig(i)[k][f]=v;syncUserHead(i);}
-function addEm(i){emMig(i).push({enabled:false,host:'smtp.163.com',
- port:465,user:'',password:'',to:''});buildForm();}
-function delEm(i,k,b){armConfirm(b||_evtT(),()=>{emMig(i).splice(k,1);buildForm();
- toast('已删除邮箱通道（保存后生效）','ok');});}
+function addEm(i){const arr=emMig(i);
+ arr.push({enabled:false,host:'smtp.163.com',port:465,user:'',password:'',to:''});
+ const k=arr.length-1;
+ /* 新通道自动展开并定位：折叠态只露出标题，用户看不到 SMTP 字段与
+    删除入口（实报「加了邮箱却删除不了」）；同时清理旧 emailN 折叠槽，
+    防删/增后的索引漂移把状态贴到别的卡。 */
+ Object.keys(FOLD.ch||{}).forEach(x=>{if(/^email\d+$/.test(x))delete FOLD.ch[x];});
+ FOLD.ch['email'+k]=false;saveFold();buildForm();
+ const card=document.querySelector('.chcard[data-ch="email'+k+'"]');
+ if(card){card.classList.add('flash');
+  try{card.scrollIntoView({block:'start',behavior:'smooth'});}catch(e){}
+  setTimeout(()=>card.classList.remove('flash'),1600);
+  /* 新卡可编辑不等于可用：焦点直接落到发件账号，键盘用户不用
+     从头 Tab 过启用开关与服务器 chip。 */
+  const inp=card.querySelector('input[placeholder^="you@"]');
+  if(inp)setTimeout(()=>inp.focus({preventScroll:true}),160);}
+ toast('已添加邮箱通道——填写发件账号、授权码与收件人，再打开启用开关','ok');}
+function delEm(i,k,b){const em=(ems(i)||[])[k]||{};
+ armConfirm(b||_evtT(),()=>{emMig(i).splice(k,1);
+  Object.keys(FOLD.ch||{}).forEach(x=>{if(/^email\d+$/.test(x))delete FOLD.ch[x];});
+  buildForm();
+  try{const b=document.querySelector('#cfgform button[onclick="addEm('+i+')"]');
+   if(b)b.focus({preventScroll:true});}catch(e){}
+  toast('已删除邮箱通道「'+(em.user||'邮箱通道'+(k+1))+'」（保存后生效）','ok');},
+  {title:'删除邮箱通道？',
+   message:'将移除「'+(em.user||'邮箱通道'+(k+1))+'」的 SMTP 配置。\n保存配置后生效；保存前可通过「放弃更改」撤回。',
+   label:'删除邮箱通道'});}
 /* 快捷填值 chip（163/QQ）：填入本卡 host 输入框并同步存值 */
 function emHost(b,v,i,k){const c=b.closest('.chcard');
  const inp=c.querySelector('.emhost');
@@ -5622,6 +7106,101 @@ async function testNtfy(i,b){if(b&&b.classList.contains('busy'))return;
   body:JSON.stringify({topic:nt.topic,priority:nt.priority||5})});
   const j=await r.json();
   toast(j.ok?'🔔 测试已发到手机 ntfy，请查收':'❌ '+(j.err||'失败'),j.ok?'ok':'err');}
+ catch(e){toast('❌ '+(/abort|timeout/i.test(String(e))
+   ?'请求超时，请重试':'网络异常，请检查服务是否在运行'),'err');}
+ b.classList.remove('busy');}
+async function openDataFolder(which,action,btn){
+ action=action||'folder';
+ if(which==='bdir'&&!(GLB.browser_dir||'').trim())which='bdir_default';
+ if(btn)btn.classList.add('busy');
+ try{const r=await fetch('/api/open-folder',{method:'POST',
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({which,action})});
+  const j=await r.json();
+  if(!j.ok)toast('❌ '+(j.err||'打开失败'),'err');
+  else if(action==='file')toast('📄 已用默认应用打开：'+(j.path||''),'ok');
+ }catch(e){toast('❌ 打开'+(action==='file'?'文件':'文件夹')+'失败','err');}
+ if(btn)btn.classList.remove('busy');}
+/* 启动级配置重启闭环（用户实报：改了数据库/日志/登录态/内核目录，
+   既无重启提示也无重启操作）：编辑即横幅预警（弱态），保存成功后
+   转强态「需重启生效」+立即重启钮；doRestart 走 /api/restart（后端
+   先拉新实例再自退），前端轮询到服务回来自动刷新页面 */
+const _STARTUP_KEYS=['db_path','log_path','user_data_dir','browser_dir','host','run_on_start'];
+function _startupNorm(k,v){v=String(v==null?'':v).trim();
+ if(k==='db_path')return v||'data/prices.db';
+ if(k==='log_path')return v||'logs/monitor.log';
+ if(k==='user_data_dir')return v||'user_data';
+ if(k==='host')return v||'127.0.0.1';
+ if(k==='run_on_start')return (v==='false'||v==='0')?'false':'true';
+ return v;}
+function _startupChanged(){
+ let clean={};try{clean=JSON.parse(GLB_CLEAN)||{};}catch(e){}
+ return _STARTUP_KEYS.filter(k=>
+  _startupNorm(k,GLB[k]).replace(/\\/g,'/')
+  !==_startupNorm(k,clean[k]).replace(/\\/g,'/'));}
+function syncRestartHint(){
+ const h=$('restartHint');if(!h)return;
+ const ch=_startupChanged(),saved=_restartServerCount();
+ if(!ch.length&&!saved){h.style.display='none';h.innerHTML='';return;}
+ h.style.display='';h.classList.remove('armed');
+ if(ch.length){
+  h.innerHTML='⚠ 启动级配置已修改但未保存（'+ch.length+' 项）——保存后需重启进程生效'
+   +(saved?'；另有 '+saved+' 项已保存待重启':'')
+   +' <button class="btn2" style="padding:5px 12px;font-size:12px;margin-left:8px" onclick="openRestartCenter()">查看迁移预案</button>';
+ }else{
+  h.classList.add('armed');
+  h.innerHTML='⚠ 启动级配置已保存，需重启进程生效（'+saved+' 项）'
+   +' <button class="btn2" style="padding:5px 12px;font-size:12px;margin-left:8px" onclick="openRestartCenter()">迁移预案</button>'
+   +' <button class="btn2" style="padding:5px 12px;font-size:12px;margin-left:6px" onclick="doRestart(this)">🔄 立即重启</button>';}
+ refreshCfgChrome();}
+function _restartArmed(){
+ const h=$('restartHint');if(!h)return;
+ h.style.display='';h.classList.add('armed');
+ h.innerHTML='⚠ 启动级配置已保存，需重启进程生效 '
+  +'<button class="btn2" style="padding:5px 12px;font-size:12px;margin-left:8px" onclick="doRestart(this)">🔄 立即重启</button>';}
+function doRestart(b){if(b&&b.classList.contains('busy'))return;
+ const rows=_restartDiffRows();
+ const diffs=rows.map(r=>r.label+'：'+((r.old==null||r.old==='')?'（默认）':r.old)
+   +' → '+((r.new==null||r.new==='')?'（默认）':r.new)).join('\n');
+ openConfirm('重启监控进程？',
+  '采集与推送将中断数十秒，重启完成后本页自动恢复。'
+  +(diffs?('\n\n本次差量：\n'+diffs):''),'立即重启',()=>doRestartNow(b));}
+async function doRestartNow(b){
+ if(b)b.classList.add('busy');
+ try{const r=await fetch('/api/restart',{method:'POST'});
+  const j=await r.json();
+  if(!j.ok){toast('❌ 重启失败：'+(j.err||''),'err');
+   if(b)b.classList.remove('busy');return;}}
+ catch(e){toast('❌ 重启请求失败：'+e,'err');
+  if(b)b.classList.remove('busy');return;}
+ const h=$('restartHint');
+ if(h){h.style.display='';h.classList.add('armed');
+  h.innerHTML='🔄 进程重启中，等待服务回来…（约 10-30 秒，完成后自动刷新）';}
+ toast('🔄 重启指令已发出','ok');
+ _restartPoll(Date.now()+60000);}
+async function _restartPoll(deadline){
+ /* 双拍确认：旧进程退出前的尾巴应答不算数（间隔 2s 连续两拍 200
+    才判定新实例就绪）；60s 预算耗尽如实报，指引手动启动 */
+ await new Promise(res=>setTimeout(res,3000));
+ for(;;){
+  try{const r=await fetch('/api/config',{cache:'no-store'});
+   if(r.ok){await new Promise(res=>setTimeout(res,2000));
+    const rb=await fetch('/api/config',{cache:'no-store'});
+    if(rb.ok){location.reload();return;}}}catch(e){}
+  if(Date.now()>deadline)break;
+  await new Promise(res=>setTimeout(res,1500));}
+ const h=$('restartHint');
+ if(h)h.innerHTML='⚠ 超时未检测到进程回来——请到服务器手动启动（python main.py）';
+ toast('❌ 重启超时，请手动检查进程','err');}
+async function testBark(i,b){if(b&&b.classList.contains('busy'))return;
+ const bk=(CFG[i].notifier||{}).bark||{};
+ if(!(bk.key||'').trim()){toast('❌ 请先填写 Bark Key','err');return;}
+ b.classList.add('busy');
+ try{const r=await fetch('/api/test-bark',{method:'POST',
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({key:bk.key,server:bk.server||''})});
+  const j=await r.json();
+  toast(j.ok?'🔔 Bark 测试已推到 iPhone，请查收':'❌ '+(j.err||'失败'),j.ok?'ok':'err');}
  catch(e){toast('❌ '+(/abort|timeout/i.test(String(e))
    ?'请求超时，请重试':'网络异常，请检查服务是否在运行'),'err');}
  b.classList.remove('busy');}
@@ -5672,10 +7251,20 @@ function _canon(cur,clean){
   &&cur.trim()!==''&&!isNaN(+cur))return +cur;
  return cur;}
 /* 头部摘要单源（模板渲染与随行刷新共用一件，r324 bugfix） */
-function _rsum(r){return esc((r.dates||[]).join('、'))
+function _rsum(r){/* 日期集摘要收拢（30 天快选曾把 30 个日期全列
+   进卡头→挤压标题竖排断字）：≤3 全列；>3 首日+末日+计数（区间
+   语义「10/19 起 30 天」按连续段折叠留给高级视图，卡头只保辨识） */
+ const ds=r.dates||[];
+ const dsum=ds.length<=3?ds.join('、')
+  :(ds.length>3?ds[0]+' 起 '+ds.length+' 天（至 '+ds[ds.length-1]+'）':'');
+ const _fn=_rfCount(r);
+ return esc(dsum)
  +(r.alert_direct>0?' · 直飞≤￥'+esc(r.alert_direct):'')
  +(r.alert_transfer>0?' · 中转≤￥'+esc(r.alert_transfer):'')
- +((r.dep_time_min||r.dep_time_max)?' · '+(r.dep_time_min||'00:00')+'–'+(r.dep_time_max||'24:00')+' 出发':'');}
+ +((r.dep_time_min||r.dep_time_max)?' · '+(r.dep_time_min||'00:00')+'–'+(r.dep_time_max||'24:00')+' 出发':'')
+ +((r.arr_time_min||r.arr_time_max)?' · '+(r.arr_time_min||'00:00')+'–'+(r.arr_time_max||'24:00')+' 到达':'')
+ +(r.price_max?' · ≤￥'+r.price_max:'')+(r.no_cross?' · 不跨天':'')
+ +(_fn?' · 筛'+_fn:'');}
 /* 航线卡头部随行刷新（r324 bugfix，用户实报「选择航线渲染错误」）：
    setRoute 只改模型从不触 UI——addRoute 种子头（SHA上海→HAK海口）
    与面板新选城市（如北京/长沙）同卡劈叉，卡头航线身份停在新卡
@@ -5685,32 +7274,87 @@ function _rsum(r){return esc((r.dates||[]).join('、'))
    保存段 _cnorm 收口） */
 let CFGS='all';
 function cfgScopeSet(sc){CFGS=sc;
- /* chips .on 同步（与 depwin chips 同视觉语言） */
- document.querySelectorAll('#cfgScopeBar .chip').forEach(el=>
+ /* chips .on 同步（只动 scope 片；status 片由 CFGST 单源，曾被一并
+    清 on 致「范围一点、状态高亮消失」） */
+ document.querySelectorAll('#cfgScopeBar .chip[data-sc]').forEach(el=>
   el.classList.toggle('on',el.dataset.sc===sc));
  cfgScopeApply();}
-function cfgScopeApply(){/* 过滤 .rline 卡片：scope=dom 隐国际、intl 隐国内 */
+function cfgScopeApply(){/* 过滤 .rline 卡片：scope=dom/intl + status=on/off/todo */
+ let _shown=0,_total=0;
  document.querySelectorAll('.rline[data-rk]').forEach(rl=>{
   const rk=rl.dataset.rk.split(':');
   const r=(CFG[rk[0]]||{}).routes?CFG[rk[0]].routes[rk[1]]:null;
-  if(!r)return;
+  if(!r)return;_total++;
   const intl=isIntlCode(r.from)||isIntlCode(r.to);
-  const show=CFGS==='all'||(CFGS==='intl'?intl:!intl);
-  rl.style.display=show?'':'none';});}
+  const scopeOn=CFGS==='all'||(CFGS==='intl'?intl:!intl);
+  const issues=_routeIssues(r);
+  const stOn=CFGST==='all'||(CFGST==='on'?r.enabled!==false
+   :(CFGST==='off'?r.enabled===false:issues.length>0));
+  rl.classList.toggle('needswork',issues.length>0);
+  const show=scopeOn&&stOn;if(show)_shown++;
+  rl.style.display=show?'':'none';});
+ const emp=$('cfgRosterEmpty');
+ if(emp)emp.style.display=(_total&&!_shown)?'':'none';}
 function isIntlCode(c){/* 国际码判定（r325，与 core.intl MAINLAND_CODES
    同源——服务端 /api/config intl.mainland 下发全集）：合法 IATA3 且
    不在大陆码集即国际（港台澳/海外目的地自动亮徽，零配置语义同步） */
  c=String(c||'').toUpperCase();
  return /^[A-Z]{3}$/.test(c)&&!((INTL&&INTL.mainland)||[]).includes(c);}
+function _rfCount(r){let n=0;
+ if(String(r.airlines||'').trim())n++;
+ if(r.no_lcc)n++;if(r.min_baggage>0)n++;if(r.widebody_only)n++;
+ if(r.transfer_baggage==='direct')n++;
+ if(r.dep_time_min||r.dep_time_max)n++;
+ if(r.arr_time_min||r.arr_time_max)n++;
+ if(r.price_max>0)n++;if(r.max_duration_h>0)n++;
+ if(r.no_cross)n++;if(r.exclude_stop)n++;if(r.exclude_share)n++;
+ if(r.transfer_layover_min>0||r.transfer_layover_max>0)n++;
+ if(r.transfer_arrival_max&&r.transfer_arrival_max!=='02:00')n++;
+ if(r.direct_only)n++;
+ return n;}
+function _rfSummary(r){const out=[];
+ const air=String(r.airlines||'').trim();
+ if(air){const parts=air.split(/[,，]/).map(x=>x.trim()).filter(Boolean);
+  const codes=new Set(parts.map(x=>{const t=x.replace(/^!/,'').trim();
+   const a=(typeof AIRALIAS!=='undefined'&&AIRALIAS.alias)||{};
+   return a[t]||a[t.toUpperCase()]||t.toUpperCase();}));
+  out.push('航司'+codes.size+'项');}
+ if(r.price_max>0)out.push('≤￥'+r.price_max);
+ if(r.dep_time_min||r.dep_time_max)out.push('出发'+(r.dep_time_min||'00:00')+'–'+(r.dep_time_max||'24:00'));
+ if(r.arr_time_min||r.arr_time_max)out.push('到达'+(r.arr_time_min||'00:00')+'–'+(r.arr_time_max||'24:00'));
+ if(r.exclude_stop)out.push('无经停');if(r.exclude_share)out.push('无共享');
+ if(r.no_lcc)out.push('无廉航');if(r.no_cross)out.push('不跨天');
+ if(r.min_baggage>0)out.push('行李≥'+r.min_baggage+'kg');
+ if(r.max_duration_h>0)out.push('时长≤'+r.max_duration_h+'h');
+ if(r.transfer_layover_min>0||r.transfer_layover_max>0)
+  out.push('衔接'+(r.transfer_layover_min||0)+'–'+(r.transfer_layover_max||'∞')+'分');
+ if(r.transfer_baggage==='direct')out.push('联运直挂');
+ if(r.widebody_only)out.push('仅大机型');
+ if(r.direct_only)out.push('只要直飞');
+ if(r.transfer_arrival_max&&r.transfer_arrival_max!=='02:00')
+  out.push('次日≤'+r.transfer_arrival_max);
+ return out.length?out.slice(0,4).join(' · ')+(out.length>4?' +'+(out.length-4):''):'默认不限';}
+function syncFilterHead(i,j){const r=CFG[i]&&CFG[i].routes&&CFG[i].routes[j];if(!r)return;
+ const sum=$('rfsum-'+i+'-'+j),cnt=$('rfdcnt-'+i+'-'+j);
+ const n=_rfCount(r);
+ if(sum)sum.textContent=_rfSummary(r);
+ if(cnt){cnt.textContent=n?('筛 '+n):'';cnt.style.display=n?'':'none';}
+ const rl=document.querySelector('.rline[data-rk="'+i+':'+j+'"]');
+ if(rl){const b=rl.querySelector('.rfltbadge');
+  if(b){b.textContent=n?('筛 '+n+' 项'):'';b.style.display=n?'':'none';}}}
 function syncRouteHead(i,j){
  const r=CFG[i].routes[j];
  const rl=document.querySelector('.rline[data-rk="'+i+':'+j+'"]');
  if(!rl)return;
- const rc=rl.querySelector('.rtcode');if(rc)rc.textContent=(r.from||'')+'→'+(r.to||'');
+ const rc=rl.querySelector('.rtcode');if(rc)rc.textContent=(r.from||'')+(_rtOn(r)?'⇄':'→')+(r.to||'');
  const ri=rl.querySelector('.rintl');if(ri)ri.style.display=((isIntlCode(r.from)||isIntlCode(r.to))?'':'none');
- const rr=rl.querySelector('.rrt');if(rr)rr.style.display=(r.ret_date?'':'none');
- const nm=rl.querySelector('.rhead b');if(nm)nm.textContent=(r.from_name||'')+' → '+(r.to_name||'');
- const sm=rl.querySelector('.rhead .muted');if(sm)sm.innerHTML=_rsum(r);}
+ const rr=rl.querySelector('.rrt');if(rr){const _n=_rdsLen(r);
+  rr.style.display=(_rtOn(r)?'':'none');
+  rr.textContent='🔁 往返票'+(_n>1?'×'+_n:'');}
+ const nm=rl.querySelector('.rhead b');if(nm)nm.textContent=(r.from_name||'')
+  +(_rtOn(r)?' ⇄ ':' → ')+(r.to_name||'');   /* 往返票双向形态（用户建议：上海 ⇄ 海口比单向箭头更达意） */
+ const sm=rl.querySelector('.rhead .muted');if(sm)sm.innerHTML=_rsum(r);
+ syncFilterHead(i,j);}
 /* 用户卡头+分区头摘要随行刷新单源（r324 穷举审计 C1-C6，与
    syncRouteHead 同律）：九写点（用户名/通知器/渠道/五通道/特价）改
    模型曾不触跨卡摘要面——uhead2 名/uava/四 pill、A/B/D/E 区头
@@ -5722,8 +7366,14 @@ function syncUserHead(i){
  const card=document.querySelectorAll('#cfgform .ucard')[i];if(!card)return;
  const nt=u.notifier||{},dt=nt.dingtalk||{};
  const _sp0=(u.specials||[])[0];
- const _spOn=!!(_sp0&&_sp0.enabled!==false&&(_sp0.from||_sp0.from_name));
+ const _spOn=!!(_sp0&&_sp0.enabled!==false&&(_sp0.from||_sp0.from_name)&&Number(_sp0.max_price)>0);   /* r339i 审计 P3：价位 0/缺=配置未完形，徽标不得报「开」 */
  const _wtOn=nt.win_toast!==false;
+ const _emL=ems(i);
+ const _okDt=_chReady('dingtalk',u),_okNt=_chReady('ntfy',u),_okBk=_chReady('bark',u),
+       _okAy=_chReady('aliyun',u),_okSc=_chReady('serverchan',u),
+       _okEm=_emL.map(e=>_chReady('email',u,e));
+ const _anyOn=!!(dt.enabled||((u.notifier||{}).ntfy||{}).enabled||((u.notifier||{}).bark||{}).enabled||((u.notifier||{}).aliyun||{}).enabled||((u.notifier||{}).serverchan||{}).enabled||_emL.some(e=>e.enabled));
+ const _anyPush=!!(_okDt||_okNt||_okBk||_okAy||_okSc||_okEm.some(Boolean));
  const head=card.querySelector('.uhead2');if(head){
   const b=head.querySelector('b');if(b)b.textContent=u.name||'';
   const av=head.querySelector('.uava');if(av)av.textContent=(u.name||'?').slice(0,1);
@@ -5731,22 +7381,211 @@ function syncUserHead(i){
   if(pills[0])pills[0].textContent=(u.routes||[]).length+' 航线';
   if(pills[1]){pills[1].textContent='🎯特价'+(_spOn?'开':'关');pills[1].classList.toggle('ok',_spOn);}
   if(pills[2]){pills[2].textContent='🔔弹窗'+(_wtOn?'开':'关');pills[2].classList.toggle('ok',_wtOn);}
-  if(pills[3]){pills[3].textContent=dt.enabled?'推送已启用':'推送未启用';pills[3].classList.toggle('ok',!!dt.enabled);}
+  if(pills[3]){pills[3].textContent=_anyPush?'推送已就绪':(_anyOn?'推送待完善':'未配推送通道');
+   pills[3].classList.toggle('ok',_anyPush);pills[3].classList.toggle('warn',_anyOn&&!_anyPush);}
   const del=card.querySelector('button.danger[onclick^="delUser"]');
   if(del)del.textContent='✕ 删除用户 '+(u.name||'');}
  const gs=(no,txt)=>{const el=card.querySelector(
    '.grouplab[data-sec="'+no+'"] .gsum');if(el)el.textContent=txt;};
- gs('A','推送与提醒偏好 · 钉钉'+(dt.enabled?'已启用':'未启用')+' · 弹窗'+(_wtOn?'开':'关'));
+ gs('A','推送与提醒偏好 · 钉钉'+_chLbl(!!dt.enabled,_okDt)+' · 弹窗'+(_wtOn?'开':'关'));
  gs('B',(u.platforms||[]).length+' / 5 渠道');
  gs('D',_spOn?'已启用':'未启用');
  gs('E',[
-  dt.enabled?'钉钉✓':'钉钉×',
-  (nt.ntfy||{}).enabled?'ntfy✓':null,
-  (nt.aliyun||{}).enabled?'电话✓':null,
-  (nt.serverchan||{}).enabled?'微信✓':null,
-  (ems(i).filter(e=>e.enabled).length
-    ?'邮件✓×'+ems(i).filter(e=>e.enabled).length:null)
- ].filter(Boolean).join(' · ')||'未配置任何渠道');}
+  _okDt?'钉钉✓':(dt.enabled?'钉钉待完善':'钉钉×'),
+  (nt.ntfy||{}).enabled?(_okNt?'ntfy✓':'ntfy待完善'):null,
+  ((nt.bark||{}).enabled?(_okBk?'Bark✓':'Bark待完善'):null),
+  (nt.aliyun||{}).enabled?(_okAy?'电话✓':'电话待完善'):null,
+  (nt.serverchan||{}).enabled?(_okSc?'微信✓':'微信待完善'):null,
+  (_emL.filter(e=>e.enabled).length
+    ?('邮件✓×'+_okEm.filter(Boolean).length+(_emL.filter(e=>e.enabled).length>_okEm.filter(Boolean).length?' · 待完善':'')):null)
+ ].filter(Boolean).join(' · ')||'未配置任何渠道');
+ /* 凭据字段（webhook/topic/key/url/user）不经过 chSync：同一处按
+    就绪真值刷新卡灯/边框/词面，否则填完仍显示「待完善」直到重渲。 */
+ const _syncCard=(key,ready,en)=>{const c=card.querySelector(
+   '.chcard[data-ch="'+key+'"]');if(!c)return;
+  c.classList.toggle('on',!!ready);c.classList.toggle('todo',!!en&&!ready);
+  const d=c.querySelector('.lgdot');if(d){d.classList.toggle('on',!!ready);
+   d.classList.toggle('mid',!!en&&!ready);}
+  const m=c.querySelector('.chhead .muted');if(m)m.textContent=_chLbl(!!en,!!ready);};
+ _syncCard('dingtalk',_okDt,!!dt.enabled);
+ _syncCard('ntfy',_okNt,!!((nt.ntfy||{}).enabled));
+ _syncCard('bark',_okBk,!!((nt.bark||{}).enabled));
+ _syncCard('aliyun',_okAy,!!((nt.aliyun||{}).enabled));
+ _syncCard('serverchan',_okSc,!!((nt.serverchan||{}).enabled));
+ _emL.forEach((em,k)=>_syncCard('email'+k,_okEm[k],!!em.enabled));
+ try{refreshCfgChrome();}catch(e){}}
+/* 航司白名单实时解析预览（r339h 用户实报「东航 vs 东方航空」）：
+   条目→码逐条可视（与后端匹配同源字典），不在册条目如实标注
+   「按名称片段匹配」——输入语义零黑箱 */
+function airPreviewHTML(v){
+ const es=String(v||"").replace(/，/g,",").split(",").map(s=>s.trim()).filter(Boolean);
+ if(!es.length||!AIRALIAS.alias)return "";
+ return es.map(e=>{
+  const ban=e.charAt(0)==="!";const t=(ban?e.slice(1):e).trim();
+  if(!t)return "";
+  const c=AIRALIAS.alias[t]||AIRALIAS.alias[t.toUpperCase()]||"";
+  const nm=c?(AIRALIAS.name[c]||""):"";
+  return '<span class="airtag'+(ban?" ban":"")+'">'+(ban?"✗ 排除 ":"")
+   +(c?esc(t)+' <b>→ '+esc(c)+"</b>"+(nm?" "+esc(nm):"")
+      :'<span class="airun">'+esc(t)+" 不在册 · 按名称片段匹配</span>")
+   +"</span>";}).join("");}
+function _airTokens(v){return String(v||'').replace(/，/g,',').split(',')
+ .map(s=>s.trim()).filter(Boolean);}
+function _airParse(t){const ban=String(t||'').charAt(0)==='!';
+ const q=String(ban?String(t).slice(1):t).trim();
+ const c=AIRALIAS.alias[q]||AIRALIAS.alias[q.toUpperCase()]||'';
+ return {ban,q,c,nm:c?(AIRALIAS.name[c]||''):''};}
+function airHasUnknown(v){return _airTokens(v).some(t=>!_airParse(t).c);}
+function airCloseSug(i,j){const b=document.getElementById('airsug-'+i+'-'+j);
+ if(b){b.innerHTML='';b.style.display='none';}}
+function airBlur(i,j){setTimeout(()=>airCloseSug(i,j),160);}
+function _airQuickHTML(i,j){
+ const qs=[['MU','东航'],['CA','国航'],['CZ','南航'],['HU','海航'],
+  ['3U','川航'],['MF','厦航'],['9C','春秋'],['HO','吉祥']];
+ return qs.map(([c,n])=>'<span class="chip" data-air="'+c
+  +'" role="button" tabindex="0" title="点加 '+n+'（'+c+'）；右上「只看/排除」决定加入方式"'
+  +' onclick="airQuickAdd('+i+','+j+',\''+c+'\',this)"'
+  +' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();airQuickAdd('+i+','+j+',\''+c+'\',this)}">'
+  +n+' <b style="font-family:var(--num);font-weight:600;opacity:.75">'+c+'</b></span>').join('');}
+function airChipsHTML(v,i,j){const es=_airTokens(v);
+ return es.map((t,idx)=>{const p=_airParse(t);
+  const lead=p.ban?'✗ ':'';let body='';
+  if(p.c){
+   body=p.q&&p.q.toUpperCase()!==p.c
+    ?esc(p.q)+' → <b>'+esc(p.c)+'</b>'
+    :'<b>'+esc(p.c)+'</b>'+(p.nm?' <span class="airnm">'+esc(p.nm)+'</span>':'');
+  }else body=esc(p.q)+' <span style="color:var(--warn-deep)">片段</span>';
+  return '<span class="airchip'+(p.ban?' ban':'')+(p.c?'':' unk')+'" title="'
+   +esc(p.c?(p.q+' = '+p.c+' '+(p.nm||'')):(p.q+' 不在别称表：按名称片段匹配'))
+   +'">'+(p.ban?'<span style="color:var(--red)">✗ 排除</span> ':'')+body
+   +'<i role="button" tabindex="0" aria-label="移除 '+esc(p.q)+'"'
+   +' onclick="airDrop('+i+','+j+','+idx+')"'
+   +' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();airDrop('+i+','+j+','+idx+')}">✕</i></span>';}).join('');}
+function _airInput(i,j){const rl=document.querySelector('.rline[data-rk="'+i+':'+j+'"]');
+ return rl?rl.querySelector('.airfield input'):null;}
+function airMode(i,j,m,el){_AIRMODE[i+':'+j]=m;
+ const box=el&&el.parentElement;if(box)box.querySelectorAll('span').forEach(x=>
+  x.classList.toggle('on',x.dataset.m===m));
+ const inp=_airInput(i,j);if(inp)inp.placeholder=m==='out'
+  ?'输入要排除的航司：东航 / 东方航空 / MU；! 前缀等价'
+  :'输入要看航司：东航 / 东方航空 / MU，逗号分隔；留空=不限';}
+function syncAirModes(){document.querySelectorAll('#cfgform .airmode').forEach(box=>{
+ const rl=box.closest('.rline');if(!rl)return;
+ const m=_AIRMODE[rl.dataset.rk]||'in';
+ box.querySelectorAll('span').forEach(x=>x.classList.toggle('on',x.dataset.m===m));});}
+function _airSetValue(i,j,inp,val){if(!inp)return;
+ inp.value=val;CFG[i].routes[j].airlines=val;
+ const sg=document.getElementById('airsug-'+i+'-'+j);
+ if(sg){sg.innerHTML='';sg.style.display='none';}
+ syncFilterHead(i,j);airPreview(i,j,inp);}
+function airQuickAdd(i,j,code,el){
+ const inp=_airInput(i,j);if(!inp)return;
+ const mode=_AIRMODE[i+':'+j]||'in';
+ const toks=_airTokens(inp.value);
+ const same=toks.some(t=>{const p=_airParse(t);return p.c===code&&p.ban===(mode==='out');});
+ const other=toks.some(t=>{const p=_airParse(t);return p.c===code&&p.ban!==(mode==='out');});
+ if(same){toast('该航司已在此侧：'+code,'');return;}
+ if(other){toast('同一航司不能同时出现在「只看」和「排除」——请先移除另一侧','err');return;}
+ const nv=(inp.value?inp.value.replace(/[,\s]+$/,'')+', ':'')+(mode==='out'?'!':'')+code;
+ _airSetValue(i,j,inp,nv);
+ toast((mode==='out'?'✗ 排除 ':'✓ 只看 ')+code+'（下方即时解析）','ok');}
+function airDrop(i,j,idx){const inp=_airInput(i,j);if(!inp)return;
+ const toks=_airTokens(inp.value);toks.splice(idx,1);
+ _airSetValue(i,j,inp,toks.join(', '));}
+function airSuggest(i,j,inp){
+ const box=document.getElementById('airsug-'+i+'-'+j);if(!box)return;
+ const m=String(inp.value||'').match(/(?:^|,)\s*([^,]*)$/);
+ let q=(m?m[1]:'').trim();const ban=q.charAt(0)==='!';q=ban?q.slice(1).trim():q;
+ if(!q){box.innerHTML='';box.style.display='none';return;}
+ const HOT=['MU','CA','CZ','HU','3U','MF','9C','HO','FM','ZH'];
+ const rank=(k,n,c)=>{let s=String(k).length;
+  if(k===q)s-=100;else if(String(k).indexOf(q)===0)s-=50;
+  if(n&&n.indexOf(q)===0)s-=20;
+  if(c===q.toUpperCase())s-=90;
+  if(HOT.indexOf(c)>=0)s-=40;   /* 主流承运人优先：东→东航而非东海 */
+  return s;};
+ const best={};
+ Object.entries(AIRALIAS.alias||{}).forEach(([k,c])=>{
+  if(k.toLowerCase().indexOf(q.toLowerCase())<0&&c!==q.toUpperCase())return;
+  const n=AIRALIAS.name[c]||'';const sc=rank(k,n,c);
+  /* 同码多写法取最佳匹配键：先到先得曾让 MU 停在「中国东方航空」
+     （不以前缀简化形命中），候选序被 DZ/SC 挤到末位 */
+  if(!best[c]||sc<best[c].sc)best[c]={c,k,n,sc};});
+ const hits=Object.values(best).sort((a,b)=>a.sc-b.sc
+  ||a.c.localeCompare(b.c));
+ box.innerHTML=hits.slice(0,8).map(h=>'<span class="asg" role="button" tabindex="0"'
+  +' onclick="airPick('+i+','+j+',\''+h.c+'\','+(ban?1:0)+')"'
+  +' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();airPick('+i+','+j+',\''+h.c+'\','+(ban?1:0)+')}">'
+  +'<b>'+esc(h.c)+'</b><span>'+esc(h.n||h.k)+'</span>'
+  +'<span class="m">'+esc(h.k===h.c?h.n:(h.n?h.k+' · '+h.n:h.k))+'</span></span>').join('')
+  ||('<span class="asg" style="cursor:default;color:var(--warn-deep)">'
+    +esc(q)+' 不在别称表 · 将按名称片段匹配（宁缺勿错：请确认拼写）</span>');
+ box.style.display=box.innerHTML?'':'none';}
+function airPick(i,j,code,ban){const inp=_airInput(i,j);if(!inp)return;
+ const m=String(inp.value||'').match(/(?:^|,)\s*([^,]*)$/);
+ const head=m?String(inp.value).slice(0,m.index+(m[0].startsWith(',')?1:0)):'';
+ const base=head.replace(/[,\s]+$/,'');
+ const nv=(base?base+', ':'')+(ban?'!':'')+code;
+ _airSetValue(i,j,inp,nv);
+ const box=document.getElementById('airsug-'+i+'-'+j);if(box){box.innerHTML='';box.style.display='none';}
+ inp.focus();}
+function airKey(ev,i,j,inp){if(ev.key==='Enter'){ev.preventDefault();
+ const box=document.getElementById('airsug-'+i+'-'+j);
+ const first=box&&box.querySelector('.asg');
+ if(first){first.click();return;}
+ if(inp.value.trim()){setRoute(i,j,'airlines',inp.value.trim());
+  airPreview(i,j,inp);toast('航司条件已记录（保存后生效）','ok');}}}
+function airPreview(i,j,inp){
+ const pv=document.getElementById("airpv-"+i+"-"+j);
+ if(pv){const unk=airHasUnknown(inp.value);
+  /* 已全部识别时让位给 chips（同一信息不铺两遍）；出现表外条目
+  才展开逐项解析行，明确「片段匹配」风险 */
+  pv.innerHTML=unk?airPreviewHTML(inp.value):'';
+  pv.style.display=unk&&pv.innerHTML?"":"none";}
+ const ch=document.getElementById('airchips-'+i+'-'+j);
+ if(ch)ch.innerHTML=airChipsHTML(inp.value,i,j);
+ airSuggest(i,j,inp);
+ syncFilterHead(i,j);}
+/* 智能预设：一键组合多条筛选而不是让用户逐项猜（再次点击=取消该组） */
+function _presetOn(r,k){
+ if(k==='easy')return !!(r.direct_only&&r.no_lcc&&r.exclude_stop&&r.exclude_share);
+ if(k==='day')return (r.dep_time_min==='06:00'&&r.dep_time_max==='18:00'
+  &&r.arr_time_min==='06:00'&&r.arr_time_max==='23:59'&&r.no_cross);
+ if(k==='lowlay')return Number(r.transfer_layover_min)===60&&Number(r.transfer_layover_max)===240;
+ if(k==='bag')return Number(r.min_baggage)===20&&r.transfer_baggage==='direct';
+ return false;}
+function applyRoutePreset(i,j,k,el){const r=CFG[i].routes[j];
+ if(k==='clear'){
+  ['airlines','no_lcc','min_baggage','widebody_only','transfer_baggage',
+   'dep_time_min','dep_time_max','arr_time_min','arr_time_max','price_max',
+   'max_duration_h','no_cross','exclude_stop','exclude_share',
+   'transfer_layover_min','transfer_layover_max','direct_only'].forEach(x=>{
+   if(x==='no_lcc'||x==='widebody_only'||x==='no_cross'||x==='exclude_stop'
+    ||x==='exclude_share')r[x]=false;
+   else if(x==='min_baggage'||x==='price_max'||x==='max_duration_h'
+    ||x==='transfer_layover_min'||x==='transfer_layover_max')r[x]=0;
+   else r[x]='';});
+  r.transfer_arrival_max='02:00';FOLD.rtadv[i+':'+j]=false;buildForm();
+  toast('已清空该航线筛选约束（日期与心理价保留）','ok');return;}
+ const on=_presetOn(r,k);
+ if(k==='easy'){
+  /* 不抹 alert_transfer：direct_only 已在后端强制关断中转门，保留
+     原中转价让「再点取消」可无损恢复（预设不应成为数据破坏面） */
+  r.direct_only=!on;r.no_lcc=!on;r.exclude_stop=!on;r.exclude_share=!on;}
+ else if(k==='day'){
+  if(on){r.dep_time_min='';r.dep_time_max='';r.arr_time_min='';
+   r.arr_time_max='';r.no_cross=false;}
+  else{r.dep_time_min='06:00';r.dep_time_max='18:00';
+   r.arr_time_min='06:00';r.arr_time_max='23:59';r.no_cross=true;}}
+ else if(k==='lowlay'){
+  if(on){r.transfer_layover_min=0;r.transfer_layover_max=0;}
+  else{r.transfer_layover_min=60;r.transfer_layover_max=240;}}
+ else if(k==='bag'){
+  if(on){r.min_baggage=0;r.transfer_baggage='';}
+  else{r.min_baggage=20;r.transfer_baggage='direct';}}
+ FOLD.rtadv[i+':'+j]=false;buildForm();
+ toast((on?'已取消预设：':'已应用预设：')+({easy:'省心直飞',day:'白天出行',
+  lowlay:'少中转久等',bag:'行李优先'}[k]||k)+'（保存后生效）','ok');}
 function setRoute(i,j,k,v){CFG[i].routes[j][k]=_coerce(CFG[i].routes[j][k],v);
  if(k==='from_name'||k==='to_name'){const r=CFG[i].routes[j];
   if(CITY[r.from_name])r.from=CITY[r.from_name];
@@ -5755,7 +7594,9 @@ function setRoute(i,j,k,v){CFG[i].routes[j][k]=_coerce(CFG[i].routes[j][k],v);
   else if(INTLN[r.to_name])r.to=INTLN[r.to_name];}
  if(k==='from_name'||k==='to_name'||k==='from'||k==='to'
    ||k==='alert_direct'||k==='alert_transfer'
-   ||k==='dep_time_min'||k==='dep_time_max'||k==='ret_date')syncRouteHead(i,j);}
+   ||k==='dep_time_min'||k==='dep_time_max'||k==='arr_time_min'
+   ||k==='arr_time_max'||k==='ret_date')syncRouteHead(i,j);
+ syncFilterHead(i,j);}
 /* 特价订阅（r319）：单条 specials[0] 承载。首触建档（未配置用户
    零键零打扰——GET/POST verbatim 往返不留垃圾键）；布尔直存、数值
    归一（空串留空=后端缺省），字符串原样。 */
@@ -5775,11 +7616,23 @@ function setRouteEnabled(i,j,on){
   const rb=rl.querySelector('.rbadge');if(rb)rb.textContent=on?'':'已停用';}
  const cs=$('csum-'+i);
  if(cs){const rs=CFG[i].routes||[],en=rs.filter(r=>r.enabled!==false).length,
-  dis=rs.length-en;cs.textContent=en+' 条监控中'+(dis?' · '+dis+' 条已停用':'');}}
+  dis=rs.length-en;cs.textContent=en+' 条监控中'+(dis?' · '+dis+' 条已停用':'');}
+ try{refreshCfgChrome();}catch(e){}
+ toast(on?'航线已启用（保存后生效）':'航线已停用：保留全部配置，调度与推送跳过（保存后生效）',on?'ok':'ok');}
 /* 出发日期 chips：多日期是产品能力不是配置技巧（裸文本逗号分隔不可用——
    用户不知道也没法安心多选）。输入三通道等价：文本直输（10-08 自动补
    年、2026/10/8 归一化）/ 回车提交 / 📅 唤原生日历（showPicker）。
    原生 date 控件外观与站内不搭且必须开日历才看得见值——文本为主入口。 */
+let _DATEVAL={};   /* 日期工具输入值跨 buildForm 保持（区间起止尤其：
+   添加一颗日期不应把另一颗已选范围冲掉）；单日添加成功显式清空 */
+document.addEventListener('input',e=>{
+ const el=e.target;
+ if(el&&el.id&&el.type==='date'&&el.closest&&el.closest('#cfgform')){
+  if(el.value)_DATEVAL[el.id]=el.value;else delete _DATEVAL[el.id];}});
+document.addEventListener('change',e=>{
+ const el=e.target;
+ if(el&&el.id&&el.type==='date'&&el.closest&&el.closest('#cfgform')){
+  if(el.value)_DATEVAL[el.id]=el.value;else delete _DATEVAL[el.id];}});
 function _normDate(v){
  v=(v||'').trim().replace(/\//g,'-');
  let m=v.match(/^(\d{1,2})-(\d{1,2})$/);        /* 10-8 → 补年 */
@@ -5789,20 +7642,50 @@ function _normDate(v){
   if(m)v=m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');}
  if(!/^\d{4}-\d{2}-\d{2}$/.test(v))return null;
  const d=new Date(v+'T00:00:00');
- return isNaN(d)?null:v;}
-function addDate(i,j){
- const inp=document.getElementById('dpick-'+i+'-'+j);
- const v=_normDate(inp&&inp.value);
- if(!v){cfgErr('❌ 日期格式应为 YYYY-MM-DD（或 10-08）');return;}
+ if(isNaN(d)||_fmtD(d)!==v)return null;   /* 2026-02-31 之类伪日期拒收 */
+ if(d.getFullYear()<2000||d.getFullYear()>2100)return null;
+ return v;}
+function _dateErr(p,i,j,msg){
+ cfgErr(msg);
+ const row=document.querySelector('.dateSrow[data-drow="'+p+'-'+i+'-'+j+'"]');
+ if(!row)return;
+ const pr=row.querySelector('.dpanel:not([hidden]) .dpanel-row');
+ if(!pr)return;
+ pr.classList.add('err');
+ const inp=pr.querySelector('input[type=date]');
+ if(inp)inp.focus();
+ setTimeout(()=>pr.classList.remove('err'),1600);}
+function _mergeDates(cur,add){
+ const set=new Set(cur||[]);let added=0;
+ add.forEach(d=>{if(!set.has(d)){set.add(d);added++;}});
+ return {dates:[...set].sort(),added};}
+function _commitDates(p,i,j,add,label){
  const rs=CFG[i].routes[j];
- if((rs.dates||[]).includes(v)){toast('该日期已在列表中','err');return;}
- rs.dates=[...(rs.dates||[]),v].sort();
- buildForm();toast('已加 '+v+'（保存后生效）','ok');}
-function pickDate(i,j){
- const r=document.getElementById('dreal-'+i+'-'+j);
- r.onchange=()=>{if(r.value){document.getElementById('dpick-'+i+'-'+j).value=r.value;
-  addDate(i,j);}};
- try{r.showPicker();}catch(e){r.click();}}
+ const cur=p==='r'?_rds(rs):(rs.dates||[]);
+ const u=_mergeDates(cur,add);
+ if(p==='r'&&u.dates.length>8){
+  _dateErr(p,i,j,'❌ 加入后共 '+u.dates.length+' 个返程日，超上限 8——请先删除部分返程日');
+  return false;}
+ if(p==='r'){rs.ret_dates=u.dates;delete rs.ret_date;}
+ else rs.dates=u.dates;
+ buildForm();
+ toast(u.added
+  ?label+'：新增 '+u.added+' 天，共 '+u.dates.length+' 天（保存后生效）'
+  :label+'：这些日期都已在列表中，未重复添加',u.added?'ok':'');
+ return true;}
+function _focusDateInput(p,i,j){
+ setTimeout(()=>{const el=document.getElementById(p+'add-'+i+'-'+j);
+  if(el)el.focus({preventScroll:true});},0);}
+function addDate(i,j){
+ const inp=document.getElementById('dadd-'+i+'-'+j);
+ const v=_normDate(inp&&inp.value);
+ if(!v){_dateErr('d',i,j,'❌ 请先选择要添加的日期');return;}
+ const rs=CFG[i].routes[j];
+ if((rs.dates||[]).includes(v)){if(inp){inp.value='';delete _DATEVAL[inp.id];}
+  _dateErr('d',i,j,'❌ 日期 '+v+' 已在列表中');return;}
+ if(inp){inp.value='';delete _DATEVAL[inp.id];}   /* 连续选下一天不撞同值去重 */
+ _commitDates('d',i,j,[v],'已加入 '+v);
+ _focusDateInput('d',i,j);}
 function delDate(i,j,d){const rs=CFG[i].routes[j];
  rs.dates=(rs.dates||[]).filter(x=>x!==d);buildForm();toast('已删 '+d+'（保存后生效）','ok');}
 function setDt(i,k,v){CFG[i].notifier=CFG[i].notifier||{};CFG[i].notifier.dingtalk=CFG[i].notifier.dingtalk||{};CFG[i].notifier.dingtalk[k]=v;syncUserHead(i);}
@@ -5831,12 +7714,20 @@ async function testPush(i,b){b=b||_evtT();
  b.classList.remove('busy');}
 function addUser(){setOpenUser(CFG.length);CFG.push({name:'新用户',routes:[{from:'SHA',from_name:'上海',to:'SYX',to_name:'三亚',dates:[defDate()],alert_direct:0,alert_transfer:0,transfer_arrival_max:'02:00'}],platforms:['qunar','fliggy','tongcheng','tuniu'],notifier:{digest:true,storm_repeat:3,win_toast:true,dingtalk:{enabled:false,webhook:'',secret:'',at_mobile:''}}});buildForm();
  flashEl(document.querySelectorAll('#cfgform .ucard')[CFG.length-1]);}
-function delUser(i,b){armConfirm(b||_evtT(),()=>{CFG.splice(i,1);
+function delUser(i,b){const u=CFG[i]||{};
+ armConfirm(b||_evtT(),()=>{CFG.splice(i,1);
  /* 展开态索引跟随前移：展开用户 2 时删用户 0，原 2 落索引 1——
     不调整则重建后错位卡片自动展开（展开的是没点过的用户） */
  if(OPEN_USER===i)setOpenUser(-1);else if(OPEN_USER>i)setOpenUser(OPEN_USER-1);
+ _DATEVAL={};   /* 索引前移：旧 id 的日期草稿会错贴到后位用户/航线 */
+ FOLD.route={};FOLD.rtadv={};   /* 用户索引前移：折叠槽同样会错贴 */
  buildForm();
- toast('已删除用户（保存后生效）','ok');});}
+ try{const b=document.querySelector('#panel-users .row button[onclick="addUser()"]');
+  if(b)b.focus({preventScroll:true});}catch(e){}
+ toast('已删除用户「'+(u.name||'')+'」（保存后生效）','ok');},
+  {title:'删除用户？',
+   message:'将删除「'+(u.name||'')+'」的全部航线、心理价与通知配置。\n保存配置后生效；保存前可通过「放弃更改」撤回。',
+   label:'删除用户'});}
 function addRoute(i){CFG[i].routes.push({from:'SHA',from_name:'上海',to:'HAK',to_name:'海口',dates:[defDate()],alert_direct:0,alert_transfer:0,transfer_arrival_max:'02:00'});
  FOLD.route[i+':'+(CFG[i].routes.length-1)]=false;/* 新航线自动展开 */
  buildForm();
@@ -5844,8 +7735,18 @@ function addRoute(i){CFG[i].routes.push({from:'SHA',from_name:'上海',to:'HAK',
 function flashEl(el){if(!el)return;
  el.scrollIntoView({block:'start',behavior:'smooth'});
  el.classList.add('flash');setTimeout(()=>el.classList.remove('flash'),1500);}
-function delRoute(i,j,b){armConfirm(b||_evtT(),()=>{
- CFG[i].routes.splice(j,1);buildForm();});}
+function delRoute(i,j,b){const r=(CFG[i].routes||[])[j]||{};
+ armConfirm(b||_evtT(),()=>{CFG[i].routes.splice(j,1);_DATEVAL={};
+  /* 索引前移：清掉本用户旧航线折叠槽，防展开态贴到后位航线 */
+  Object.keys(FOLD.route||{}).forEach(k=>{if(k.indexOf(i+':')===0)delete FOLD.route[k];});
+  Object.keys(FOLD.rtadv||{}).forEach(k=>{if(k.indexOf(i+':')===0)delete FOLD.rtadv[k];});
+  buildForm();
+  try{const nb=document.querySelector('#cfgform .addrbtn');
+   if(nb)nb.focus({preventScroll:true});}catch(e){}
+  toast('已删除航线 '+((r.from_name||r.from||'')+' → '+(r.to_name||r.to||''))+'（保存后生效）','ok');},
+  {title:'删除航线？',
+   message:'将删除「'+(r.from_name||r.from||'')+' → '+(r.to_name||r.to||'')+'」及其日期/心理价/筛选配置。\n保存配置后生效；保存前可通过「放弃更改」撤回。',
+   label:'删除航线'});}
 /* 快速复制：深拷贝该航线全部配置追加到列表尾，改城市对即可用
    （产品化：同规则多航线是常态，逐项重填 8 个字段太重）；
    复制出的新航线默认停用——先配好再启用，防止城市对没改就开扫。
@@ -5862,10 +7763,43 @@ function copyRoute(i,j,btn){
   el.classList.add('flash');setTimeout(()=>el.classList.remove('flash'),1600);}
  if(btn){btn.textContent='✓ 已复制';setTimeout(()=>{btn.textContent='⧉ 复制';},1500);}
  toast('已复制为新航线（默认停用）——改好城市对再启用','ok');}
+function reverseRoute(i,j,btn){/* ⇄ 反向监控一键生成（用户心智：往返=
+   两个方向各自盯单程价——与「🔁 往返票（去回同订总价）」语义分立）：
+   复制当前航线并交换出发/到达（含名称/码），日期/阈值/筛选全量随迁 */
+ const src=CFG[i].routes[j],cp=JSON.parse(JSON.stringify(src));
+ const fc=cp.from,fn=cp.from_name,tc=cp.to,tn=cp.to_name;
+ cp.from=tc;cp.from_name=tn;cp.to=fc;cp.to_name=fn;
+ cp.enabled=false;   /* 反向默认停用（与复制同律：改好再启用） */
+ CFG[i].routes.push(cp);buildForm();
+ const nrk=i+':'+(CFG[i].routes.length-1);
+ FOLD.route[nrk]=false;saveFold();
+ const el=document.querySelector('.rline[data-rk="'+nrk+'"]');
+ if(el){const h=el.querySelector('.rhead');
+  _setFold(h,_foldSibs(h),false);
+  el.scrollIntoView({block:'center',behavior:'smooth'});
+  el.classList.add('flash');setTimeout(()=>el.classList.remove('flash'),1600);}
+ if(btn){btn.textContent='✓ 已生成反向';setTimeout(()=>{btn.textContent='⇄ 反向';},1500);}
+ toast('已生成反向航线 '+tn+'→'+fn+'（默认停用，改好阈值再启用）','ok');}
 /* 出发时段快捷挡：与明细表筛选同一套挡位语义（一点即填两个 time 输入，
    手输任意值即变自定义——挡位高亮让当前窗口一眼可读） */
 const DEPWINS=[['不限','',''],['凌晨','00:00','06:00'],['上午','06:00','12:00'],
                ['下午','12:00','18:00'],['晚间','18:00','23:59']];
+let _scsT=0;
+function saveConfigSoon(){/* 快捷挡即时落盘通道（防抖聚合连点）：直达
+   saveCfg 单源（校验+热重载+词面反馈全保留）——快捷挡语义=免按
+   保存钮的轻量配置路径 */
+ clearTimeout(_scsT);_scsT=setTimeout(()=>{saveCfg();},1200);}
+function quickArr(i,j,el,lo,hi){
+ const rs=CFG[i].routes[j];rs.arr_time_min=lo;rs.arr_time_max=hi;
+ const box=el.closest('.sctl'),t=box.querySelectorAll('input[type=time]');
+ t[0].value=lo;t[1].value=hi;
+ box.querySelectorAll('.schip').forEach(c=>c.classList.remove('on'));
+ el.classList.add('on');
+ syncRouteHead(i,j);   /* r324 C7 同律：写点绕过 setRoute，摘要须随行 */
+ toast(lo?'到达窗口已设 '+lo+'–'+hi+'（保存后生效）':'到达窗已改为不限（保存后生效）','ok');}
+function customArrWin(el){/* 手输=自定义窗口：清挡位高亮 */
+ el.closest('.sctl').querySelectorAll('.schip').forEach(c=>c.classList.remove('on'));}
+
 function quickDep(i,j,el,lo,hi){
  const rs=CFG[i].routes[j];rs.dep_time_min=lo;rs.dep_time_max=hi;
  const box=el.closest('.sctl'),t=box.querySelectorAll('input[type=time]');
@@ -5876,6 +7810,257 @@ function quickDep(i,j,el,lo,hi){
  toast(lo?'窗口已设 '+lo+'–'+hi+'（保存后生效）':'已改为不限（保存后生效）','ok');}
 function customDepWin(el){/* 手输=自定义窗口：清挡位高亮 */
  el.closest('.sctl').querySelectorAll('.schip').forEach(c=>c.classList.remove('on'));}
+/* 航线卡高频重排（bigwolf 反馈）：日期快速选/范围选 + 只要直飞 +
+   低频约束收进默认折叠。快捷挡语义对齐 quickDep：写模型+挡位高亮+
+   摘要随行；日期族沿用 addDate 的整表重建+toast 反馈。 */
+function _fmtD(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function _spanDates(a,b){const out=[];const d=new Date(a+'T00:00:00'),end=new Date(b+'T00:00:00');
+ while(d<=end){out.push(_fmtD(d));d.setDate(d.getDate()+1);}return out;}
+function quickDates(i,j,days){/* 未来 N 天（含今天）：填入区间并加入，合并去重 */
+ const t=new Date(),ds=[];
+ for(let k=0;k<days;k++){const d=new Date(t);d.setDate(t.getDate()+k);ds.push(_fmtD(d));}
+ _DATEVAL['dfrom-'+i+'-'+j]=ds[0];_DATEVAL['dto-'+i+'-'+j]=ds[ds.length-1];
+ setDateMode('d',i,j,'range');
+ _commitDates('d',i,j,ds,'未来'+days+'天');}
+function rangeDates(i,j){/* 起止区间：含两端，单次上限 62 天，与已选合并去重 */
+ const a=_normDate(document.getElementById('dfrom-'+i+'-'+j).value);
+ const b=_normDate(document.getElementById('dto-'+i+'-'+j).value);
+ if(!a||!b){_dateErr('d',i,j,'❌ 请先选范围的起止日期');return;}
+ if(a>b){_dateErr('d',i,j,'❌ 范围起日在止日之后');return;}
+ const ds=_spanDates(a,b);
+ if(ds.length>62){_dateErr('d',i,j,'❌ 区间共 '+ds.length+' 天超上限 62——请分段选');return;}
+ _commitDates('d',i,j,ds,'区间 '+a+' 至 '+b);}
+function quickSingle(p,i,j,off){/* 单日快选：出发=今天/明天；返程=最早出发日/次日 */
+ let d;
+ if(p==='r'){
+  const ds=(CFG[i].routes[j].dates||[]).slice().sort();
+  if(!ds.length){_dateErr('r',i,j,'❌ 请先设置出发日期（返程快选锚定最早出发日）');return;}
+  d=new Date(ds[0]+'T00:00:00');
+ }else d=new Date();
+ d.setDate(d.getDate()+(off||0));
+ const v=_fmtD(d);
+ setDateMode(p,i,j,'single');
+ if(p==='r'){
+  if(_rds(CFG[i].routes[j]).includes(v)){_dateErr('r',i,j,'❌ 返程日 '+v+' 已在列表中');return;}
+ }else if((CFG[i].routes[j].dates||[]).includes(v)){
+  _dateErr('d',i,j,'❌ 日期 '+v+' 已在列表中');return;}
+ _commitDates(p,i,j,[v],(p==='r'?'已加入返程 ':'已加入 ')+v);}
+function toggleDirectOnly(i,j,el){/* 只要直飞：中转阈强制 0 并收起
+   中转价，恢复时回填缓存原值。旗标落模型（direct_only），后端
+   build_routes 同键强制关断——UI 收起与配置旧值不劈叉 */
+ const rs=CFG[i].routes[j];const box=el.closest('.sctl');
+ const tr=box.querySelector('.trprice'),lab=box.querySelector('.trlab');
+ const on=!el.classList.contains('on');
+ el.classList.toggle('on',on);
+ if(on)rs.direct_only=true;else delete rs.direct_only;
+ if(on){tr.dataset.prev=tr.value||'';tr.style.display='none';lab.style.display='none';
+  rs.alert_transfer=0;buildForm();syncRouteHead(i,j);
+  toast('已切「只要直飞」：中转提醒关闭，保存后生效','ok');}
+ else{tr.style.display='';lab.style.display='';
+  const p=tr.dataset.prev||'';
+  if(p&&Number(p)>0){tr.value=p;rs.alert_transfer=Number(p);}
+  else tr.value='';
+  buildForm();syncRouteHead(i,j);
+  toast('已恢复中转价'+(p&&Number(p)>0?'（原 ￥'+p+'）':'（0=关）')+'，保存后生效','ok');}}
+function foldRtadv(h){const hide=!_isFolded(h);
+ _setFold(h,_foldSibs(h),hide);
+ FOLD.rtadv[h.closest('.rline').dataset.rk]=hide;saveFold();}
+/* 往返多返程日（AiLao：能力与去程一致——快速选/区间/逐日加；
+   锚定最早出发日；集合上限 8=采集按返程日逐对跑的查询面控制） */
+function _rds(r){return (r.ret_dates&&r.ret_dates.length)?r.ret_dates:(r.ret_date?[r.ret_date]:[]);}
+function _rdsLen(r){return _rds(r).length;}
+function _rtOn(r){/* 往返模式=ret_dates 键在场（空数组也算开——
+    开关先于返程日配置，返程行必须渲染出来让用户添加）或 legacy 单值 */
+  return r.ret_dates!=null||_rdsLen(r)>0;}
+function toggleRT(i,j,el){/* 往返开合：开=legacy 单值迁移进 ret_dates；
+   关=清双键回单程语义。开合改变返程行在场性——buildForm 重建
+   （不重建曾让「开了往返却无处添加返程日」） */
+ const rs=CFG[i].routes[j];const on=!el.classList.contains('on');
+ el.classList.toggle('on',on);
+ if(on){rs.ret_dates=_rds(rs).slice();delete rs.ret_date;buildForm();
+  syncRouteHead(i,j);
+  toast('已切往返监控：请配置返程日期（采集按返程日逐对跑）','ok');}
+ else{delete rs.ret_dates;delete rs.ret_date;buildForm();
+  syncRouteHead(i,j);
+  toast('已切回单程监控','ok');}}
+function _retSet(i,j,ds,tag){if(ds.length>8){cfgErr('❌ 返程日 '+ds.length
+  +' 个超上限 8（采集按返程日逐对跑，须控制查询面）');return;}
+ CFG[i].routes[j].ret_dates=ds;delete CFG[i].routes[j].ret_date;
+ buildForm();toast(tag+'，保存后生效','ok');}
+function quickRet(i,j,days){/* 锚定最早出发日——与去程快速选能力一致；
+   返程集合上限 8：超限请求按上限截断+toast 明示（r339d D7 恒死钮
+   收口——「去程起30天」原样 30 片恒被 _retSet 拒绝，按钮承诺与守卫
+   矛盾） */
+ const ds=(CFG[i].routes[j].dates||[]).slice().sort();
+ if(!ds.length){_dateErr('r',i,j,'❌ 请先设置出发日期（返程快速选锚定最早出发日）');return;}
+ const a=ds[0];const t=new Date(a+'T00:00:00');const out=[];
+ const n=Math.min(days,8);
+ for(let k=0;k<n;k++){const d=new Date(t);d.setDate(t.getDate()+k);out.push(_fmtD(d));}
+ _DATEVAL['rfrom-'+i+'-'+j]=out[0];_DATEVAL['rto-'+i+'-'+j]=out[out.length-1];
+ setDateMode('r',i,j,'range');
+ _commitDates('r',i,j,out,'去程起'+n+'天');}
+function rangeRet(i,j){const a=_normDate(document.getElementById('rfrom-'+i+'-'+j).value);
+ const b=_normDate(document.getElementById('rto-'+i+'-'+j).value);
+ if(!a||!b){_dateErr('r',i,j,'❌ 请先选返程范围的起止日期');return;}
+ if(a>b){_dateErr('r',i,j,'❌ 返程范围起日在止日之后');return;}
+ const out=_spanDates(a,b);
+ if(out.length>8){_dateErr('r',i,j,'❌ 返程区间共 '+out.length+' 天超上限 8——请分批选');return;}
+ _commitDates('r',i,j,out,'返程区间 '+a+' 至 '+b);}
+function retAdd(i,j){const inp=document.getElementById('radd-'+i+'-'+j);
+ const v=_normDate(inp&&inp.value);
+ if(!v){_dateErr('r',i,j,'❌ 请先选择要添加的返程日期');return;}
+ const cur=_rds(CFG[i].routes[j]);
+ if(cur.includes(v)){if(inp){inp.value='';delete _DATEVAL[inp.id];}
+  _dateErr('r',i,j,'❌ 返程日 '+v+' 已在列表中');return;}
+ if(inp){inp.value='';delete _DATEVAL[inp.id];}
+ if(_commitDates('r',i,j,[v],'已加入返程 '+v))_focusDateInput('r',i,j);}
+function retDel(i,j,d){_retSet(i,j,_rds(CFG[i].routes[j]).filter(x=>x!==d),
+ '已删返程 '+d);}
+function clearDates(prefix,i,j,force){/* 一键清空（用户实报：逐颗 ✕ 太苦）；
+   r346：清空是批量破坏性动作，先走统一确认层，防误触丢整段日期。 */
+ const rs=CFG[i].routes[j];
+ const n=prefix==='d'?(rs.dates||[]).length:_rdsLen(rs);
+ if(!force&&n){
+  openConfirm(prefix==='d'?'清空全部出发日期？':'清空全部返程日期？',
+   '将移除 '+n+' 个'+(prefix==='d'?'出发':'返程')+'日期。保存前仍可通过「放弃更改」整体撤回。',
+   '清空日期',()=>clearDates(prefix,i,j,true));
+  return;}
+ if(prefix==='d'){rs.dates=[];buildForm();toast('已清空出发日期','ok');}
+ else _retSet(i,j,[],'已清空返程日期');}
+/* 日期连续段收拢（r339d：30 天快选 6 行满铺=噪音墙；OTA 日期段
+   形态=连续日合并区间摘要片+按需展开逐日。>8 片自动收拢，展开态
+   会话内存 _DEXPAND） */
+let _DEXPAND={};
+function _runs(dates){const ds=dates.slice().sort();
+ const nxt=s=>{const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+1);return _fmtD(d);};
+ const runs=[];let a=null,b=null;
+ for(const d of ds){
+  if(a===null){a=d;b=d;continue;}
+  if(nxt(b)===d){b=d;continue;}
+  runs.push({a,b});a=d;b=d;}
+ if(a!==null)runs.push({a,b});
+ return runs;}
+function _mdshort(s){return dSlash(s);/* MM/YY 斜杠换装走 dSlash 单源（计数钉 261 在岗） */}
+/* 日期模式条：区间/指定日同一时刻只开一个编辑器——用户心智不会同时
+   填两种；切换只换面板，两份草稿（_DATEVAL）都保留。加入语义=合并去重，
+   不再静默整表替换。 */
+let _DMODE={};
+function _dmode(p,i,j){const k=p+'-'+i+'-'+j;
+ if(_DMODE[k])return _DMODE[k];
+ try{const s=localStorage.getItem('jpdmode');
+  if(s==='range'||s==='single')return s;}catch(e){}
+ return 'range';}
+function setDateMode(p,i,j,m){
+ if(m!=='range'&&m!=='single')return;
+ _DMODE[p+'-'+i+'-'+j]=m;
+ try{localStorage.setItem('jpdmode',m)}catch(e){}
+ const row=document.querySelector('.dateSrow[data-drow="'+p+'-'+i+'-'+j+'"]');
+ if(!row)return;
+ row.querySelectorAll('.dctab').forEach(b=>{const on=b.dataset.dm===m;
+  b.classList.toggle('on',on);b.setAttribute('aria-selected',on?'true':'false');
+  b.tabIndex=on?0:-1;});
+ row.querySelectorAll('.dpanel').forEach(pn=>{
+  if(pn.dataset.dpanel===m)pn.removeAttribute('hidden');
+  else pn.setAttribute('hidden','');});}
+function dateTabKey(ev,p,i,j){
+ if(['ArrowLeft','ArrowRight','Home','End'].indexOf(ev.key)<0)return;
+ ev.preventDefault();
+ const tabs=[...ev.currentTarget.querySelectorAll('.dctab')];
+ let k=tabs.findIndex(t=>t.classList.contains('on'));
+ if(ev.key==='Home')k=0;else if(ev.key==='End')k=tabs.length-1;
+ else k=(k+(ev.key==='ArrowRight'?1:tabs.length-1))%tabs.length;
+ setDateMode(p,i,j,tabs[k].dataset.dm);tabs[k].focus();}
+function _dateRowHTML(i,j,p){
+ const rs=CFG[i].routes[j],ret=p==='r';
+ const dates=ret?_rds(rs):(rs.dates||[]);
+ const n=dates.length,mode=_dmode(p,i,j);
+ const title=ret?'返程日期':'出发日期';
+ const hint=ret
+  ?'可配多个（≤8，采集按返程日逐对跑）；一次只用一种添加方式，切换不丢草稿'
+  :'区间批量或逐日点选；一次只用一种方式，加入后自动合并去重，各日期独立监控推送';
+ const chips=_dchipsInner(i,j,p);
+ const pre=p==='r'?'r':'d';
+ const clear=ret?`clearDates('r',${i},${j})`:`clearDates('d',${i},${j})`;
+ const rangeBtn=ret?`rangeRet(${i},${j})`:`rangeDates(${i},${j})`;
+ const singleBtn=ret?`retAdd(${i},${j})`:`addDate(${i},${j})`;
+ const quickRange=ret
+  ?`<span class="chip schip" title="最早出发日起 7 天加入返程（合并去重，上限 8）" onclick="quickRet(${i},${j},7)">去程起7天</span>`
+   +`<span class="chip schip" title="最早出发日起 8 天加入返程（返程上限 8）" onclick="quickRet(${i},${j},8)">去程起8天</span>`
+  :`<span class="chip schip" title="今天起 7 天加入列表（与已选合并去重）" onclick="quickDates(${i},${j},7)">未来7天</span>`
+   +`<span class="chip schip" title="今天起 30 天加入列表（与已选合并去重）" onclick="quickDates(${i},${j},30)">未来30天</span>`;
+ const quickSingle=ret
+  ?`<span class="chip schip" title="加入最早出发日" onclick="quickSingle('r',${i},${j},0)">出发日</span>`
+   +`<span class="chip schip" title="加入最早出发日的次日" onclick="quickSingle('r',${i},${j},1)">次日</span>`
+  :`<span class="chip schip" title="加入今天" onclick="quickSingle('d',${i},${j},0)">今天</span>`
+   +`<span class="chip schip" title="加入明天" onclick="quickSingle('d',${i},${j},1)">明天</span>`;
+ const rangeHint=ret?'锚定最早出发日 · 上限 8 天':'含首尾 · 单次 ≤62 天';
+ const singleHint=ret?'选完点加入 · 上限 8 天':'选完点加入 · 可连续添加';
+ return `<div class="srow dateSrow" data-drow="${p}-${i}-${j}">
+   <div class="slab"><b>${title}</b><div class="shint">${hint}</div></div>
+   <div class="sctl dwrap">
+    <div class="dline dchips-line">
+     <span class="dchips" id="${ret?'rdchips':'dchips'}-${i}-${j}">${chips||'<span class="dchips-empty">尚未选择日期</span>'}</span>
+     ${n?`<span class="chip schip" title="清空全部${ret?'返程':'出发'}日期" onclick="${clear}">清空</span>`:''}
+    </div>
+    <div class="dcompose">
+     <div class="dcompose-h">
+      <div class="dctabs" role="tablist" aria-label="${title}添加方式" onkeydown="dateTabKey(event,'${p}',${i},${j})">
+       <button type="button" class="dctab${mode==='range'?' on':''}" role="tab" id="dtab-${p}-${i}-${j}-range" data-dm="range" aria-selected="${mode==='range'}" aria-controls="dpan-${p}-${i}-${j}-range" tabindex="${mode==='range'?0:-1}" onclick="setDateMode('${p}',${i},${j},'range')">按区间</button>
+       <button type="button" class="dctab${mode==='single'?' on':''}" role="tab" id="dtab-${p}-${i}-${j}-single" data-dm="single" aria-selected="${mode==='single'}" aria-controls="dpan-${p}-${i}-${j}-single" tabindex="${mode==='single'?0:-1}" onclick="setDateMode('${p}',${i},${j},'single')">按指定日</button>
+      </div>
+      <span class="dcsum" id="${ret?'rdcount':'dcount'}-${i}-${j}">${n?'已选 '+n+' 天':'尚未选择'}</span>
+     </div>
+     <div class="dpanel" id="dpan-${p}-${i}-${j}-range" data-dpanel="range" role="tabpanel" aria-labelledby="dtab-${p}-${i}-${j}-range"${mode==='range'?'':' hidden'}>
+      <div class="dpanel-row">
+       <input type="date" id="${p}from-${i}-${j}" title="区间开始（含）" aria-label="${ret?'返程区间开始':'出发区间开始'}" onkeydown="if(event.key==='Enter'){event.preventDefault();${rangeBtn}}">
+       <span class="darr" aria-hidden="true">→</span>
+       <input type="date" id="${p}to-${i}-${j}" title="区间结束（含）" aria-label="${ret?'返程区间结束':'出发区间结束'}" onkeydown="if(event.key==='Enter'){event.preventDefault();${rangeBtn}}">
+      </div>
+      <div class="dcompose-foot">
+       <span class="q-lab">快捷</span>${quickRange}
+       <span class="dquickhint">${rangeHint}</span>
+       <button class="btn2 dapply primary" title="把区间内每一天并入已选列表（自动去重）" onclick="${rangeBtn}">加入区间</button>
+      </div>
+     </div>
+     <div class="dpanel" id="dpan-${p}-${i}-${j}-single" data-dpanel="single" role="tabpanel" aria-labelledby="dtab-${p}-${i}-${j}-single"${mode==='single'?'':' hidden'}>
+      <div class="dpanel-row single">
+       <input type="date" id="${p}add-${i}-${j}" title="选择单个日期后点「加入日期」" aria-label="${ret?'返程指定日':'出发指定日'}" onkeydown="if(event.key==='Enter'){event.preventDefault();${singleBtn}}">
+      </div>
+      <div class="dcompose-foot">
+       <span class="q-lab">快捷</span>${quickSingle}
+       <span class="dquickhint">${singleHint}</span>
+       <button class="btn2 dapply primary" title="把所选日期加入列表（自动去重）" onclick="${singleBtn}">加入日期</button>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>`;}
+function _dchipsInner(i,j,prefix){
+ const rs=CFG[i].routes[j];
+ const dates=prefix==='d'?(rs.dates||[]):_rds(rs);
+ if(!dates.length)return '';
+ const del=prefix==='d'?'delDate':'retDel';
+ const key=i+':'+j+':'+prefix;
+ if(dates.length>8&&!_DEXPAND[key]){
+  return _runs(dates).map(run=>{
+   const n=run.n=_runsN(run.a,run.b);
+   const label=n===1?esc(run.a)
+    :(n===2?esc(run.a)+' '+esc(_mdshort(run.b))
+     :esc(_mdshort(run.a))+'–'+esc(_mdshort(run.b))+' · '+n+'天');
+   const call=n===1?`${del}(${i},${j},'${esc(run.a)}')`
+    :`delRun('${prefix}',${i},${j},'${run.a}','${run.b}')`;
+   return `<span class="chip on dchip" title="${n>1?esc(run.a)+' 至 '+esc(run.b)+' 共 '+n+' 天，✕ 删整段':''}">${label}<i class="dx" title="删除该段" onclick="${call}">✕</i></span>`;}).join('')
+   +`<span class="chip schip" title="展开为逐日 chips（逐颗删除）" onclick="toggleDex('${key}')">展开逐日</span>`;
+ }
+ return dates.map(d=>`<span class="chip on dchip">${esc(d)}<i class="dx" title="删除该日期" onclick="${del}(${i},${j},'${esc(d)}')">✕</i></span>`).join('')
+  +(dates.length>8?`<span class="chip schip" title="收拢为区间摘要" onclick="toggleDex('${key}')">收拢</span>`:'');}
+function _runsN(a,b){const d1=new Date(a+'T00:00:00'),d2=new Date(b+'T00:00:00');
+ return Math.round((d2-d1)/864e5)+1;}
+function toggleDex(key){_DEXPAND[key]=!_DEXPAND[key];buildForm();}
+function delRun(prefix,i,j,a,b){const rs=CFG[i].routes[j];
+ const ds=(prefix==='d'?(rs.dates||[]):_rds(rs)).filter(d=>d<a||d>b);
+ if(prefix==='d'){rs.dates=ds;buildForm();toast('已删 '+a+' 至 '+b+' 整段','ok');}
+ else _retSet(i,j,ds,'已删 '+a+' 至 '+b+' 整段');}
 function defDate(){const d=new Date(Date.now()+14*864e5);
  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function cfgErr(m){/* 校验失败提示必达：页面顶部 cfgmsg + 右下 toast 双通道 */
@@ -5965,7 +8150,11 @@ async function saveCfg(){
     if(r[k]!==''&&r[k]!=null&&(isNaN(v)||v<0||v>99999)){
      cfgErr('❌ 阈值须为 0-99999 的数字');return;}}
    if(!/^\d{2}:\d{2}$/.test(r.transfer_arrival_max||'02:00')){
-    cfgErr('❌ 到达时刻应为 HH:MM：'+r.transfer_arrival_max);return;}}
+    cfgErr('❌ 到达时刻应为 HH:MM：'+r.transfer_arrival_max);return;}
+   const mdh=Number(r.max_duration_h);
+   if(r.max_duration_h!==''&&r.max_duration_h!=null
+    &&(isNaN(mdh)||mdh<0||mdh>72)){
+    cfgErr('❌ 最长飞行时长须为 0-72 小时（0=不限）');return;}}
   /* 特价订阅校验（r319）：启用态才验；出发城市过 _cnorm 归一
      （返回规范名，码=CITY 名映射——同航线保存二段式口径），
      价位/天数范围与后端钳制对齐 */
@@ -6004,6 +8193,13 @@ async function saveCfg(){
     cfgErr('❌ '+(_NL[k]||k)+'须为 0-99999 的数字');return;}}
   if(dt.enabled&&dt.webhook&&!/^https:\/\/oapi\.dingtalk\.com\/robot\/send\?access_token=/.test(dt.webhook)){
    cfgErr('❌ 钉钉 Webhook 应以 https://oapi.dingtalk.com/robot/send?access_token= 开头');return;}}
+ let _badLay='';
+ for(const u of CFG)for(const r of (u.routes||[])){
+  const mn=Number(r.transfer_layover_min)||0,mx=Number(r.transfer_layover_max)||0;
+  if(r.enabled!==false&&mx>0&&mn>mx){
+   _badLay=(r.from_name||r.from)+'→'+(r.to_name||r.to)
+    +'：中转最短衔接 '+mn+' 分大于最长 '+mx+' 分，将永远无中转可选';break;}}
+ if(_badLay){cfgErr('❌ '+_badLay);return;}
  if(!CFG.length){cfgErr('❌ 至少一个用户');return;}
  $('cfgmsg').textContent='保存中…';
  try{const r=await fetch('/api/config',{method:'POST',
@@ -6014,12 +8210,24 @@ async function saveCfg(){
   if(!j.ok)toast('❌ 保存失败：'+(j.err||''),'err');
   if(j.ok){
    const oldPort=location.port;
+   /* 启动级差量在快照覆盖前取样：保存成功即转「需重启」强横幅
+      （编辑态弱横幅由 syncRestartHint 负责，两态不共用一词面） */
+   const _schg=_startupChanged();
+   if(j.storage)GLB_STORE=j.storage;
+   if(j.restart)RESTART=j.restart;
    CFG_CLEAN=JSON.stringify(CFG);GLB_CLEAN=JSON.stringify(GLB);
+   if(_schg.length)_restartArmed();
+   if(RESTART&&RESTART.required)_restartArmed();   /* 刷新后仍可见：启动快照差量单源 */
+   try{buildForm();}catch(e){}
    if(String(GLB.port||8765)!==oldPort){
     if(window.toast)toast('🎛 控制台端口已切换至 '+GLB.port+'，正在跳转…','ok');
     setTimeout(()=>{location.href=location.protocol+'//'+location.hostname
      +':'+GLB.port+location.pathname;},1600);
-   }else{toast('💾 已保存，全部配置热生效','ok');
+   }else{
+    const _pending=new Set([..._schg,...((RESTART&&RESTART.changed)||[])])
+      .size;
+    toast(_pending?('💾 已保存；'+_pending+' 项启动级配置需重启生效'):'💾 已保存，全部配置热生效','ok');
+    try{renderRestartCenter();}catch(e){}
     setTimeout(()=>{load();},800);
     setTimeout(()=>{const m=$('cfgmsg');
      if(m&&m.textContent.charAt(0)==='✅')m.textContent='';},6000);}}
@@ -6049,10 +8257,15 @@ function cfgSearchClear(){/* 搜索态复位单源：CFGQ/输入框/命中计数
  document.querySelectorAll('#cfgform .ucard').forEach((c,i)=>{
   const h=c.querySelector('.uhead2');if(!h)return;
   const b=h.nextElementSibling;if(!b)return;
-  _setFold(h,[b],i!==OPEN_USER);});}
+  _setFold(h,[b],i!==OPEN_USER);});
+ /* B1 审计 P1：面板单选重写与折叠复位两拍收进单源——「清空搜索恢复
+    全部分区」按钮路径此前只还原 display 清单、缺这两拍，终态三面板
+    堆叠+17 折叠头强开+导航高亮劈叉（唯一 CTA 兑现不了自身词面）；
+    showCfgPanel 幂等、applyFolds 按 FOLD 存档重放，cfgFilter('') 分支
+    纯转调，两入口终态一致 */
+ showCfgPanel(CFGPANEL,true);applyFolds();}
 function cfgFilter(qraw){const q=(qraw||'').trim().toLowerCase();
- const hits=$('cfgHits');if(!q){cfgSearchClear();
-  showCfgPanel(CFGPANEL,true);applyFolds();return;}
+ const hits=$('cfgHits');if(!q){cfgSearchClear();return;}
  /* 搜索态：全部分区临时可见（子卡临时全开），只留命中字段；
     左导航高亮降饱和（qsearch）——.cnav.on 停在「清空后回归面板」，
     其面板当屏常零内容，高亮降饱和表达「暂态去处」非「当前所在」 */
@@ -6314,6 +8527,17 @@ document.getElementById("console").href=location.origin+"/#details"
 </script></body></html>"""
 
 
+def _bind_host(cfg: dict) -> str:
+    """监听地址解析单源：config web.host 显式值最优先；缺席/空时
+    TM_WEB_HOST 环境变量出口（Docker 镜像内置 0.0.0.0——容器内服务
+    绑回环时 -p 端口映射不可达：CI 冒烟 curl 与 NAS compose 双双
+    不可达实录）；都无=127.0.0.1（非容器默认行为不变）。"""
+    v = str((cfg.get("web") or {}).get("host", "") or "").strip()
+    if v:
+        return v
+    return os.environ.get("TM_WEB_HOST") or "127.0.0.1"
+
+
 def _cityx():
     """城市面板扩展数据（r320 全量城市化）：拼音首字母分组/全拼/
     热门组——配置页城市选择面板的搜索与字母导航数据源。city 键
@@ -6324,6 +8548,14 @@ def _cityx():
     return {"py": {**CITY_PY, **INTL_CITY_PY},
             "npy": {**CITY_NPY, **INTL_CITY_NPY},
             "hot": CITY_HOT}
+
+
+def _airalias():
+    """航司别称字典下发（r339h 用户实报「东航 vs 东方航空」）：与
+    alerter 白名单/排除匹配同源（core.airlines），前端白名单输入的
+    实时解析预览用。"""
+    from core.airlines import alias_payload
+    return alias_payload()
 
 
 def _intl_payload():
@@ -6386,12 +8618,15 @@ def _trend_payload(q: dict) -> dict:
 
 class _State:
     cfg = None
+    boot_cfg = None   # 进程启动快照（重启差量基准，热重载不覆盖）
     users = None
     job = None
     report_push = None
     reload_cb = None
     config_path = "config.yaml"
     version = ""
+    listen = ""
+    started_at = ""
     logger = logging.getLogger("ticket-monitor")
     lock = threading.Lock()
     login_sessions = {}   # plat -> {"evt": Event}（进行中的网页登录窗口）
@@ -6560,6 +8795,15 @@ def _route_view(r) -> dict:
         "transfer_baggage": d.get("transfer_baggage", "") or "",
         "dep_time_min": d.get("dep_time_min", "") or "",
         "dep_time_max": d.get("dep_time_max", "") or "",
+        # r342 三门（状态视图透传：前端卡头摘要/条件徽标可读）
+        "transfer_layover_max": int(
+            d.get("transfer_layover_max", 0) or 0),
+        "exclude_stop": bool(d.get("exclude_stop", False)),
+        "exclude_share": bool(d.get("exclude_share", False)),
+        "price_max": float(d.get("price_max", 0) or 0),
+        "no_cross": bool(d.get("no_cross", False)),
+        "arr_time_min": d.get("arr_time_min", "") or "",
+        "arr_time_max": d.get("arr_time_max", "") or "",
     }
 
 
@@ -6946,6 +9190,7 @@ def _user_state(u):
             # breakdown 配对）：CSV「公布运价」列（报销/里程累积口径）
             "stdFare": _num_or_none(f.get("stdFare")),
             "fewTicket": (f.get("fewTicket") or "").strip(),
+            "crossDayN": _int_or_none(f.get("crossDayN")),
             "depTerminal": (f.get("depTerminal") or "").strip(),
             "arrTerminal": (f.get("arrTerminal") or "").strip(),
             # 渠道字段三批透传（tongcheng 转机服务/航司中转文案，ctrip·qunar
@@ -7020,6 +9265,11 @@ def _user_state(u):
             "depAirportCode": (f.get("depAirportCode") or "").strip().upper(),
             "arrAirportCode": (f.get("arrAirportCode") or "").strip().upper(),
             "planeSize": (f.get("planeSize") or "").strip(),
+            # 二段机型/体量（r339a 三端同轮：ctrip 中转二段 craftinfo，
+            # 仅中转行有值；消费面=明细次行 planeSize span 并列 +
+            # CSV 机型列并入，零新列零布局风险）
+            "plane2": (f.get("plane2") or "").strip(),
+            "planeSize2": (f.get("planeSize2") or "").strip(),
             # 机型细名（r329 三端同轮收口：tuniu craftTypeDetail 段级
             # 首个非空段；此前爬虫落键、下行不透传、前端零消费=数据
             # 孤儿——CSV「机型体量」列同列并入 + 次行 title 注记 +
@@ -8113,6 +10363,77 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(_trend_payload(_q))
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path.startswith("/api/path-check"):
+            # 路径目标预检（r342 迁移可视化）：只读元数据，不创建目录、
+            # 不写文件；生产/演示同端点（GET 无副作用，不受 demo 只读门）
+            try:
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                kind = (q.get("which") or [""])[0]
+                raw = (q.get("path") or [""])[0]
+                if kind not in _STORAGE_SPECS:
+                    self._json({"ok": False, "err": "未知存储项"})
+                    return
+                meta = _path_meta(kind, raw, _State.cfg or {})
+                cur = _path_meta(
+                    kind, _storage_raw(_State.cfg or {}, kind),
+                    _State.cfg or {})
+                meta["current_abs"] = cur.get("abs")
+                meta["same_as_current"] = bool(
+                    meta.get("abs") == cur.get("abs"))
+                # 文件类型不允许落在已有目录；目录类型不允许落在已有文件
+                typ = meta.get("type")
+                valid, warn = True, ""
+                if meta.get("invalid"):
+                    valid, warn = False, meta["invalid"]
+                if valid:
+                    for _ok in _STORAGE_SPECS:
+                        if _ok == kind:
+                            continue
+                        _om = _path_meta(
+                            _ok, _storage_raw(_State.cfg or {}, _ok),
+                            _State.cfg or {})
+                        if _om.get("abs") and _om.get("abs") == meta.get("abs"):
+                            valid, warn = False, (
+                                "与「%s」路径相同，请换一个位置"
+                                % (_om.get("label") or _ok))
+                            break
+                if valid and typ == "file" and meta.get("exists") \
+                        and meta.get("is_dir"):
+                    valid, warn = False, "目标是目录——数据库/日志须为文件路径"
+                elif valid and typ == "dir" and meta.get("exists") \
+                        and not meta.get("is_dir"):
+                    valid, warn = False, "目标是文件——该配置须为目录路径"
+                elif valid and not meta.get("parent_exists"):
+                    if meta.get("creatable"):
+                        valid, warn = True, "父目录尚不存在，保存重启时会自动创建"
+                    else:
+                        valid, warn = False, "父目录尚不存在且最近祖先不可写，请换一个位置"
+                elif valid and not meta.get("parent_writable"):
+                    valid, warn = False, "父目录不可写，请换一个位置"
+                elif valid and meta.get("exists") and not meta.get("writable"):
+                    valid, warn = False, "目标已存在但不可写，请换一个位置"
+                meta["valid"] = bool(valid)
+                meta["warning"] = warn
+                # 启动迁移预案：db/user_data 启动时整档搬迁；日志/内核
+                # 目录不搬迁（切换后新位置生效、旧档保留——如实展示，
+                # 不让「可迁移」承诺覆盖未迁移项）
+                _mode = "none" if meta.get("same_as_current") else (
+                    "move" if kind in ("db", "ud") else (
+                        "new_file" if kind == "log" else "switch_only"))
+                meta["migration_mode"] = _mode
+                if _mode == "move":
+                    meta["migration"] = {
+                        "from": cur.get("abs") or "",
+                        "to": meta.get("abs") or "",
+                        "source_exists": bool(cur.get("exists")),
+                        "target_exists": bool(meta.get("exists")),
+                        "will_move": bool(cur.get("exists"))
+                        and not meta.get("exists"),
+                        "conflict": bool(meta.get("exists"))}
+                self._json(meta)
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 500)
         elif self.path == "/api/config":
             try:
                 if DEMO["on"]:
@@ -8121,53 +10442,7 @@ class _Handler(BaseHTTPRequestHandler):
                     # 日期）——日期硬编码曾与演示数据脱节，配置页航线摘要
                     # 与监控/走势/明细各视图互相矛盾且随时间越来越旧；
                     # globals.port 随实际 --port（_State.cfg 由 demo_cfg 写入）
-                    from core.demo import demo_routes as _demo_routes
-                    # 城市表同供 demo：城市下拉联想与保存校验共用此单源，
-                    # demo 缺表会让合法中文名保存被「不支持的城市」拦死
-                    from wizard import CITY as _CITY_TAB
-                    self._json({
-                        "users": [{
-                            "name": "演示用户",
-                            "routes": [
-                                {"from": r["from"],
-                                 "from_name": r["from_name"],
-                                 "to": r["to"], "to_name": r["to_name"],
-                                 "dates": r["dates"],
-                                 "alert_direct": r["alert_direct"],
-                                 "alert_transfer": r["alert_transfer"]}
-                                for r in _demo_routes()],
-                            "notifier": {"dingtalk": {"enabled": False},
-                                         "win_toast": True,
-                                         # 图床形态对齐生产主通路（ghimg）：
-                                         # 演示态恒缺 image_host 曾让生产
-                                         # 形态在 demo/审计里永久隐身（配置
-                                         # 面扫盲盲区）；token 不入演示面
-                                         "image_host": {"provider": "ghimg",
-                                                        "repo": "demo/ticket-img"}},
-                            "platforms": ["qunar", "ctrip", "fliggy",
-                                          "tongcheng", "tuniu"],
-                            # 展示态特价订阅（r319）：配置卡访客首屏即见
-                            # 「🎯特价开」；演示只读不执行发现面
-                            "specials": [{"enabled": True, "from": "SHA",
-                                          "from_name": "上海",
-                                          "max_price": 400, "days": 30}],
-                        }],
-                        "city": dict(_CITY_TAB),
-                        "cityx": _cityx(), "intl": _intl_payload(), "demo": True,
-                        "globals": {"interval_minutes": 15,
-                                    "jitter_minutes": 5,
-                                    "port": int((( _State.cfg or {})
-                                                 .get("web") or {})
-                                                .get("port", 8765) or 8765),
-                                    "run_on_start": True,
-                                    "headless": True,
-                                    "timeout_seconds": 45,
-                                    "delay_min": 5, "delay_max": 15,
-                                    "user_agent": "",
-                                    "debug": False,
-                                    "db_path": "data/prices.db",
-                                    "log_path": "logs/monitor.log",
-                                    "user_data_dir": "user_data"}})
+                    self._json(_demo_config_payload())
                     return
                 import yaml as _y
                 with open(_State.config_path, encoding="utf-8") as _yf:
@@ -8181,7 +10456,7 @@ class _Handler(BaseHTTPRequestHandler):
                 from wizard import CITY
                 self._json({"users": cfg.get("users") or [],
                             "city": CITY,
-                            "cityx": _cityx(),
+                            "cityx": _cityx(), "airline_alias": _airalias(),
                             "intl": _intl_payload(),
                             "globals": {
                                 "interval_minutes": int(
@@ -8221,7 +10496,14 @@ class _Handler(BaseHTTPRequestHandler):
                                     "proxy", "") or ""),
                                 "debug": bool((cfg.get("crawler") or {}).get(
                                     "debug", False)),
-                                # 启动级：只读展示（改 config.yaml 后重启生效）
+                                # 内核缓存位（启动级）：空=playwright 渠道
+                                # 默认位；配置后 chromium 安装与查找全部
+                                # 指向该目录（重启生效）
+                                "browser_dir": str(
+                                    (cfg.get("crawler") or {}).get(
+                                        "browser_dir", "") or ""),
+                                # 启动级路径四件：可编辑（保存重启生效，
+                                # 旧档启动序列自动搬迁）
                                 "db_path": str(
                                     (cfg.get("output") or {}).get(
                                         "db_path", "data/prices.db")
@@ -8233,7 +10515,34 @@ class _Handler(BaseHTTPRequestHandler):
                                 "user_data_dir": str(
                                     (cfg.get("crawler") or {}).get(
                                         "user_data_dir", "user_data")
-                                    or "user_data")}})
+                                    or "user_data"),
+                                # 绝对路径展示（r341「一切配置透明化」）：
+                                # 相对=程序目录锚定解析，bdir 空=系统默认位
+                                "globals_abs": {
+                                    "db": os.path.abspath(_anchored(str(
+                                        (cfg.get("output") or {}).get(
+                                            "db_path", "data/prices.db")
+                                        or "data/prices.db"), "")),
+                                    "log": os.path.abspath(_anchored(str(
+                                        (cfg.get("output") or {}).get(
+                                            "log_path", "logs/monitor.log")
+                                        or "logs/monitor.log"), "")),
+                                    "ud": os.path.abspath(_anchored(str(
+                                        (cfg.get("crawler") or {}).get(
+                                            "user_data_dir", "user_data")
+                                        or "user_data"), "")),
+                                    "bdir": (os.path.abspath(_anchored(str(
+                                        (cfg.get("crawler") or {}).get(
+                                            "browser_dir", "") or ""), ""))
+                                        if str((cfg.get("crawler") or {}).get(
+                                            "browser_dir", "") or "").strip()
+                                        else "")}},
+                            # r342 一切配置可视化：路径元数据（存在/
+                            # 体积/可写）、启动差量（重启中心单源）与
+                            # 运行时身份（根目录/配置文件绝对路径/PID）
+                            "storage": _storage_view(cfg),
+                            "restart": _restart_view(cfg),
+                            "runtime": _runtime_view(demo=False)})
             except Exception as e:
                 self._json({"err": str(e)}, 500)
         else:
@@ -8268,11 +10577,69 @@ class _Handler(BaseHTTPRequestHandler):
                     cfg.setdefault("web", {})["base_url"] = \
                         str(glb["base_url"]).strip()[:300]
                 if glb.get("host") is not None and str(glb["host"]).strip():
-                    cfg.setdefault("web", {})["host"] = \
-                        str(glb["host"]).strip()[:64]
+                    _h = str(glb["host"]).strip()[:64]
+                    try:
+                        _probe = socket.socket(socket.AF_INET,
+                                               socket.SOCK_STREAM)
+                        try:
+                            _probe.bind((_h, 0))
+                        finally:
+                            _probe.close()
+                    except OSError as _e:
+                        self._json({"ok": False, "err": (
+                            "监听地址不可用（本机没有该地址：%s）：%s"
+                            % (_h, _e))}, 400)
+                        return
+                    cfg.setdefault("web", {})["host"] = _h
                 if glb.get("headless") is not None:
                     cfg.setdefault("crawler", {})["headless"] = \
                         bool(glb["headless"])
+                # 启动级路径三件可写（r339 用户指令「一切配置可变更化」）：
+                # 保存进 config.yaml，重启进程生效；旧档由启动序列自动搬迁
+                # 空串=显式回默认（db/log/ud 不能落空键；bdir 空=渠道默认）
+                if glb.get("db_path") is not None:
+                    cfg.setdefault("output", {})["db_path"] = \
+                        (str(glb["db_path"]).strip()[:300]
+                         or "data/prices.db")
+                if glb.get("log_path") is not None:
+                    cfg.setdefault("output", {})["log_path"] = \
+                        (str(glb["log_path"]).strip()[:300]
+                         or "logs/monitor.log")
+                if glb.get("user_data_dir") is not None:
+                    cfg.setdefault("crawler", {})["user_data_dir"] = \
+                        (str(glb["user_data_dir"]).strip()[:300]
+                         or "user_data")
+                # 保存级总检（r346）：非法字符/保留名、四路径同址、
+                # 目标不可写与文件/目录错配——不能只靠前端预览。
+                _perr = _storage_save_error(cfg)
+                if _perr:
+                    raise ValueError(_perr)
+                # 路径语义守卫（r342）：文件键不得指向已有目录、目录键
+                # 不得指向已有文件、库与日志不得同址——错配会在重启
+                # 迁移/启动时才炸，前端如实拦截比事后排障便宜
+                _db_abs = os.path.abspath(_anchored(str(
+                    (cfg.get("output") or {}).get(
+                        "db_path", "data/prices.db") or "data/prices.db"), ""))
+                _lg_abs = os.path.abspath(_anchored(str(
+                    (cfg.get("output") or {}).get(
+                        "log_path", "logs/monitor.log")
+                    or "logs/monitor.log"), ""))
+                _ud_abs = os.path.abspath(_anchored(str(
+                    (cfg.get("crawler") or {}).get(
+                        "user_data_dir", "user_data") or "user_data"), ""))
+                if os.path.isdir(_db_abs):
+                    raise ValueError("数据库路径指向目录，请填文件路径（如 data/prices.db）")
+                if os.path.isdir(_lg_abs):
+                    raise ValueError("日志路径指向目录，请填文件路径（如 logs/monitor.log）")
+                if os.path.isfile(_ud_abs):
+                    raise ValueError("浏览器资料目录指向文件，请填目录路径")
+                _bd_raw = str((cfg.get("crawler") or {}).get(
+                    "browser_dir", "") or "").strip()
+                if _bd_raw and os.path.isfile(os.path.abspath(_anchored(
+                        _bd_raw, ""))):
+                    raise ValueError("浏览器内核目录指向文件，请填目录路径")
+                if _db_abs == _lg_abs:
+                    raise ValueError("数据库与运行日志不能使用同一路径")
                 if glb.get("run_on_start") is not None:
                     cfg.setdefault("schedule", {})["run_on_start"] = \
                         bool(glb["run_on_start"])
@@ -8298,6 +10665,11 @@ class _Handler(BaseHTTPRequestHandler):
                     _crw["proxy"] = _px
                 if glb.get("debug") is not None:
                     _crw["debug"] = bool(glb["debug"])
+                # 内核缓存位（启动级）：保存进配置，重启进程生效；
+                # 空串=显式回渠道默认位（显式落键不留脏）
+                if glb.get("browser_dir") is not None:
+                    _crw["browser_dir"] = \
+                        str(glb["browser_dir"]).strip()[:300]
                 # win_toast 缺省即开启——保存时落显式布尔进 config.yaml
                 for u0 in (cfg["users"] or []):
                     n0 = u0.get("notifier") or {}
@@ -8312,7 +10684,87 @@ class _Handler(BaseHTTPRequestHandler):
                 # 化逐字节不变，不作废则卡片文本陈旧到进程重启
                 _STATE_CACHE["sig"] = None
                 st.logger.info("[web配置] 已保存并热重载：%d 用户", n)
-                self._json({"ok": True, "users": n})
+                # 保存回执带路径元数据与启动差量：前端保存后无需再
+                # 拉一次配置即可点亮「需重启」与迁移预案
+                self._json({"ok": True, "users": n,
+                            "storage": _storage_view(cfg),
+                            "restart": _restart_view(cfg)})
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path == "/api/open-folder":
+            # 打开数据所在文件夹 / 默认应用打开文件（r342）：
+            # 白名单键经 _open_folder_target/_open_file_target 单源解析；
+            # os.startfile/xdg-open 参数直传零 shell 引号注入口。
+            # action=folder（默认，兼容旧前端）/file；目录动作才 makedirs
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                which = str(body.get("which") or "")
+                action = str(body.get("action") or "folder")
+                if action not in ("folder", "file"):
+                    self._json({"ok": False, "err": "未知动作"})
+                    return
+                _file = _open_file_target(which, st.cfg or {}) \
+                    if action == "file" else None
+                if action == "file" and not _file:
+                    self._json({"ok": False,
+                                "err": "文件尚不存在——保存并重启后可用"})
+                    return
+                _tgt = _file or _open_folder_target(which, st.cfg or {})
+                if not _tgt:
+                    self._json({"ok": False, "err": "未知目标"})
+                    return
+                if not _file:
+                    os.makedirs(_tgt, exist_ok=True)
+                if sys.platform == "win32":
+                    os.startfile(_tgt)
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", _tgt],
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.Popen(["xdg-open", _tgt],
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+                self._json({"ok": True, "path": _tgt,
+                            "action": action})
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path == "/api/restart":
+            # 进程自重启（启动级配置生效通道）：先拉起携 --restart-delay
+            # 的新实例（延迟抢锁——旧进程退出才释放 data/.instance.lock，
+            # 即时抢锁必撞锁退场），旧进程延时自退；os._exit 直退：
+            # SQLite WAL 崩溃安全，调度线程随进程终结不留尾巴
+            try:
+                # 新实例命令行必须带脚本本体：旧实现只拼 sys.executable
+                # + sys.argv[1:]，漏掉 sys.argv[0]（main.py），重启后
+                # 实际执行的是 `python --restart-delay 3` ——旧进程已退、
+                # 新进程秒退，控制台随之失踪。过滤 flag 时连值一起剥，
+                # 防连续重启把 "3" 当残留参数喂给 argparse。
+                _args, _skip = [], False
+                for _a in sys.argv[1:]:
+                    if _a == "--restart-delay":
+                        _skip = True
+                        continue
+                    if _skip:
+                        _skip = False
+                        continue
+                    _args.append(_a)
+                _script = ([] if getattr(sys, "frozen", False)
+                           or not (sys.argv and sys.argv[0].endswith(".py"))
+                           else [os.path.abspath(sys.argv[0])])
+                cmd = [sys.executable] + _script + _args \
+                    + ["--restart-delay", "3"]
+                kw = {"cwd": _ROOT}
+                if os.name == "nt":
+                    kw["creationflags"] = (
+                        getattr(subprocess, "DETACHED_PROCESS", 0)
+                        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                subprocess.Popen(cmd, **kw)
+                st.logger.warning("[web] 收到重启指令，新实例已拉起，"
+                                  "本进程 1s 后退出：%s", cmd)
+                threading.Timer(1.0, lambda: os._exit(0)).start()
+                self._json({"ok": True})
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
         elif self.path == "/api/test-push":
@@ -8336,7 +10788,12 @@ class _Handler(BaseHTTPRequestHandler):
                     # （22 全角行手机窄屏折行断点不受控）
                     "#### ✅ 测试推送成功\n\n该钉钉机器人配置可用。\n\n"
                     "监控警报将发送到此群。" + extra)
-                self._json({"ok": bool(ok)})
+                self._json({"ok": bool(ok),
+                                            "err": None if ok else (
+                                                (getattr(n, "last_errcode", None)
+                                                 and ("errcode=%s（自定义关键词/加签/IP 白名单不符为高频因）"
+                                                      % n.last_errcode))
+                                                or "发送失败（详见服务日志）")})   # test-push 失败详情透传（通道审计 P2-3）
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
         elif self.path == "/api/test-toast":
@@ -8374,7 +10831,35 @@ class _Handler(BaseHTTPRequestHandler):
                 ok = n.send("🔔 ntfy 测试——通路正常",
                             ("版本 v%s ｜ ⏰ %s\n收到即代表达标强提醒链路可用"
                              % (ver or "?", now)))
-                self._json({"ok": bool(ok)})
+                self._json({"ok": bool(ok),
+                            "err": None if ok else (
+                                getattr(n, "last_err", None)
+                                or "发送失败（详见服务日志）")})   # test-ntfy：失败详情透传（通道审计 P2-2/P2-3，前端 ❌ 词面可行动）
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path == "/api/test-bark":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                key = (body.get("key") or "").strip()
+                if not key:
+                    self._json({"ok": False, "err": "请先填写 Bark Key"})
+                    return
+                from core.notifier import BarkNotifier
+                now = __import__('datetime').datetime.now().strftime('%H:%M:%S')
+                ver = str(getattr(__import__("__main__"),
+                                 "__version__", "") or "")
+                n = BarkNotifier(key=key, logger=st.logger,
+                                 server=(body.get("server") or "").strip()
+                                 or "https://api.day.app")
+                ok = n.send("🔔 Bark 测试——通路正常",
+                            ("版本 v%s ｜ ⏰ %s\n收到即代表达标强提醒链路可用"
+                             % (ver or "?", now)))
+                self._json({"ok": bool(ok),
+                            "err": None if ok else (
+                                (getattr(n, "last_errcode", None) and ("HTTP %s" % n.last_errcode))
+                                or getattr(n, "last_err", None)
+                                or "发送失败（详见服务日志）")})   # test-bark：失败详情透传（通道审计 P2-2）
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
         elif self.path == "/api/test-email":
@@ -8558,6 +11043,8 @@ def start_web(cfg, job, report_push, logger=None, users=None,
               reload_cb=None, config_path="config.yaml", version=""):
     """在守护线程里启动本地控制台；失败只告警不中断监控。"""
     _State.cfg = cfg
+    import copy as _copy
+    _State.boot_cfg = _copy.deepcopy(cfg)
     _State.users = users
     _State.job = job
     _State.report_push = report_push
@@ -8569,11 +11056,12 @@ def start_web(cfg, job, report_push, logger=None, users=None,
     port = int((cfg.get("web") or {}).get("port", 8765))
     # 监听地址可配（web.host，默认 127.0.0.1）：手机端钉钉「完整详情」
     # 依赖局域网可达——服务只绑回环时 base_url 配了也连不上，host 必须可配
-    host = (str((cfg.get("web") or {}).get("host", "127.0.0.1")
-                or "127.0.0.1").strip() or "127.0.0.1")
+    host = _bind_host(cfg)
     try:
         srv = _Srv((host, port), _Handler)
         _State.srv = srv
+        _State.listen = "{}:{}".format(host, port)
+        _State.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
         _State.logger.info("[控制台] http://%s:%d （随监控常驻）",
@@ -8605,9 +11093,7 @@ def rebind_web(port: int) -> bool:
         except Exception:
             pass
         try:
-            host = (str((_State.cfg.get("web") or {}).get(
-                "host", "127.0.0.1") or "127.0.0.1").strip()
-                or "127.0.0.1")
+            host = _bind_host(_State.cfg)
             srv = _Srv((host, int(port)), _Handler)
             _State.srv = srv
             threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -8646,6 +11132,7 @@ def _demo_main():
     build_demo_db(db)
     DEMO["on"] = True
     _State.cfg = demo_cfg(db, port=args.port)
+    _State.boot_cfg = demo_cfg(db, port=args.port)
     _State.users = [{
         "name": "演示用户",
         "routes": [Route(
@@ -8665,7 +11152,11 @@ def _demo_main():
     }]
     _State.version = "demo"
     srv = _Srv(("127.0.0.1", args.port), _Handler)
-    print(f"🎪 演示控制台: http://127.0.0.1:{args.port}  （数据为合成，Ctrl+C 退出）")
+    _State.listen = "127.0.0.1:{}".format(args.port)
+    _State.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    # 控制台可能跑在 GBK 终端（Windows 默认）：emoji 直出会
+    # UnicodeEncodeError 令演示服务启动即死（pytest/截图脚本实锤）
+    print(f"[DEMO] 演示控制台: http://127.0.0.1:{args.port}  （数据为合成，Ctrl+C 退出）")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

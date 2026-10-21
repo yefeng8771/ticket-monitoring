@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from .models import FlightPrice, Route, price_band_ok, render_dir
-from .flightnorm import _hhmm, cabin_clean, cabin_class
+from .flightnorm import _hhmm, _dur_min, cabin_clean, cabin_class
+from .airlines import resolve_codes
 
 # 航班号尾码提取（name 尾部）——跨渠道合并键回退与比价头行地板档
 # 共用同一口径（code 缺失回退 name 的同款收口先例）
@@ -29,10 +30,6 @@ NEAR_RATIO = 0.10
 # 率（_plan_sub 教训），门控后异常行信息价值最高。勿在 report/
 # webui 散落字面量
 CANCEL_RATE_ALERT = 15
-
-# 跨零点出发窗口已告警对：每对 (dmin, dmax) 只告警一次
-_WIN_WARNED = set()
-
 
 # 舱位码 → 中文三大类（r222 上收 flightnorm.cabin_class 单源别名：
 # 串舱守卫与展示映射同表同函数，字母高档码不再借双表分叉绕过守卫）
@@ -83,6 +80,10 @@ def _qual_price(f) -> float:
 # ↩️ 回落出线，属航线状态非价格档，不入转写表）。webui 前端豁免区
 # （跨语言无法 import，同步律注释+test 源码钉代管）与 emoji 点位三分
 # 支行（判定逻辑非词面）备案不收。
+# 符号轴占用表（r339e P1-1 防第三例）：🎯🟩🟨▼🔥🚨🔔↩️ 为四档+
+# 状态语义点，非档位推送形态（特价/雷达等）标题**不得复用**——🎯
+# 曾被特价标题复用致邮件横幅误标「达标·可出手」（特价与达标阈值
+# 不同轴）；新推送形态选符号先对表，取 💰📣📌 等未占用位
 _TIER_TABLE = (
     # key emoji 全词 短词 转写词
     ("qual",  "🎯",   "真达标",   "真达标",   "真达标 "),
@@ -1322,6 +1323,138 @@ class Alerter:
 
     # ---------- 直飞/中转分类提醒 ----------
     @staticmethod
+    def _route_filters(flights, route):
+        """航线级筛选约束（r339 明细已解析字段升格为监控筛选，对齐
+        OTA 高频筛选面）。四门失败语义逐条定界：
+        ① airlines 白名单——码/全称/简称（别称归一到码，
+           core.airlines.resolve_codes，用户实报「东航≠东方航空子串」
+           根治）或名称片段命中才保留；未标注航司的行按不满足
+           （十七§5 保守筛选律同形）；
+        ② no_lcc——仅剔除「明确标注 lcc」的行（字段缺席≠廉航）；
+        ③ min_baggage——托运 kg 不可解析的行按不满足（直挂先例同律，
+           未标注按不满足）；「20kg/公斤」词面正则单源；
+        ⑤ max_duration_h——飞行总时长超限的行剔除；时长不可解析
+           的行按不满足（min_baggage fail-close 同律）；
+        ④ widebody_only——仅剔除「明确标注中小型机」的行；机型字段
+           渠道覆盖不全（qunar 撤源带 planeSize 缺席），缺席剔除会整
+           渠道误杀，fail-open（缺席不剔）。
+        route 兼容 Route 对象与 dict 配置（_transfer_ok 同律）。"""
+        cfg = route if isinstance(route, dict) else {
+            "airlines": route.airlines, "no_lcc": route.no_lcc,
+            "min_baggage": route.min_baggage,
+            "widebody_only": route.widebody_only,
+            "price_max": getattr(route, "price_max", 0) or 0,
+            "no_cross": getattr(route, "no_cross", False),
+            "arr_time_min": getattr(route, "arr_time_min", "") or "",
+            "arr_time_max": getattr(route, "arr_time_max", "") or "",
+            "max_duration_h": getattr(route, "max_duration_h", 0) or 0,
+            "exclude_stop": bool(getattr(route, "exclude_stop", False)),
+            "exclude_share": bool(getattr(route, "exclude_share", False))}
+        want = [s.strip() for s in
+                str(cfg.get("airlines") or "").replace("，", ",").split(",")
+                if s.strip()]
+        # `!` 前缀=排除表（命中即剔），与白名单独立判定：先排除后白名单
+        # （r341 用户令「更多智能筛选项」：只想剔某几家时不被迫列全白名单）
+        ban = [s2[1:].strip() for s2 in want if s2.startswith("!") and s2[1:].strip()]
+        want = [s2 for s2 in want if not s2.startswith("!")]
+        min_bg = int(cfg.get("min_baggage") or 0)
+        pmax = float(cfg.get("price_max") or 0)
+        mdh = float(cfg.get("max_duration_h") or 0)
+        out = []
+        for f in flights:
+            code = str(f.get("airlineCode") or "").upper()
+            name = str(f.get("airline") or "")
+            if ban and any(b.upper() == code or b in name
+                           or code in resolve_codes(b) for b in ban):
+                continue
+            if want:
+                if not any(s2.upper() == code or s2 in name
+                           or code in resolve_codes(s2) for s2 in want):
+                    continue
+            if cfg.get("no_lcc") and f.get("lcc"):
+                continue
+            # 排除经停/共享（r342）：只按明确标注剔除——字段缺席
+            # ≠ 该属性（与 no_lcc 同律 fail-open，防低覆盖渠道整列误杀）
+            if cfg.get("exclude_stop") and f.get("stop"):
+                continue
+            if cfg.get("exclude_share") and (f.get("shareCarrier")
+                                             or f.get("codeShare")):
+                continue
+            if min_bg:
+                # 词面多值取最大（语义审计 P2：渠道词面常手提+托运并
+                # 列——「手提7kg·托运20kg」旧取第一个=按手提 7 误剔；
+                # 托运额度口径=免费额最大者）
+                kgs = [float(x) for x in re.findall(
+                    r"(\d+(?:\.\d+)?)\s*(?:kg|公斤)",
+                    str(f.get("baggage") or ""), re.I)]
+                if not kgs or max(kgs) < min_bg:
+                    continue
+            if cfg.get("widebody_only"):
+                ps = str(f.get("planeSize") or "")
+                if ps and "大型机" not in ps:
+                    continue
+                # 二段非大型=全程非大型（r339a：中转行仅首段判时
+                # widebody 门对该行判真只因首段）；planeSize2 缺席
+                # 不剔防渠道覆盖差整渠道误杀，与 planeSize 同律
+                ps2 = str(f.get("planeSize2") or "")
+                if ps2 and "大型机" not in ps2:
+                    continue
+            if pmax:
+                # 价格上限（r341）：只盯 ≤ 上限的班次；票价不可解析
+                # 的行保留（fail-open——票价是行主体，缺席剔除会整
+                # 渠道误杀，与 min_baggage fail-close 异律已注明）
+                pv = f.get("price")
+                try:
+                    if pv is not None and float(pv) > pmax:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            if cfg.get("no_cross") and int(f.get("crossDayN") or 0) > 0:
+                # 排除跨天（r341）：crossDayN 由 normalize 恒落键
+                # （缺席=0），全渠道普适
+                continue
+            amin = str(cfg.get("arr_time_min") or "").strip()
+            amax = str(cfg.get("arr_time_max") or "").strip()
+            if amin or amax:
+                # 到达时段窗（r341）：与出发窗同构（_dep_in_window
+                # 同族），红眼落地嫌弃用；arrTime 缺席的行保留
+                # （与 widebody 同律：到达窗对薄行无从判定不误杀）
+                at = str(f.get("arrTime") or "")
+                if at and ":" in at and not Alerter._hhmm_in_win(at, amin, amax):
+                    continue
+            if mdh:
+                # 最长飞行总时长（r339j 新智能筛选，OTA「时长 ≤ N」
+                # 范式）：totalDuration 含中转全程；不可解析的行按
+                # 不满足（min_baggage fail-close 同律——时长是筛选
+                # 目标本体，缺席放行会让门对薄行恒真形同虚设）
+                mins = _dur_min(f.get("totalDuration"))
+                if not mins or mins > mdh * 60:
+                    continue
+            out.append(f)
+        return out
+
+    @staticmethod
+    def _hhmm_in_win(hhmm: str, lo: str, hi: str) -> bool:
+        """钟面 HH:MM 是否落在 [lo,hi] 窗内（跨午夜窗两端互换即
+        环形判定）；lo/hi 空按不限。与 _dep_in_window 同族口径。"""
+        def _m(t):
+            p = str(t or "").split(":")
+            if len(p) < 2 or not p[0].isdigit() or not p[1][:2].isdigit():
+                return None
+            return int(p[0]) * 60 + int(p[1][:2])
+        v = _m(hhmm)
+        if v is None:
+            return True
+        l, h2 = _m(lo), _m(hi)
+        if l is None and h2 is None:
+            return True
+        if l is None:
+            return v <= h2
+        if h2 is None:
+            return v >= l
+        return v >= l and v <= h2 if l <= h2 else (v >= l or v <= h2)
+
+    @staticmethod
     def _stale_sane(f: dict) -> bool:
         """补位数据自洽校验：totalDuration 与 起止时刻 必须吻合
         （±10 分钟）。旧提取器编造的错时刻（如 9C8945 的 01:25
@@ -1481,6 +1614,9 @@ class Alerter:
             if dmin or dmax:
                 flights = [f for f in flights if self._dep_in_window(
                     f.get("depTime", ""), dmin, dmax)]
+            # 航线级筛选约束（航司白名单/排除廉航/托运下限/大机型）：
+            # 同插桩层——分类前整表剔除，明细/达标/速览/比价全链路一致
+            flights = self._route_filters(flights, route)
 
             directs = [f for f in flights if not f.get("transCity")]
             transfers = [f for f in flights if f.get("transCity")]
@@ -4419,46 +4555,20 @@ class Alerter:
 
     @staticmethod
     def _dep_in_window(dep: str, dmin: str, dmax: str) -> bool:
-        """出发时刻窗口判定（HH:MM 钟面，空边界不限；不含跨零点窗口）。
-        时刻用正则解析而非切片：DB 补位行可能带 "6:30" 未补零
-        格式，切片 int("6:") 抛异常被吞按窗口内保留——而曲线侧（report
-        _rounds 过滤前过 _pad_hhmm）正确剔除，同一班次「列表含、曲线
-        不含」的图文分叉根因。"""
+        """出发时刻窗口判定（HH:MM 钟面，空边界不限；跨零点窗=环形
+        判定，r339h 与到达窗 _hhmm_in_win 同族口径统一——旧线性比较
+        下 dmin>dmax 恒 False=手输 22:00–02:00 整航线静默无数据
+        （语义审计 P1 实证），与同页到达窗/免打扰「跨零点可用」
+        三处口径互斥全靠不可见实现区分）。时刻解析仍走 _hhmm 正则
+        （DB 补位行可能带 "6:30" 未补零形态，切片 int("6:") 曾抛异常
+        被吞）；无时刻行（日历薄行）缺维度放行（r53 G3 律）。"""
         if not dep:
-            # 无时刻行（日历薄行）缺维度放行（r53 G3：曾「设窗即整行
-            # 静默消失」；值域断言对空值不可判定——r329 缺维度不滤除律）
             return True
-        # 跨零点窗口检测：dmin>dmax 的钟面窗口在本语义下恒
-        # False（任一时刻要么 <dmin 要么 >dmax），整航线静默零数据——
-        # 用户视角即「这条航线永远没数据」。每对窗口只告警一次
-        if dmin and dmax and (dmin, dmax) not in _WIN_WARNED:
-            try:
-                if (int(dmin[:2]) * 60 + int(dmin[3:5])
-                        > int(dmax[:2]) * 60 + int(dmax[3:5])):
-                    _WIN_WARNED.add((dmin, dmax))
-                    _LOG.warning("[配置] 出发窗口 %s-%s 跨零点，当前窗口"
-                                 "语义恒为空（不支持跨零点），该航线将"
-                                 "静默无数据——请改用同侧窗口",
-                                 dmin, dmax)
-            except (ValueError, IndexError):
-                pass
         hm = _hhmm(dep)
         if hm is None:
             return True
-        m = hm[0] * 60 + hm[1]
-        if dmin:
-            try:
-                if m < int(dmin[:2]) * 60 + int(dmin[3:5]):
-                    return False
-            except (ValueError, IndexError):
-                pass
-        if dmax:
-            try:
-                if m > int(dmax[:2]) * 60 + int(dmax[3:5]):
-                    return False
-            except (ValueError, IndexError):
-                pass
-        return True
+        return Alerter._hhmm_in_win(
+            "%02d:%02d" % (hm[0], hm[1]), dmin, dmax)
 
     @staticmethod
     def _arrival_ok(f: dict, deadline: str) -> bool:
@@ -4627,10 +4737,15 @@ class Alerter:
         if not cls._arrival_ok(f, _rk("transfer_arrival_max", "02:00")):
             return False
         lay_min = int(_rk("transfer_layover_min", 0) or 0)
+        lay_max = int(_rk("transfer_layover_max", 0) or 0)
+        lm = f.get("layoverM")
         if lay_min > 0:
-            lm = f.get("layoverM")
             if not isinstance(lm, int) or lm <= 0 or lm < lay_min:
                 return False
+        # 最长衔接（r342）：已知且超限才剔；衔接未知不放行也不误杀
+        # （fail-open——上限是舒适度偏好，不等于安全最低线）
+        if lay_max > 0 and isinstance(lm, int) and lm > lay_max:
+            return False
         if _rk("transfer_baggage", "") == "direct" \
                 and f.get("transferBaggage") != "direct":
             return False

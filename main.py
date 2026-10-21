@@ -12,8 +12,9 @@
   去哪儿接口有 ~5 分钟全局限流（与航线无关），查询间错峰。
 """
 import argparse
+import json
 
-__version__ = "1.5.253"
+__version__ = "1.5.264"
 import os
 import subprocess
 import sys
@@ -33,9 +34,35 @@ from core.notifier import build_notifier
 from crawlers import REGISTRY
 
 
+class _NoDupKeyLoader(yaml.SafeLoader):
+    """重复键拒收加载器：yaml 规范对重复键的通行实现是静默 last-wins
+    ——route 块混入重复 to_name/dates 时整条航线被吞、阈值被顶（r339
+    生产事故实录：一个写盘动作丢 16 条航线）。加载层即拒，坏写入在
+    启动/热重载当场炸而非静默丢数据。"""
+
+
+def _construct_mapping_no_dup(loader, node, deep=False):
+    seen = set()
+    for k_node, _v in node.value:
+        k = loader.construct_object(k_node, deep=deep)
+        if k in seen:
+            raise yaml.constructor.ConstructorError(
+                None, None,
+                f"配置出现重复键 {k!r}——YAML 重复键会静默吞掉前值"
+                f"（航线块丢失形态），请检查配置写入工具",
+                k_node.start_mark)
+        seen.add(k)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+
+_NoDupKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_no_dup)
+
+
 def load_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        return yaml.load(f, Loader=_NoDupKeyLoader)
 
 
 def _sent_hit_text(plat: str, k: str, hit: int, n: int) -> str:
@@ -58,6 +85,12 @@ def build_routes(routes_cfg: list) -> list:
             # 停用航线：配置保留在 config.yaml（心理线/日期不丢），
             # 不入运行时模型——调度、状态、明细、日历全链路自动豁免
             continue
+        # 只要直飞（UI 快捷旗标）：任何来源（页面保存/手改 config）
+        # 的 direct_only 都强制中转阈 0——alerter 的 alert_transfer>0
+        # 门即全链关断点，防「UI 收起中转输入、配置里却留旧中转价」
+        # 的双源劈叉
+        _tr = 0 if r.get("direct_only") else float(
+            r.get("alert_transfer", 0) or 0)
         routes.append(Route(
             from_code=r["from"],
             from_name=r.get("from_name", r["from"]),
@@ -66,7 +99,7 @@ def build_routes(routes_cfg: list) -> list:
             dates=list(r.get("dates", [])),
             alert_threshold=float(r.get("alert_threshold", 0) or 0),
             alert_direct=float(r.get("alert_direct", 0) or 0),
-            alert_transfer=float(r.get("alert_transfer", 0) or 0),
+            alert_transfer=_tr,
             transfer_arrival_max=str(r.get("transfer_arrival_max", "02:00")),
             # 中转衔接下限与行李直挂必须传入 Route——漏传曾使主链路
             # （达标推送/总表/概览）的这两项配置整体失效（默认 0/""），
@@ -74,8 +107,34 @@ def build_routes(routes_cfg: list) -> list:
             transfer_layover_min=int(r.get("transfer_layover_min", 0) or 0),
             transfer_baggage=str(r.get("transfer_baggage", "") or ""),
             ret_date=str(r.get("ret_date", "") or ""),
+            # 返程日多选（AiLao）：ret_dates 列表为准，legacy 单值键
+            # 读取合并（去重保序）；两者皆空=单程
+            ret_dates=list(dict.fromkeys(
+                [d for d in (r.get("ret_dates") or [])
+                 if str(d or "").strip()]
+                + ([r["ret_date"]] if str(r.get("ret_date") or "").strip()
+                   else []))),
             dep_time_min=str(r.get("dep_time_min", "") or ""),
             dep_time_max=str(r.get("dep_time_max", "") or ""),
+            # r341 四门：价格上限/排除跨天/到达时段窗（模型+alerter
+            # 同批；漏传=配置键整体失效的重演防线，同 transfer 门判例）
+            price_max=float(r.get("price_max", 0) or 0),
+            no_cross=bool(r.get("no_cross", False)),
+            arr_time_min=str(r.get("arr_time_min", "") or ""),
+            arr_time_max=str(r.get("arr_time_max", "") or ""),
+            # r339j 五门：最长飞行总时长小时（0=不限；漏传=配置键整体
+            # 失效的重演防线，同 transfer 门判例）
+            max_duration_h=float(r.get("max_duration_h", 0) or 0),
+            # r342 三门：最长中转衔接/排除经停/排除共享（漏传=配置键
+            # 整体失效，同 transfer 门判例）
+            transfer_layover_max=int(
+                r.get("transfer_layover_max", 0) or 0),
+            exclude_stop=bool(r.get("exclude_stop", False)),
+            exclude_share=bool(r.get("exclude_share", False)),
+            airlines=str(r.get("airlines", "") or ""),
+            no_lcc=bool(r.get("no_lcc", False)),
+            min_baggage=int(r.get("min_baggage", 0) or 0),
+            widebody_only=bool(r.get("widebody_only", False)),
         ))
     return routes
 
@@ -104,6 +163,20 @@ def build_users(cfg: dict) -> list:
             "schedule": u.get("schedule") or cfg.get("schedule") or {},
         })
     return users
+
+
+def _apply_browser_dir(cfg):
+    """crawler.browser_dir：chromium 内核缓存位可配置（用户反馈「WIN
+    安装的依赖文件全堆在 C 盘」——playwright 默认装
+    %LOCALAPPDATA%\\ms-playwright 约 500MB 不可选盘）。空=渠道默认位
+    行为不变；配置后内核安装与查找全部指向该目录（进程内全部浏览器
+    子进程经环境变量继承）。启动级语义：安装发生在启动检查点，运行
+    中改配置不迁移已装内核（全局卡标 ♻ 重启生效）。"""
+    d = str((cfg.get("crawler") or {}).get("browser_dir") or "").strip()
+    if d:
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.abspath(
+            os.path.expanduser(d))
+    return bool(d)
 
 
 def ensure_chromium(platforms, logger=None):
@@ -242,6 +315,69 @@ def _anchored(p, default):
     return p if os.path.isabs(p) else os.path.join(_REPO_ROOT, p)
 
 
+_STORAGE_STATE = os.path.join(_REPO_ROOT, "data", ".storage_paths.json")
+
+
+def _load_storage_paths() -> dict:
+    """上次成功启动时使用的绝对存储路径（跨重启迁移的源）。
+
+    r342：旧实现只从「出厂默认路径」搬到自定义路径——第二次自定义
+    改自定义时源恒缺席，所谓「无缝迁移」只成立一次。状态文件独立于
+    config.yaml 与 data 库本身，启动成功即落盘；损坏/缺失按空处理，
+    行为回退到默认路径，无迁移副作用。"""
+    try:
+        with open(_STORAGE_STATE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_storage_paths(db, ud, log, bdir) -> None:
+    """启动成功后记录生效绝对路径（tmp+replace 原子写，失败不阻断）。"""
+    try:
+        os.makedirs(os.path.dirname(_STORAGE_STATE), exist_ok=True)
+        tmp = _STORAGE_STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"db": os.path.abspath(db),
+                       "user_data": os.path.abspath(ud),
+                       "log": os.path.abspath(log),
+                       "browser_dir": os.path.abspath(bdir) if bdir else ""},
+                      f, ensure_ascii=False, indent=1)
+        os.replace(tmp, _STORAGE_STATE)
+    except Exception:
+        pass
+
+
+def _migrate_db_if_needed(old_db, new_db, sentinel_abs) -> bool:
+    """db_path 变更后的旧库迁移（r339 用户指令「一切配置可变更化」）：
+    旧库存在且新路径无文件 → 整体搬迁（含 -wal/-shm 伴生件，防 WAL
+    未合卷丢最近写入）；新旧同路径/源缺席 → 不动。失败抛给调用方
+    降级（沿旧路径继续，不阻断启动）。"""
+    old_db, new_db = os.path.abspath(old_db), os.path.abspath(new_db)
+    if old_db == new_db or not os.path.exists(old_db)             or os.path.exists(new_db):
+        return False
+    os.makedirs(os.path.dirname(new_db), exist_ok=True)
+    import shutil
+    for suffix in ("", "-wal", "-shm"):
+        src = old_db + suffix
+        if os.path.exists(src):
+            shutil.move(src, new_db + suffix)
+    return True
+
+
+def _migrate_user_data_if_needed(old_ud, new_ud) -> bool:
+    """user_data 目录迁移：仅目标不存在（或为空）时整体搬迁——
+    目标已有登录态不覆盖（登录态丢失成本高于旧档保留）。"""
+    old_ud, new_ud = os.path.abspath(old_ud), os.path.abspath(new_ud)
+    if old_ud == new_ud or not os.path.isdir(old_ud)             or (os.path.isdir(new_ud) and os.listdir(new_ud)):
+        return False
+    os.makedirs(os.path.dirname(new_ud), exist_ok=True)
+    import shutil
+    shutil.move(old_ud, new_ud)
+    return True
+
+
 def _recent_sweep_age(db_path):
     """上轮落库距今秒数；DB 缺失/不可读/空表返回 None（调用方按不跳过）。"""
     try:
@@ -299,6 +435,9 @@ def _sent_load():
                     if len(parts) == 3:
                         _DOMZERO_SEEN[(parts[1], parts[2])] = v
                     continue
+                if k.startswith("loginstreak|"):
+                    _LOGIN_ALERT_STREAK[k.split("|", 1)[1]] = int(v or 0)
+                    continue
                 parts = k.split("|")
                 if len(parts) == 5:
                     # 窗键控告警留痕（与供给基线同粒度）
@@ -331,6 +470,8 @@ def _sent_save():
             out["supplied|" + "|".join(k)] = v
         for k, v in _DOMZERO_SEEN.items():
             out["domzero|" + "|".join(k)] = v
+        for k, v in _LOGIN_ALERT_STREAK.items():
+            out["loginstreak|" + k] = v
         with open(_sent_file, "w", encoding="utf-8") as f:
             _json.dump(out, f, ensure_ascii=False)
     except Exception:
@@ -542,6 +683,8 @@ def _channel_login_alert_sentinel(user_notifiers, logger):
         if getattr(cls, "login_suspect", False):
             streak = _LOGIN_ALERT_STREAK.get(plat, 0) + 1
             _LOGIN_ALERT_STREAK[plat] = streak
+            _sent_save()   # streak 持久化：跨重启累计（长轮周期+频繁
+            #               重启下内存态永到不了 2=告警哑火，生产实录）
             if streak < 2:
                 continue
             if _SENT_LAST.get(key) == today:
@@ -550,9 +693,13 @@ def _channel_login_alert_sentinel(user_notifiers, logger):
             _SENT_CNT[key] = cnt
             _SENT_LAST[key] = today
             _sent_save()
-            msg = (f"⚠ 渠道 {plat} 会话可能已失效（连续 {streak} 轮被"
-                   f"服务端按未登录处理）——请到配置页「渠道登录」重新"
-                   f"登录，恢复后会收到通知")
+            # 段落律 \n\n（钉钉 PC 不认单 \n），每段 ≤40 半角——行宽
+            # 守卫钉在 tests/test_r340_push.py（手拼行直发 112 半角教训）
+            msg = "\n\n".join((
+                f"⚠ 渠道 {plat} 会话可能已失效",
+                f"连续 {streak} 轮被服务端按未登录处理",
+                "请到配置页「渠道登录」重新登录",
+                "恢复后会收到通知"))
             if cnt >= 3 and cnt % 3 != 0:
                 logger.info("[渠道告警][连续%d日] %s", cnt, msg)
                 continue
@@ -564,14 +711,19 @@ def _channel_login_alert_sentinel(user_notifiers, logger):
         else:
             if _LOGIN_ALERT_STREAK.get(plat, 0) >= 2 \
                     and _SENT_LAST.get(key) in (today, yest):
-                msg = f"渠道 {plat} 登录态已恢复（服务端重新承认会话）"
+                msg = "\n\n".join((
+                    f"渠道 {plat} 登录态已恢复",
+                    "服务端重新承认会话"))
                 for _u, nf in targets:
                     try:
                         nf.send("渠道登录态恢复", msg)
                     except Exception as e:
                         logger.warning("[渠道告警] 恢复通知异常: %s", e)
                 _SENT_CNT.pop(key, None)
-            _LOGIN_ALERT_STREAK[plat] = 0
+                _sent_save()
+            if _LOGIN_ALERT_STREAK.get(plat):
+                _LOGIN_ALERT_STREAK[plat] = 0
+                _sent_save()
 
 
 def _channel_partial_sentinel(qry_sup, logger):
@@ -1637,27 +1789,34 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
         def _timed_fetch(c, fc_, tc_, d_):
             # 单渠道计时入脉冲（成败=是否有数据），控制台可观察性数据源
             t0 = time.time()
-            prices = c.safe_fetch(fc_, tc_, [d_],
-                                  ret_date=ret_dates.get((fc_, tc_, d_), ""))
+            prices = []
+            # 返程日多选（AiLao）：逐返程日采集（行级 ret_date 列天然
+            # 承载，crawler/storage 零改动）；单值/无返程退化为单次
+            # fetch（rds=[""] 与旧行为逐字节等价）
+            for _rd in (ret_dates.get((fc_, tc_, d_)) or [""]):
+                prices.extend(c.safe_fetch(fc_, tc_, [d_], ret_date=_rd))
             try:
                 PULSE.channel(c.name, len(prices), time.time() - t0)
             except Exception:
                 pass
             return prices
 
-        # 往返回程日旁挂（R15，INTL_DESIGN §2.6）：查询键 (fc,tc,d) →
-        # ret_date——同键多用户 ret_date 取先见（往返对同 OD 同日异回程
-        # 的混订场景 v1 不支持，后见者沿用先见采集面）
+        # 往返回程日旁挂（R15，INTL_DESIGN §2.6；r339 多返程扩展）：
+        # 查询键 (fc,tc,d) → 返程日列表——同键多用户取并集（去重保
+        # 序；往返对同 OD 同日异回程的混订场景由列表语义承载）
         ret_dates = {}
         for (fc_, tc_, d_), uis in registry.items():
             for ui in uis:
                 for r in users[ui]["routes"]:
                     if (r.from_code == fc_ and r.to_code == tc_
-                            and d_ in r.dates and getattr(r, "ret_date", "")):
-                        ret_dates[(fc_, tc_, d_)] = r.ret_date
-                        break
-                if (fc_, tc_, d_) in ret_dates:
-                    break
+                            and d_ in r.dates):
+                        rds = getattr(r, "ret_dates", None) or (
+                            [r.ret_date] if getattr(r, "ret_date", "")
+                            else [])
+                        for _rd in rds:
+                            if _rd not in ret_dates.setdefault(
+                                    (fc_, tc_, d_), []):
+                                ret_dates[(fc_, tc_, d_)].append(_rd)
 
         user_pairs = {}   # 按用户聚合 (route, prices)，轮末一次聚合推送
         chart_cache = {ui: {} for ui in range(len(users))}
@@ -1853,14 +2012,29 @@ def main():
                     help="顺序弹出浏览器引导登录所有已启用渠道（每家登录一次永久复用）")
     ap.add_argument("--login", metavar="PLATFORM",
                     help="登录指定平台(ctrip/fliggy/tongcheng)，弹出可见浏览器，登录完成后回车保存会话")
+    ap.add_argument("--restart-delay", type=float, default=0.0,
+                    help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     # 锁在参数解析后：--version/--help 曾被单实例锁拦下，
     # 发版门禁「exe 实跑 --version」在监控运行时必假红
+    if args.restart_delay > 0:
+        # 自重启通道（webui /api/restart 拉起）：旧进程约 1s 后退出才
+        # 释放 data/.instance.lock——新实例即时抢锁必撞锁退场（十五§1
+        # 同族），延迟到旧进程死后再加锁
+        time.sleep(args.restart_delay)
     if not acquire_instance_lock():
         print("⚠ 已有实例在运行（检测到实例锁），本次启动退出。"
               "控制台仍可用：浏览器打开 http://127.0.0.1:8765")
         sys.exit(1)
+
+    # pidfile 进程自写（start.ps1 亦写同文件同值=双保险；/api/restart
+    # 直拉的新实例此前漏写→status/stop 假死盲区，r339g 活体首鸣实锤）
+    try:
+        (Path(__file__).resolve().parent / ".monitor.pid").write_text(
+            str(os.getpid()), encoding="ascii")
+    except OSError:
+        pass
 
     cfg_path = Path(args.config)
 
@@ -1892,8 +2066,39 @@ def main():
 
     out = cfg.get("output", {})
     logger = setup_logger(_anchored(out.get("log_path"), "logs/monitor.log"))
+    # 启动级路径迁移（r339/r342「一切配置可变更化」）：源=上次成功
+    # 启动记录（跨重启链式迁移），目标=本次 config.yaml；db/user_data
+    # 自动搬迁，日志/内核目录不搬（切换后新位置生效，旧档保留）。
+    _new_db = _anchored(out.get("db_path", "data/prices.db"),
+                        "data/prices.db")
+    _new_ud = _anchored(str((cfg.get("crawler") or {}).get(
+        "user_data_dir", "user_data") or "user_data"), "user_data")
+    _new_log = _anchored(out.get("log_path", "logs/monitor.log"),
+                         "logs/monitor.log")
+    _new_bdir = str((cfg.get("crawler") or {}).get("browser_dir", "") or "")
+    _prev = _load_storage_paths()
+    _old_db = _prev.get("db") or _anchored("data/prices.db",
+                                            "data/prices.db")
+    _old_ud = _prev.get("user_data") or _anchored("user_data",
+                                                  "user_data")
+    try:
+        if _migrate_db_if_needed(
+                _old_db, _new_db, _anchored("data/.r339_sentinel",
+                                      "data/.r339_sentinel")):
+            logger.info("[迁移] 旧数据库已搬迁至 %s", _new_db)
+    except Exception as e:
+        logger.warning("[迁移] 数据库搬迁失败（新路径继续；旧档保留）: %s", e)
+    try:
+        if _migrate_user_data_if_needed(_old_ud, _new_ud):
+            logger.info("[迁移] 旧浏览器登录态已搬迁至 %s", _new_ud)
+    except Exception as e:
+        logger.warning("[迁移] 登录态搬迁失败（新目录继续；旧档保留）: %s", e)
+    _apply_browser_dir(cfg)
     ensure_chromium(cfg.get("platforms") or ["qunar"], logger)
     storage = PriceStorage(_anchored(out.get("db_path"), "data/prices.db"))
+    # 迁移源状态只在库成功打开后落盘：路径不可写等启动失败时保留
+    # 上一次成功源，下次启动仍能重试搬迁（提前落盘会让真源被遗忘）
+    _save_storage_paths(_new_db, _new_ud, _new_log, _new_bdir)
     # 基线断代回填（空窗旧键在册才触发，幂等）：生产哨状态 10-16 格式
     # 迁移遗留的渠道×字段粒度供给记录转窗粒度基线——迁移前断链的字段
     # 否则永被 never-supplied 门静默（fliggy|prate 等五字段假阴实录）

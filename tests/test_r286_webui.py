@@ -195,10 +195,12 @@ def test_hc_coarse_band_extended_source_pin():
     入覆写域）；覆写块位置晚于窄带 5px 基础声明（≤760 带层叠行为
     零变化：同特异性置尾胜）。"""
     src = _page_src()
+    # r339d D5 起块内合法增厚（.rthead 36 地板同块）——匹配放宽到
+    # 「块头到 .hc 声明」（窗口钉对插入敏感，LESSONS 卅一§3 同律），
+    # 语义担保不变：扩带门 + .hc 9px 覆写声明在块内
     m = re.search(
         r"@media\(pointer:coarse\) and \(max-width:900px\)\{"
-        r"\s*\.hcells\{overflow-x:auto;overflow-y:hidden\}\s*"
-        r"\.hc\{width:9px;flex:none\}\}", src)
+        r"[^@]*?\.hc\{width:9px;flex:none\}", src)
     assert m, "W1 块未扩带 ≤900（或块内声明形态漂移）"
     i_base = src.find(".hc{width:5px}")
     assert 0 < i_base < m.start(), "覆写块必须晚于窄带 5px 基础声明"

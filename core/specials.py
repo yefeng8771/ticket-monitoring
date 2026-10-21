@@ -27,7 +27,7 @@ from typing import Callable, List, Optional, Tuple
 from urllib.parse import quote
 
 from .flightnorm import AIRPORT_NAME_CN
-from .alerter import _dw
+from .alerter import _dw, _fit_line
 from .models import PRICE_MAX, PRICE_MIN
 
 # 发现源（r319 五源：途牛榜单 / 携程低价日历 / 携程特价搜索榜 /
@@ -514,32 +514,41 @@ def build_special_push(watch: SpecialWatch,
     往返段随行。空集返回空串（调用方跳过推送）。"""
     if not results:
         return "", ""
-    title = f"🎯 特价快讯｜{watch.from_name}出发"
+    title = f"💰 特价快讯｜{watch.from_name}出发"
     blocks = []
     for d, vp in results:
         tname = (d.to_name or _POOL_NAME.get(d.to_code)
                  or AIRPORT_NAME_CN.get(d.to_code) or d.to_code)
-        # 行宽纪律（钉钉手机 ≤20 全角/行）：段内用单 \n 分行（PC 不认
-        # 单 \n 自动并回一行，两端各自成立）；条目间 \n\n 分段。
-        # 币符统一全角 ￥（c330 审校 C4：半角 ¥ 是全库唯一币符分叉，
-        # 「确定安全字符集」在册币符是全角）；附加段（折扣+航司）超
-        # 宽剥尾保价判据——价格行此前无任何守卫（价+源价是核心判据）
+        # 行宽纪律（钉钉手机 ≤20 全角/行）：行组装一律段落级 \n\n
+        # （r339e P2-2：段内单 \n 在 PC 被并回一行，日期与价格贴字
+        # 「10-20￥2600」实锤）。币符统一全角 ￥（c330 审校 C4：半角 ¥
+        # 是全库唯一币符分叉，「确定安全字符集」在册币符是全角）；
+        # 附加段（折扣+航司）超宽剥尾保价判据——价格行此前无任何守卫
+        # （价+源价是核心判据）
         _pw = (f"￥{float(vp):.0f}（{_SRC_LABEL.get(d.src, d.src)}"
                f"源价￥{d.src_price:.0f}）")
         _tw = ((d.discount or "")
                + (f"·{d.airline}" if d.airline else ""))
         if _tw and _dw(_pw) + _dw(_tw) > 40:
             _tw = ""
-        line = (f"✅ {watch.from_name}→{tname} {d.date[5:]}\n"
-                f"{_pw}{_tw}")
+        # 首行行宽守卫（r339e P2-2：长名域实测 48/40）——降级链
+        # 剥机场括注→剥名保日期地板（价格判据在第二行恒不陪葬）
+        _fn = re.sub(r"[（(][^（）()]*[）)]", "", watch.from_name)
+        _tn = re.sub(r"[（(][^（）()]*[）)]", "", tname)
+        head = _fit_line(
+            f"✅ {watch.from_name}→{tname} {d.date[5:]}",
+            fallbacks=[
+                f"✅ {_fn}→{_tn} {d.date[5:]}",
+                f"✅ {d.date[5:]}"])
+        line = f"{head}\n\n{_pw}{_tw}"
         if d.ret_date:
             if d.ret_price and abs(d.ret_price - d.src_price) > 0.5:
                 # 返程独立有价（ctrip 反向日历配对的单程价）
-                line += f"\n返程 {d.ret_date[5:]} ￥{d.ret_price:.0f}"
+                line += f"\n\n返程 {d.ret_date[5:]} ￥{d.ret_price:.0f}"
             else:
                 # 途牛 roundTrip：src_price 已是往返总价，返程段不重复
                 # 显价（词面「返程 ¥X」会被读成返程单程价，Soldier P3#6）
-                line += f"\n往返含返程 {d.ret_date[5:]}"
+                line += f"\n\n往返含返程 {d.ret_date[5:]}"
         if d.link:
             line += f"\n\n[购买直达]({d.link})"
         blocks.append(line)

@@ -222,8 +222,9 @@ def test_webui_plane_passthrough_and_consumers():
     mod = open(os.path.join(_ROOT, "webui.py"), encoding="utf-8").read()
     # plane 透传（爬虫落键后下行字典同轮接，seatTilt 先例零布局通道）
     assert '"plane": (f.get("plane") or "").strip(),' in mod
-    # CSV「机型体量」列并入机型名（v1559 机场码同列并入先例，不加新列）
-    assert "[f.planeSize,f.plane].filter(Boolean).join('·')" in mod
+    # CSV「机型体量」列并入机型名（v1559 机场码同列并入先例，不加新列；
+    # r339 起二段体量/机型同列并入——列序 planeSize·planeSize2·plane）
+    assert "[f.planeSize,f.planeSize2,f.plane].filter(Boolean).join('·')" in mod
     # 明细次行机型体量 span title 机型名注记（次行段容量红线 14 已满，
     # 词面不加只注 title）
     assert "机型'+he(f.plane)" in mod
@@ -257,9 +258,12 @@ def test_intl_freeze_replay_tuniu():
     rows = _TN._parse_offers_intl(data)
     # dump 由生产实例按轮覆盖写（行数随窗内航班浮动）——断言锁
     # 「读层接线实效 + 门不误杀 + 不退化」相对语义，不锚瞬时计数
-    # （首版锚 92/61/78 硬数，全量跑撞生产覆写当场红）
+    # （首版锚 92/61/78 硬数，全量跑撞生产覆写当场红；行数下限
+    # 50 亦然——薄供给带三度穿越实录 140→83→71→28 行（间歇薄
+    # 样本先例），绝对库存锚退役改非空门：断供/塌方观测归渠道级
+    # 哨位，本钉只锁读层结构（下方各断言自带相对语义）
     n = len(rows)
-    assert n > 50
+    assert n >= 1
     # cabinCode 出勤地板（值域漂移实证：渠道恢复轮出现「R4-N/R4-K/…」
     # 带数字订座码形态，语义未证不采——形态门拒收是在岗正确不是读层
     # 错位，缺席行原值不落行故无法逐行断言形态归属，以缺席数地板锁
@@ -297,11 +301,16 @@ def test_intl_freeze_replay_tuniu():
                 if r.get("shareAirline") and r.get("shareCarrier")]
     # T5：段级补全地板锁（原 `>=55` 绝对值钉：语料=生产滚动单槽每轮
     # 覆写，窗内 craftWidthType 载体出勤 54~55 浮动当场过期——判例
-    # 十八§24 随语料浮动改写）。地板 45≈50% 出勤：正常带 ~59-77%
-    # 留足余量；抓「重度塌方」（ seg0-only 退化在现窗仍可出 ~69 行
-    # ——Soldier m2 实测，地板不红）与渠道撤源级归零，非轻度退化
+    # 十八§24 随语料浮动改写）。二改相对地板 ≥25%（原 45 绝对值又
+    # 被库存缩量穿越：春季班次离窗 dump 140→83 行，出勤 25/83=30%
+    # 属代际波动非退化——绝对值锚库存总量，比率锚出勤结构）：
+    # 正常带 ~59-77% 留足余量；抓「重度塌方」（ seg0-only 退化在现
+    # 窗仍可出 ~49%——地板不红，与原 45 地板同口径）与渠道撤源级
+    # 归零，非轻度退化
     n_ps = sum(1 for r in rows if r.get("planeSize"))
-    assert n_ps >= 45, f"planeSize 出勤 {n_ps}/{n} 破地板（段级补全退化?）"
+    assert n_ps >= n * 0.25, (
+        f"planeSize 出勤 {n_ps}/{n}（{n_ps / max(n, 1):.0%}）破 25% 地板"
+        "（段级补全退化?）")
     # 值域不漂移
     assert {r["planeSize"] for r in rows if r.get("planeSize")} <= {
         "大型机", "中型机", "小型机"}
@@ -312,7 +321,7 @@ def test_intl_freeze_replay_qunar():
         os.path.join(_ROOT, "debug", "qunar_raw_intl_*.txt")))
     if not dumps:
         pytest.skip("冻结 dump 缺席（debug/ 不入库）")
-    n_rows = n_stop = n_reduce = 0
+    n_rows = n_reduce = 0
     for p in dumps:
         with open(p, encoding="utf-8") as fh:
             text = fh.read()
@@ -321,15 +330,39 @@ def test_intl_freeze_replay_qunar():
         except Exception:
             continue
         n_rows += len(fl)
-        n_stop += sum(1 for r in fl if r.get("stopover"))
         n_reduce += sum(1 for r in fl if "已减¥" in (r.get("labels") or "")
                         or "成都两场互通" in (r.get("labels") or ""))
     # dump 集由生产按轮增写（窗口/航班浮动；硬拒期空响应覆写清薄
-    # 语料实录：健康带 700+ 行塌至 386）——相对语义同上钉，行数下限
-    # 取「多 dump 合计不退化」地板而非健康期瞬时值（LESSONS 十八§24
-    # 回放钉禁锚瞬时计数）
-    assert n_rows > 200
-    # B 报告单代口径 14/1007 与 5/1007：回放锁「结构化真值与词面
-    # 白名单通道真实点亮」，不锚瞬时计数
-    assert n_stop >= 1
+    # 语料实录：健康带 700+ 行塌至 386，多航线空响应续写后 243→191
+    # ——绝对合计锚随覆写穿越）——相对语义同上钉：非空门 + 下方
+    # 相对断言锁结构；行数下限 200 退役（断供观测归渠道级哨位）
+    assert n_rows >= 1
+    # 词面白名单通道点亮（当前语料在供；若未来归零按姊妹钉同法
+    # 改变异注入形态）
     assert n_reduce >= 1
+
+
+def test_intl_stopover_channel_lit_by_mutation():
+    """stopover 落键通道锁（变异注入形态）。活语料当前代际 stops
+    载体恒 0（经停班次零供给，20 dump 240 处全 0）——旧「n_stop>=1」
+    锚的是瞬时供给，语料代际一翻即红（LESSONS 十八§24 回放钉禁锚
+    瞬时计数）。改为对真实 dump 注入该结构化真值后回放：锁「载体→
+    落键」整链，通道点亮证明不依赖语料恰好含经停班。"""
+    dumps = sorted(glob.glob(
+        os.path.join(_ROOT, "debug", "qunar_raw_intl_*.txt")))
+    if not dumps:
+        pytest.skip("冻结 dump 缺席（debug/ 不入库）")
+    for p in dumps:
+        with open(p, encoding="utf-8") as fh:
+            text = fh.read()
+        if 'stops\\":0' not in text:
+            continue
+        mutated = text.replace('stops\\":0', 'stops\\":1', 1)
+        try:
+            fl, _risk = _QC._parse_intl_response(mutated)
+        except Exception:
+            continue
+        hits = [r for r in fl if r.get("stopover")]
+        assert hits, f"载体注入后 stopover 未落键：{os.path.basename(p)}"
+        return
+    pytest.skip("语料无 stops 载体（代际形态漂移，按哨位人工复核）")

@@ -70,7 +70,10 @@ def test_p32_montabs_tablist_retired():
         "tab 角色复活"
     assert "setAttribute('aria-controls','montab-'" not in _WEBUI, \
         "tab↔tabpanel 关联复活"
-    assert "aria-selected" not in _WEBUI, "aria-selected 复活"
+    # r345：日期模式条是唯一合法的 tab 形制；montabs 仍禁 aria-selected
+    assert _WEBUI.count("setAttribute('aria-selected'") == 1, \
+        "aria-selected 旧形制复活（仅日期模式条允许）"
+    assert "setDateMode" in _WEBUI
 
 
 def test_p32_mtab_pressed_semantics_alive():

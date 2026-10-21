@@ -942,6 +942,24 @@ class CtripCrawler(BaseCrawler):
                             plane_size = f"{_psm.group(1)}型机"
                 if craft and plane_size:
                     break
+            # 中转二段机型/体量（r339a 候选 A）：mutilstn[1].craftinfo
+            # 65/65 中转行在场、48/65 二段机型≠首段——「全程坐什么
+            # 飞机」与 widebody 全程判的二段证据；与首段同门（kind
+            # ∈{1,2,3} 结构化真值，缺失 cdisname 括号兜底）；仅中转
+            # 行落、无值不落键
+            craft2 = ""
+            plane_size2 = ""
+            if is_transfer and len(segs) > 1:
+                _ci2 = segs[1].get("craftinfo") or {}
+                craft2 = str(_ci2.get("cdisname") or "").strip()
+                _kind2 = _ci2.get("kind")
+                if _kind2 in (1, 2, 3):
+                    plane_size2 = {1: "大型机", 2: "中型机",
+                                   3: "小型机"}[_kind2]
+                else:
+                    _psm2 = re.search(r"[（(]([大中小])[)）]", craft2)
+                    if _psm2:
+                        plane_size2 = f"{_psm2.group(1)}型机"
             ci = best_ci
             # 机龄：classinfor.extendinfos[].content「机龄9年」
             # 结构化真值，取数字串与 tuniu flightYear「6.3」原始形态协议
@@ -1541,6 +1559,10 @@ class CtripCrawler(BaseCrawler):
                 # 舱位字母（上方 classNoteList nt=2，随最低价政策配对；
                 # 无注记不落键——after 观测抓产中转行空串，同族不落）
                 **({"planeSize": plane_size} if plane_size else {}),
+                # 二段机型/体量（上方二段提取；仅中转行有值，无值
+                # 不落键同律）
+                **({"plane2": craft2} if craft2 else {}),
+                **({"planeSize2": plane_size2} if plane_size2 else {}),
                 **({"cabinCode": cabin_code} if cabin_code else {}),
                 # pid 数字托运额词面（免费托运NKG/无免费托运，双门匹配
                 # 才有值；数字额比 tongcheng 布尔词面/qunar 词面更精确，

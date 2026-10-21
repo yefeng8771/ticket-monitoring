@@ -204,9 +204,10 @@ def test_c3_dingtalk_toggle_updates_heads(page):
                   aHead: g('A'), eHead: g('E')};
         })()""")
         assert out["model"] is True, out
-        assert out["pill"] == "推送已启用", out
-        assert "钉钉已启用" in out["aHead"], out
-        assert "钉钉✓" in out["eHead"], out
+        # r345：开关开但 Webhook 空 → 待完善（后端会跳过，不能假绿）
+        assert out["pill"] == "推送待完善", out
+        assert "钉钉待完善" in out["aHead"], out
+        assert "钉钉待完善" in out["eHead"], out
     finally:
         _restore(page, snap)
 
@@ -234,8 +235,9 @@ def test_c5_specials_pill_composite_truth(page):
     snap = page.evaluate(_SNAP)
     try:
         out = page.evaluate("""(() => {
-          CFG[0].specials = [{enabled: true, from_name: '上海'}];
-          buildForm();
+          CFG[0].specials = [{enabled: true, from_name: '上海',
+                              max_price: 400}];
+          buildForm();   // r339j 价位门：_spOn 复合真值含 max_price>0——钉数据同步完形
           const pillAt = () => {{
             const p = document.querySelectorAll(
               '#cfgform .ucard .uhead2 .upill')[1];
@@ -257,6 +259,16 @@ def test_c5_specials_pill_composite_truth(page):
         assert out["model"] is False, out
         assert out["off"]["t"] == "🎯特价关" and not out["off"]["ok"], out
         assert out["dOff"] == "未启用", out
+        # r339j 价位门反例：enabled+出发地齐但价位 0=未完形→恒「关」
+        out2 = page.evaluate("""(() => {
+          CFG[0].specials = [{enabled: true, from_name: '上海',
+                              max_price: 0}];
+          buildForm();
+          const p = document.querySelectorAll(
+            '#cfgform .ucard .uhead2 .upill')[1];
+          return {t: p.textContent.trim(),
+                  ok: p.classList.contains('ok')};})()""")
+        assert out2["t"] == "🎯特价关" and not out2["ok"], out2
     finally:
         _restore(page, snap)
 

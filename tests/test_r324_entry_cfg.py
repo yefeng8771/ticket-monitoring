@@ -201,18 +201,43 @@ def _txt(pg, sel):
         "return el?el.textContent.trim():null;}", sel)
 
 
+def _open_dtools(pg, rk="0:0"):
+    """按卡展开「＋ 添加」工具组（r339g 二合一后 dadd/加日期住在
+    display:none 折叠行里；buildForm 重建会重置折叠态，每次变更后
+    需再展开——LESSONS 十九§7/§8 + 十一§3 重建吞交互态）。"""
+    dsel = '.rline[data-rk="%s"] .dline.dtools' % rk
+    if pg.locator(dsel).first.count() \
+            and not pg.locator(dsel).first.evaluate(
+                "el=>el.classList.contains('open')"):
+        _click(pg, '.rline[data-rk="%s"] .dtools-t' % rk)
+
+
+def _open_rtadv(pg, rk="0:0"):
+    """展开「筛选与时段约束」折叠组（r339 起中转/时段/筛选行默认收起——
+    A1 P1 修复后 foldRoute 展开路由不再连带展开内层折叠，操作行前须
+    显式展开）。"""
+    pg.evaluate("""((rk) => {
+      const rt=document.querySelector(
+        '.rline[data-rk="'+rk+'"] .rthead');
+      if(rt&&rt.getAttribute('aria-expanded')==='false')rt.click();
+    })""", rk)
+    pg.wait_for_timeout(120)
+
+
 def _open_route(pg, rk="0:0"):
     """真点击航线卡头展开（全新 context 下 FOLD 空 → 默认折叠态确定）。"""
     sel = '.rline[data-rk="%s"] .rhead' % rk
     assert pg.locator(sel).first.get_attribute("aria-expanded") == "false", sel
     _click(pg, sel)
     assert pg.locator(sel).first.get_attribute("aria-expanded") == "true", sel
+    _open_dtools(pg, rk)
 
 
 def _open_ch(pg, key):
+    """幂等展开通道卡：addEm 后新卡自动展开（r343），不得再强断言首态。"""
     sel = '.chcard[data-ch="%s"] .chhead' % key
-    assert pg.locator(sel).first.get_attribute("aria-expanded") == "false", sel
-    _click(pg, sel)
+    if pg.locator(sel).first.get_attribute("aria-expanded") == "false":
+        _click(pg, sel)
     assert pg.locator(sel).first.get_attribute("aria-expanded") == "true", sel
 
 
@@ -379,6 +404,20 @@ class TestW456DerivedChannels:
             })()""")
             assert out["ay"]["url"] == "https://monitor.aliyun.com/probe", out
             assert out["ay"]["enabled"] is True, out
+            # r345 如实态：仅 URL 缺 AccessKey 时后端不会实例化通道 → 待完善
+            assert not out["on"] and not out["dot"], out
+            assert out["muted"] == "待完善", out
+            assert "电话待完善" in out["eHead"], out
+            _fill(page, '#cfgform input[onchange*="setAy(0,\'user\'"]', "LTAIprobe")
+            _fill(page, '#cfgform input[onchange*="setAy(0,\'password\'"]', "secretprobe")
+            out = page.evaluate("""(() => {
+              const c = document.querySelector('.chcard[data-ch="aliyun"]');
+              return {on: c.classList.contains('on'),
+                      dot: c.querySelector('.lgdot').classList.contains('on'),
+                      muted: c.querySelector('.chhead .muted').textContent,
+                      eHead: document.querySelector(
+                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+            })()""")
             assert out["on"] and out["dot"], out
             assert out["muted"] == "已启用", out
             assert "电话✓" in out["eHead"], out
@@ -464,9 +503,7 @@ class TestW7Email:
             out = page.evaluate("""(() => {
               const em = CFG[0].notifier.emails[0];
               const c = document.querySelector('.chcard[data-ch="email0"]');
-              const tn = [...c.querySelector('.chhead').childNodes]
-                .find(n => n.nodeType === 3 &&
-                           (n.textContent || '').indexOf('邮件·') === 0);
+              const tn = c.querySelector('.chhead .ch-title');
               return {em, title: tn ? tn.textContent : null};
             })()""")
             assert out["em"]["port"] == 587, out
@@ -511,7 +548,9 @@ class TestW7Email:
         finally:
             _restore(page, snap)
 
-    def test_delete_channel_armconfirm(self, page):
+    def test_delete_channel_confirm(self, page):
+        """r343：新邮箱卡自动展开且卡头常驻删除（不再藏进卡体）；
+        删除走统一确认层，取消无损、确认才 splice。"""
         _to_cfg(page)
         snap = page.evaluate(_SNAP)
         try:
@@ -519,15 +558,23 @@ class TestW7Email:
             page.wait_for_timeout(150)
             assert page.evaluate(
                 "(CFG[0].notifier.emails||[]).length") == 1
-            _open_ch(page, "email0")   # 删除钮在卡体内：先展开（真实可达路径）
-            sel = '#cfgform button.danger[onclick^="delEm(0,0"]'
-            _click(page, sel)   # 第一击：进入确认态
+            # 自动展开：body 可见、卡头删除可直接命中
+            head_sel = '.chcard[data-ch="email0"] .chhead'
+            assert page.get_attribute(head_sel, "aria-expanded") == "true"
+            sel = '.chcard[data-ch="email0"] .chdel'
+            assert page.locator(sel).is_visible()
+            _click(page, sel)
+            page.wait_for_timeout(150)
+            assert page.is_visible("#confirmMask")
+            assert page.inner_text("#cmTitle") == "删除邮箱通道？"
+            _click(page, "#cmCancel")
             page.wait_for_timeout(120)
-            assert page.locator(sel).first.text_content().strip() == "⚠ 确认"
             assert page.evaluate(
                 "(CFG[0].notifier.emails||[]).length") == 1
-            _click(page, sel)   # 第二击：确认执行
-            page.wait_for_timeout(150)
+            _click(page, sel)
+            page.wait_for_timeout(120)
+            _click(page, "#cmYes")
+            page.wait_for_timeout(200)
             assert page.evaluate(
                 "(CFG[0].notifier.emails||[]).length") == 0
             assert page.locator(
@@ -560,16 +607,31 @@ class TestW11Dingtalk:
                         '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
             })()""")
             assert out["model"] is True, out
-            assert out["on"] and out["muted"] == "已启用", out
-            assert out["pill"] == "推送已启用" and out["ok"], out
-            assert "钉钉已启用" in out["aHead"], out
-            assert "钉钉✓" in out["eHead"], out
+            # r345：开关打开但 Webhook 空=后端跳过 → 待完善（旧假绿）
+            assert not out["on"] and out["muted"] == "待完善", out
+            assert out["pill"] == "推送待完善", out
+            assert "钉钉待完善" in out["aHead"], out
+            assert "钉钉待完善" in out["eHead"], out
             _fill(page, '#cfgform input[onchange*="setDt(0,\'webhook\'"]',
                   "https://oapi.dingtalk.com/robot/send?access_token=probe")
             _fill(page, '#cfgform input[onchange*="setDt(0,\'secret\'"]',
                   "SECprobe")
             _fill(page, '#cfgform input[onchange*="setDt(0,\'at_mobile\'"]',
                   "13900000000")
+            page.wait_for_timeout(120)
+            out = page.evaluate("""(() => {
+              const c = document.querySelector('.chcard[data-ch="dingtalk"]');
+              const p = document.querySelectorAll(
+                '#cfgform .ucard .uhead2 .upill')[3];
+              return {on: c.classList.contains('on'),
+                      muted: c.querySelector('.chhead .muted').textContent,
+                      pill: p.textContent.trim(),
+                      eHead: document.querySelector(
+                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+            })()""")
+            assert out["on"] and out["muted"] == "已启用", out
+            assert out["pill"] == "推送已就绪", out
+            assert "钉钉✓" in out["eHead"], out
             out = page.evaluate(
                 "CFG[0].notifier.dingtalk")
             assert out["webhook"].endswith("access_token=probe"), out
@@ -661,6 +723,7 @@ class TestW13Route:
         snap = page.evaluate(_SNAP)
         try:
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
             fin = '.rline[data-rk="0:0"] input[onchange*="\'from_name\'"]'
             _click(page, fin)   # onclick=cityPanelOpen(this)
             page.wait_for_selector("#citypanel", state="visible")
@@ -711,6 +774,7 @@ class TestW13Route:
         snap = page.evaluate(_SNAP)
         try:
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
             _click(page, '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"]')
             page.wait_for_selector("#citypanel", state="visible")
             page.locator("#cpq").fill("长沙")
@@ -732,6 +796,7 @@ class TestW13Route:
         snap = page.evaluate(_SNAP)
         try:
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
             before = page.evaluate(
                 "[CFG[0].routes[0].from_name, CFG[0].routes[0].to_name]")
             _click(page, '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"]')
@@ -751,6 +816,7 @@ class TestW13Route:
         snap = page.evaluate(_SNAP)
         try:
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
             rk = '.rline[data-rk="0:0"]'
             _fill(page, rk + ' input[onchange*="alert_direct"]', "1234")
             _fill(page, rk + ' input[onchange*="alert_transfer"]', "1555")
@@ -902,35 +968,38 @@ class TestW15Specials:
 # ================= §11 日期（W16/W17；📅 showPicker 跳过） =================
 
 class TestW1617Dates:
-    def test_add_via_enter_and_button_and_guard(self, page):
-        """三通道之二的真路径：文本+回车（含 10-08 补年）、➕按钮；
-        非法输入走 cfgErr 词面且不入模。📅 pickDate 走浏览器原生
-        showPicker 日历，Playwright 无法驱动原生弹层——跳过（注明）。"""
+    def test_add_via_native_date_button_and_guard(self, page):
+        """native date 单通道（r339g 二合一：dpick 文本框+📅 隐藏件
+        退役）两路真路径：选完即加（fill+Tab 失焦触发 change）与 ➕
+        按钮；空值走 cfgErr 词面且不入模（原生件拒绝非法字面，旧
+        「99 手输」非法态不可达）。"""
         _to_cfg(page)
         snap = page.evaluate(_SNAP)
         try:
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
+            # r345：一次只开一个编辑器；指定日面板需先切模式
+            page.evaluate("setDateMode('d',0,0,'single')")
             base = page.evaluate("CFG[0].routes[0].dates.length")
-            dp = '#dpick-0-0'
-            _fill(page, dp, "10-08")
-            page.locator(dp).first.press("Enter")
-            page.wait_for_timeout(200)
-            dates = page.evaluate("CFG[0].routes[0].dates")
-            assert len(dates) == base + 1, dates
-            assert any(d.endswith("-10-08") for d in dates), dates
+            dp = '#dadd-0-0'
             _fill(page, dp, "2031-05-06")
             _click(page, 'button[onclick="addDate(0,0)"]')
             page.wait_for_timeout(200)
             dates = page.evaluate("CFG[0].routes[0].dates")
+            assert len(dates) == base + 1, dates
             assert "2031-05-06" in dates, dates
+            _fill(page, dp, "2032-01-09")
+            _click(page, 'button[onclick="addDate(0,0)"]')
+            page.wait_for_timeout(200)
+            dates = page.evaluate("CFG[0].routes[0].dates")
+            assert "2032-01-09" in dates, dates
             assert page.locator(
                 '.rline[data-rk="0:0"] .dchip').count() == base + 2
-            # 非法格式：cfgmsg 词面 + 不入模
-            _fill(page, dp, "99")
+            _fill(page, dp, "")
             _click(page, 'button[onclick="addDate(0,0)"]')
             page.wait_for_timeout(200)
             msg = page.evaluate("document.getElementById('cfgmsg').textContent")
-            assert msg.startswith("❌ 日期格式应为"), msg
+            assert msg.startswith("❌ 请先选择"), msg
             assert page.evaluate(
                 "CFG[0].routes[0].dates.length") == base + 2
         finally:
@@ -941,6 +1010,7 @@ class TestW1617Dates:
         snap = page.evaluate(_SNAP)
         try:
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
             base = page.evaluate("CFG[0].routes[0].dates.length")
             _click(page, '.rline[data-rk="0:0"] .dchip .dx')
             page.wait_for_timeout(200)
@@ -960,13 +1030,19 @@ class TestW2425DepWin:
         snap = page.evaluate(_SNAP)
         try:
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
             rk = '.rline[data-rk="0:0"]'
             _click(page, rk + ' .schip[title="00:00–06:00"]')
             out = page.evaluate("""(() => {
               const r = CFG[0].routes[0];
-              const box = [...document.querySelectorAll(
-                '.rline[data-rk="0:0"] .sctl')]
-                .find(b => b.querySelector('.schip'));
+              /* r339 起「出发→到达城市」行也带往返 chip（.schip）、
+                 「中转最晚到达」行带单个 time 输入——定位锚按
+                 「出发时段窗口」slab 语义锁定，不锚输入形态计数 */
+              const row = [...document.querySelectorAll(
+                '.rline[data-rk="0:0"] .srow')]
+                .find(b => (b.querySelector('.slab b')||{}).textContent
+                           === '出发时段窗口');
+              const box = row.querySelector('.sctl');
               const t = box.querySelectorAll('input[type=time]');
               const chips = [...box.querySelectorAll('.schip')];
               return {mn: r.dep_time_min, mx: r.dep_time_max,
@@ -996,9 +1072,14 @@ class TestW2425DepWin:
         snap = page.evaluate(_SNAP)
         try:
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
             rk = '.rline[data-rk="0:0"]'
-            # 挡位 chip 的 title 是时间窗（词面在文本节点）；凌晨=00:00–06:00
-            _click(page, rk + ' .schip[title="00:00–06:00"]')
+            # 挡位 chip 的 title 是时间窗（词面在文本节点）；凌晨=00:00–06:00。
+            # r341 起到达窗也有同形挡位行——选择器限定出发 .sctl（:has
+            # dep 输入），防跨组误点
+            _click(page, rk
+                   + ' .sctl:has(input[onchange*="dep_time_min"])'
+                   + ' .schip[title="00:00–06:00"]')
             t0 = page.locator(
                 rk + ' input[onchange*="dep_time_min"]').first
             _scrollin(page, rk + ' input[onchange*="dep_time_min"]')
@@ -1006,8 +1087,9 @@ class TestW2425DepWin:
             page.keyboard.press("Tab")
             page.wait_for_timeout(120)
             out = page.evaluate("""(() => {
-              const chips = [...document.querySelectorAll(
-                '.rline[data-rk="0:0"] .schip')];
+              const chips = [...document.querySelector(
+                '.rline[data-rk="0:0"] input[onchange*="dep_time_min"]')
+                .closest('.sctl').querySelectorAll('.schip')];   // r341 到达窗挡位行在场：探针限定出发组，防跨组误计
               return {mn: CFG[0].routes[0].dep_time_min,
                       onCnt: chips.filter(c => c.classList.contains('on')).length,
                       muted: document.querySelector(
@@ -1044,17 +1126,24 @@ class TestW2223RouteOps:
         finally:
             _restore(page, snap)
 
-    def test_delete_route_armconfirm(self, page):
+    def test_delete_route_confirm(self, page):
+        """r343：删除航线走统一确认层（不再原地 arming 3s 超时复位）。"""
         _to_cfg(page)
         snap = page.evaluate(_SNAP)
         try:
             n0 = page.evaluate("CFG[0].routes.length")
             sel = '.rline[data-rk="0:0"] button.danger[onclick^="delRoute"]'
-            _click(page, sel)   # 第一击：arm
-            page.wait_for_timeout(120)
-            assert page.locator(sel).first.text_content().strip() == "⚠ 确认"
+            _click(page, sel)
+            page.wait_for_timeout(150)
+            assert page.is_visible("#confirmMask")
+            assert page.inner_text("#cmTitle") == "删除航线？"
             assert page.evaluate("CFG[0].routes.length") == n0
-            _click(page, sel)   # 第二击：确认删除
+            _click(page, "#cmCancel")
+            page.wait_for_timeout(120)
+            assert page.evaluate("CFG[0].routes.length") == n0
+            _click(page, sel)
+            page.wait_for_timeout(120)
+            _click(page, "#cmYes")
             page.wait_for_timeout(200)
             assert page.evaluate("CFG[0].routes.length") == n0 - 1
             # 末位行卡随删退场（索引随删除前规模派生）
@@ -1087,7 +1176,7 @@ class TestW1920Users:
         finally:
             _restore(page, snap)
 
-    def test_delete_user_armconfirm(self, page):
+    def test_delete_user_confirm(self, page):
         _to_cfg(page)
         snap = page.evaluate(_SNAP)
         try:
@@ -1095,10 +1184,11 @@ class TestW1920Users:
             page.wait_for_timeout(250)
             sel = '#cfgform button.danger[onclick^="delUser(1"]'
             _click(page, sel)
-            page.wait_for_timeout(120)
-            assert page.locator(sel).first.text_content().strip() == "⚠ 确认"
+            page.wait_for_timeout(150)
+            assert page.is_visible("#confirmMask")
+            assert page.inner_text("#cmTitle") == "删除用户？"
             assert page.evaluate("CFG.length") == 2
-            _click(page, sel)
+            _click(page, "#cmYes")
             page.wait_for_timeout(200)
             assert page.evaluate("CFG.length") == 1
             assert page.evaluate("CFG[0].name") == "演示用户"
@@ -1205,6 +1295,7 @@ class TestW2933FoldsNavSearch:
             # 航线卡：默认折叠 → 展开后再折叠（真点击两段）
             rh = '.rline[data-rk="0:0"] .rhead'
             _open_route(page, "0:0")
+            _open_rtadv(page, "0:0")
             _click(page, rh)
             page.wait_for_timeout(100)
             assert page.locator(

@@ -1129,16 +1129,16 @@ def main():
             # 量「底在 savebar 顶之上」的相对关系（恒差呼吸缝 ≥8px），
             # 不锁绝对值——固定值断言在动态化当日即成假钉
             # （LESSONS 二十一§7）；savebar 收起回 96px 基础位 ----
-            ck("savebar 在场 toast 抬升", pg.evaluate(
-                "()=>{const sb=document.getElementById('savebar');"
-                "const ts=document.getElementById('toasts');"
+            ck("移动端 toast 避让 header/savebar（r346）", pg.evaluate(
+                "()=>{toast('探针');const t=document.querySelector('.toast');"
+                "const tr=t.getBoundingClientRect();"
+                "const hb=document.querySelector('header').getBoundingClientRect().bottom;"
+                "const sb=document.getElementById('savebar');"
                 "sb.classList.add('on');"
-                "const up=parseFloat(getComputedStyle(ts).bottom);"
-                "const sbB=parseFloat(getComputedStyle(sb).bottom);"
-                "const top=sb.offsetHeight+sbB;"
+                "const sr=sb.getBoundingClientRect();"
                 "sb.classList.remove('on');"
-                "const dn=getComputedStyle(ts).bottom;"
-                "return up>=top+8&&dn==='96px';}"))
+                "t.remove();"
+                "return tr.top>=hb-1&&tr.bottom<sr.top-4;}"))
             # ---- 筛选角标全选不计（dates 全选回填=零筛选，
             # 否则幻影「筛选 1」；与 plats/routes 守卫同构。全程自复位） ----
             ck("筛选角标全选不计", pg.evaluate(
@@ -1189,7 +1189,7 @@ def main():
                 "(()=>{const tw=document.querySelector('#tablecard .tw');"
                 "const rows=tw.querySelectorAll('tbody tr[data-k]');"
                 "const m=(document.getElementById('fcnt').textContent"
-                ".match(/(\\d+) \\/ /)||[])[1];"
+                ".match(/(\\d+) 条报价/)||[])[1];"
                 "const last=rows.length?rows[rows.length-1]:null;"
                 "const nearBottom=document.documentElement.scrollHeight"
                 "-window.innerHeight-window.scrollY<=300;"
@@ -1699,7 +1699,9 @@ def main():
                 "()=>{const rl=document.querySelector('#cfgform .rline[data-rk]');"
                 "if(!rl)return false;"
                 "if(FOLD.route[rl.dataset.rk]!==false)rl.querySelector('.rhead').click();"
-                "const inp=rl.querySelector('[id^=\"dpick-\"]');"
+                "const tab=rl.querySelector('.dctab[data-dm=\"single\"]');"  # r345 一次只开一个编辑器
+                "if(tab&&!tab.classList.contains('on'))tab.click();"
+                "const inp=rl.querySelector('[id^=\"dadd-\"]');"
                 "if(!inp||!inp.offsetParent)return false;"
                 "inp.focus();const id=inp.id;buildForm();"
                 "const ok=!!document.activeElement"
@@ -1725,8 +1727,8 @@ def main():
             ck("分组标签 A-D", all(
                 t in pg.inner_text("#cfgform")
                 for t in ("基础", "监控渠道", "航线", "通知渠道")))
-            ck("通道卡五张（未配邮件）", len(pg.query_selector_all(
-               "#cfgform .chcard")) == 5)
+            ck("通道卡六张（未配邮件；r339 +Bark）", len(pg.query_selector_all(
+               "#cfgform .chcard")) == 6)
             ck("Server酱通道卡", pg.query_selector(
                '#cfgform .chcard[data-ch="serverchan"]') is not None)
             ck("添加邮箱通道出卡（email0 含密码框+host 输入）",
@@ -1748,9 +1750,9 @@ def main():
                 "'input[type=\"checkbox\"].switch');"
                 "if(!cb)return false;"
                 "cb.click();"
-                "return c.classList.contains('on')"
+                "return c.classList.contains('todo')"
                 "&&c.querySelector('.chhead .muted')"
-                ".textContent==='已启用';}"))
+                ".textContent==='待完善';}"))   # r345：空凭据启用的如实态
             ck("图床通道卡", pg.query_selector(
                '#cfgform .chcard[data-ch="imghost"]') is not None)
             ck("图床 sm.ms 引导链接", pg.query_selector(
@@ -1832,6 +1834,8 @@ def main():
                 "()=>{const rl=document.querySelector("
                 "'#cfgform .rline[data-rk]');"
                 "const rh=rl.querySelector('.rhead');"
+                "if(rh.getAttribute('aria-expanded')!=='false')"
+                "rh.click();"   # 前置归位：前序钉失败级联可留展开态
                 "const hid0=rh.nextElementSibling"
                 ".style.display==='none';rh.click();"
                 "const vis=rh.nextElementSibling"
@@ -1863,8 +1867,10 @@ def main():
             danger = pg.query_selector("#cfgform .danger")
             if danger:
                 danger.click(); pg.wait_for_timeout(300)
-                ck("删除确认态",
-                   "arming" in (danger.get_attribute("class") or ""))
+                ck("删除确认层",
+                   pg.is_visible("#confirmMask")
+                   and bool(pg.inner_text("#cmTitle").strip()))
+                pg.click("#cmCancel"); pg.wait_for_timeout(150)
             ipt = pg.query_selector("#cfgform .ucard input")
             if ipt:
                 # 表单绑定 onchange——fill 后须 dispatch 才触发脏标记
@@ -1914,9 +1920,11 @@ def main():
             ck("glcell 文本桌面 13px", pg.evaluate(
                 "()=>{const e=document.getElementById('glbUa');"
                 "return !!e&&getComputedStyle(e).fontSize==='13px';}"))
-            ck("启动级只读", pg.evaluate(
+            ck("启动级路径可编辑+📂 打开钮（r339d 可变更化：三件 ro→text）",
+               pg.evaluate(
                 "()=>{const e=document.getElementById('glbDbp');"
-                "return !!e&&e.readOnly;}"))
+                "return !!e&&!e.readOnly&&e.value.indexOf('prices.db')>=0"
+                "&&!!document.querySelector('[data-which=\"db\"]');}"))
             pg.keyboard.press("Control+s")
             pg.wait_for_timeout(600)
             ck("Ctrl+S 保存", (pg.inner_text("#cfgmsg") or "").strip() != "")
@@ -2885,12 +2893,13 @@ def main():
             # W-1 动作件显式 this 锚：window.event 是 Chromium 专属，
             # Firefox/Safari 上 5 个动作件曾全哑（空锚静默降级）——
             # 行为钉直调传锚形态：不依赖全局 event 也进确认态
-            ck("W-1 动作件显式锚进确认态", pg.evaluate(
+            ck("W-1 动作件显式锚进确认层", pg.evaluate(
                 "()=>{const b=document.createElement('button');"
                 "document.body.appendChild(b);let ok=false;"
                 "try{delUser(0,b);}catch(e){b.remove();return false;}"
-                "ok=b.classList.contains('arming');"
-                "setTimeout(()=>{if(b.parentNode)b.remove();},3200);"
+                "const m=document.getElementById('confirmMask');"
+                "ok=!!(m&&m.classList.contains('on'));"
+                "closeConfirm();b.remove();"
                 "return ok;}"))
             # W-2 搜索态点导航=离开搜索模式：命中残留与陈旧计数复位
             # （面板化与搜索两条 display 控制线曾互相打架——导航后面
@@ -2956,17 +2965,16 @@ def main():
                 "setTimeout(()=>{if(b.parentNode)b.remove();},50);}"
                 "await new Promise(r=>setTimeout(r,120));"
                 "return n===0;}"))
-            # WC-P2-1 delEm 二次确认：首击进 arming 不 splice（.danger
-            # 家族行为对齐 delRoute/delUser）
-            ck("WC-P2-1 delEm 首击确认态", pg.evaluate(
+            # WC-P2-1 delEm 确认层：打开不 splice，取消无损（r343）
+            ck("WC-P2-1 delEm 确认层不直删", pg.evaluate(
                 "()=>{const n0=(ems(0)||[]).length;"
                 "const b=document.createElement('button');"
                 "document.body.appendChild(b);let ok=false;"
                 "try{delEm(0,0,b);}catch(e){b.remove();return false;}"
-                "ok=b.classList.contains('arming')"
+                "const m=document.getElementById('confirmMask');"
+                "ok=!!(m&&m.classList.contains('on'))"
                 "&&(ems(0)||[]).length===n0;"
-                "delete b.dataset.arming;"
-                "setTimeout(()=>{if(b.parentNode)b.remove();},50);"
+                "closeConfirm();b.remove();"
                 "return ok;}"))
             # WC-P2-2 弹层内动态链接焦点环（链接在折叠详情 .pldesp 里——
             # 先展开首条记录再 focus；外域图链 route 拦截防资源失败
@@ -3005,18 +3013,16 @@ def main():
                 "document.querySelectorAll('.toast').forEach("
                 "t=>t.parentNode&&t.parentNode.removeChild(t));"
                 "return ok;}"))
-            # WC-P2-4 armConfirm 锁首态宽（对齐 api()——确认文案更短
-            # 曾让同排控件整体位移）
-            ck("WC-P2-4 armConfirm 锁宽", pg.evaluate(
-                "()=>{const b=document.createElement('button');"
+            # WC-P2-4 确认层焦点落在确认钮 + 取消不执行（替代旧锁宽）
+            ck("WC-P2-4 确认层焦点/取消语义", pg.evaluate(
+                "async()=>{const b=document.createElement('button');"
                 "b.className='danger';b.textContent='✕ 删除用户 测试';"
                 "document.body.appendChild(b);"
-                "const w0=b.getBoundingClientRect().width;"
                 "try{delUser(0,b);}catch(e){b.remove();return false;}"
-                "const w1=b.getBoundingClientRect().width;"
-                "delete b.dataset.arming;"
-                "setTimeout(()=>{if(b.parentNode)b.remove();},50);"
-                "return w1>=w0-0.5;}"))
+                "await new Promise(r=>setTimeout(r,80));"
+                "const ok=document.activeElement"
+                "&&document.activeElement.id==='cmCancel';"   # r345 默认焦点落取消
+                "closeConfirm();b.remove();return ok;}"))
             # B-2 cfgnav 窄档残留约束闭环（≤900 转 static 后 sticky
             # 伴生的 max-height/overflow 不再有意义）
             pg.set_viewport_size({"width": 800, "height": 900})
@@ -3377,8 +3383,9 @@ def main():
                 "const s4=chip.dataset.dir==='desc';"
                 "resetFlt();"
                 "await new Promise(r=>setTimeout(r,60));"
-                "const s5=chip.getAttribute('aria-pressed')==='false'"
-                "&&chip.dataset.dir==='';"
+                "const c2=document.querySelector('.srtchip');"   # reset 重建日期片→芯片换新
+                "const s5=!!c2&&c2.getAttribute('aria-pressed')==='false'"
+                "&&c2.dataset.dir==='';"
                 "return !!(s1&&s2&&l2.indexOf('未启用')>=0&&s3&&s4&&s5);}")
             prog.write("   r247 W2 evaluate = %r\n" % (_w2r,))
             ck("r247 W2 排序chip全路径同步", _w2r is True)
@@ -4962,6 +4969,373 @@ def main():
             ck("coarse 下交互家族 touchAction=manipulation（违例=%s）"
                % (_ta_bad or "无"), not _ta_bad)
             pg.evaluate("showMonTab('overview')"); pg.wait_for_timeout(200)
+
+            # ---- r339 航线卡高频重排行为钉：段在流程最末（统计落盘
+            # 前）。锁五件：日期快速选写模+回显；范围选含两端；高级约
+            # 束折叠默认收起+展开；只要直飞写模+收起中转价；筛选四行
+            # 写模与 intl 条件渲染。全程只动客户端模型不 POST（真机
+            # 只读边界），段尾 loadCfg() 拉服务端配置重建即天然自净；
+            # 折叠态 localStorage 先存后还（共享全局态自净三件套）----
+            step("r339 航线卡高频重排")
+            pg.evaluate("switchView('cfg')"); pg.wait_for_timeout(400)
+            # 前序段可能遗留搜索态（expandFolds 全开 folds）——折叠
+            # 默认态断言前先归一（cfgSearchClear 单源复位+重建）
+            pg.evaluate("cfgSearchClear()"); pg.wait_for_timeout(400)
+            pg.evaluate("loadCfg()"); pg.wait_for_timeout(800)
+            _fold0 = pg.evaluate(
+                "()=>localStorage.getItem('jpcfgfold')||''")
+            _rk = pg.evaluate(
+                "()=>(document.querySelector('.rline[data-rk]')||{}"
+                ").dataset?.rk||null")
+            _has_intl = pg.evaluate(
+                "()=>CFG.some(u=>(u.routes||[]).some("
+                "r=>isIntlCode(r.from)||isIntlCode(r.to)))")
+            ck("r339 前置：cfg 表单就绪且拿到首航线", _rk is not None)
+            # ① 快速选未来7天：真实点击 → 模型 7 日期、首日=今天、片回显
+            pg.evaluate("""()=>{
+              const rk=document.querySelector('.rline[data-rk]').dataset.rk;
+              const [i,j]=rk.split(':').map(Number);
+              clearDates('d',i,j,true);   /* r346 直调绕过确认层，测试前置 */
+              const chip=[...document.querySelectorAll(
+                `.rline[data-rk="${rk}"] .schip`)]
+                .find(c=>c.textContent==='未来7天');
+              chip.click();}""")
+            pg.wait_for_timeout(300)
+            _q7 = pg.evaluate("""()=>{
+              const t=new Date();
+              const today=t.getFullYear()+'-'+
+                String(t.getMonth()+1).padStart(2,'0')+'-'+
+                String(t.getDate()).padStart(2,'0');
+              const rk=document.querySelector('.rline[data-rk]').dataset.rk;
+              const [i,j]=rk.split(':').map(Number);
+              const ds=CFG[i].routes[j].dates||[];
+              return {n:ds.length, first:ds[0]===today,
+                      chips:document.querySelectorAll(
+                        `.rline[data-rk="${rk}"] .dchip`).length};}""")
+            ck("r339 快速选未来7天：模型7日期+首日今天+片回显",
+               _q7["n"] == 7 and _q7["first"] and _q7["chips"] == 7)
+            # ② 范围选：起止含两端（实效锚=直调 rangeDates，十八§14）
+            _r3 = pg.evaluate("""()=>{
+              const rk=document.querySelector('.rline[data-rk]').dataset.rk;
+              const [i,j]=rk.split(':').map(Number);
+              const f=new Date(Date.now()+10*864e5),
+                    t=new Date(Date.now()+12*864e5);
+              const fm=d=>d.getFullYear()+'-'+
+                String(d.getMonth()+1).padStart(2,'0')+'-'+
+                String(d.getDate()).padStart(2,'0');
+              clearDates('d',i,j,true);   /* 区间=合并语义，先清空验证含两端 */
+              document.getElementById('dfrom-'+i+'-'+j).value=fm(f);
+              document.getElementById('dto-'+i+'-'+j).value=fm(t);
+              rangeDates(i,j);
+              return {n:CFG[i].routes[j].dates.length};}""")
+            ck("r339 范围选含两端（3 天窗）", _r3["n"] == 3)
+            # ③ 高级约束折叠：默认收起→点击展开（aria 单源）
+            _fd = pg.evaluate("""()=>{
+              const h=document.querySelector('.rline[data-rk] .rthead');
+              const folded=h.getAttribute('aria-expanded')==='false';
+              const sib=[];let n=h.nextElementSibling;
+              while(n){sib.push(n);n=n.nextElementSibling;}
+              const hidden=folded&&sib.every(b=>b.style.display==='none');
+              h.click();
+              return {folded, hidden,
+                      open:h.getAttribute('aria-expanded')==='true'};}""")
+            ck("r339 高级折叠默认收起且点击展开（%s）"
+               % json.dumps(_fd, ensure_ascii=False),
+               _fd["folded"] and _fd["hidden"] and _fd["open"])
+            # ④ 只要直飞：旗标写模+中转价收起，再点恢复（在卡内取
+            # .trprice——首 .sctl 是城市行，取不到价格件）
+            _do = pg.evaluate("""()=>{
+              const rk=document.querySelector('.rline[data-rk]').dataset.rk;
+              const [i,j]=rk.split(':').map(Number);
+              const card=document.querySelector(`.rline[data-rk="${rk}"]`);
+              const chip=[...card.querySelectorAll('.schip')]
+                .find(c=>c.textContent.indexOf('只要直飞')>=0);
+              const tr=card.querySelector('.trprice');
+              if(!chip||!tr)return {nullpart:!chip?'chip':'trprice'};
+              const prev=tr.value;
+              chip.click();
+              const on={t:CFG[i].routes[j].alert_transfer,
+                        f:CFG[i].routes[j].direct_only===true,
+                        hid:tr.style.display==='none'};
+              chip.click();
+              const off={f:CFG[i].routes[j].direct_only===true,
+                         show:tr.style.display==='', prev};
+              return {on, off};}""")
+            if "nullpart" in _do:
+                ck("r339 只要直飞：取件失败 %s" % _do["nullpart"], False)
+            else:
+                ck("r339 只要直飞：中转阈清零+收起+恢复",
+                   _do["on"]["t"] == 0 and _do["on"]["f"]
+                   and _do["on"]["hid"] and not _do["off"]["f"]
+                   and _do["off"]["show"])
+            # ⑤ 筛选四行：intl 条件渲染 + 写模
+            _f4 = pg.evaluate("""()=>{
+              const rk=document.querySelector('.rline[data-rk]').dataset.rk;
+              const [i,j]=rk.split(':').map(Number);
+              const inp=document.querySelector(
+                `.rline[data-rk="${rk}"] input[onchange*="airlines"]`);
+              inp.value='MU,春秋';
+              inp.dispatchEvent(new Event('change',{bubbles:true}));
+              return {v:CFG[i].routes[j].airlines,
+                      intlRows:document.querySelectorAll(
+                        'input[onchange*="min_baggage"]').length,
+                      wl:document.querySelectorAll(
+                        'input[onchange*="widebody_only"]').length};}""")
+            ck("r339 航司白名单写模+intl 行条件渲染",
+               _f4["v"] == "MU,春秋"
+               and (_f4["intlRows"] > 0) == _has_intl
+               and (_f4["wl"] > 0) == _has_intl)
+            # ⑥ 往返多返程日：开→返程行在场→去程起7天→ret_dates 7
+            # 且首日=最早出发日（能力与去程一致）。toggleRT/quickRet
+            # 各自 buildForm 重建 DOM——每次点击后重新取件（ detachment
+            # 律：重建后旧引用查不到新行）
+            pg.evaluate("""()=>{
+              const card=document.querySelector('.rline[data-rk]');
+              const chip=[...card.querySelectorAll('.schip')]
+                .find(c=>c.textContent.indexOf('往返')>=0);
+              chip.click();}""")
+            pg.wait_for_timeout(300)
+            _rt = pg.evaluate("""()=>{
+              const rk=document.querySelector('.rline[data-rk]').dataset.rk;
+              const [i,j]=rk.split(':').map(Number);
+              const row=document.getElementById('rdchips-'+i+'-'+j);
+              const rowOn=!!row;
+              const card=document.querySelector(`.rline[data-rk="${rk}"]`);
+              const q=[...card.querySelectorAll('.schip')]
+                .find(c=>c.textContent==='去程起7天');
+              if(q)q.click();
+              const ds=CFG[i].routes[j].ret_dates||[];
+              const anchor=(CFG[i].routes[j].dates||[])
+                .slice().sort()[0];
+              const rr=document.querySelector(
+                `.rline[data-rk="${rk}"] .rrt`);
+              return {rowOn, n:ds.length, first:ds[0]===anchor,
+                      badge:rr?rr.textContent:''};}""")
+            ck("r339 往返开合+返程快速选7天（锚最早出发日）+badge×7",
+               _rt["rowOn"] and _rt["n"] == 7 and _rt["first"]
+               and '×7' in _rt["badge"])
+            # ⑦ Bark 通道卡：写模在场（enabled/key/server 三件）
+            _bk = pg.evaluate("""()=>{
+              const u=0;
+              setBark(u,'enabled',true);
+              setBark(u,'key','bk_test');
+              /* 写入即时值捕获（b 是引用——复位批后再读=恒假自伤） */
+              const seen=CFG[u].notifier.bark.key==='bk_test';
+              const card=!!document.querySelector('.chcard[data-ch="bark"]');
+              const btn=!!document.querySelector(
+                'button[onclick*="testBark"]');
+              setBark(u,'enabled',false);setBark(u,'key','');
+              return {seen, cleared:CFG[u].notifier.bark.enabled===false,
+                      card, btn};}""")
+            ck("r339 Bark 通道卡+写模+测试钮在场",
+               _bk["card"] and _bk["btn"] and _bk["seen"]
+               and _bk["cleared"])
+            # 段内自净：折叠态还原 + 服务端配置重建表单
+            pg.evaluate("""f0=>{
+              if(f0)localStorage.setItem('jpcfgfold',f0);
+              else localStorage.removeItem('jpcfgfold');}""", _fold0)
+            pg.evaluate("loadCfg()"); pg.wait_for_timeout(600)
+            pg.evaluate("switchView('mon')"); pg.wait_for_timeout(200)
+
+            # ---- r341 置尾钉：航线卡三新门 + 全局页绝对路径展示 ----
+            pg.evaluate("""()=>{switchView('mon');
+              const card=document.querySelector('.rline[data-rk]');
+              if(card){const adv=[...card.querySelectorAll('button,span.chip')]
+                .find(b=>/高级|折叠|更多/.test(b.textContent));
+                if(adv)adv.click();}}""")
+            pg.wait_for_timeout(400)
+            _g341 = pg.evaluate("""()=>{const rows=[
+              ...document.querySelectorAll('.rline .srow')];
+              let priceIn=false,crossChk=false,arrWin=false,arrChip=false;
+              rows.forEach(r=>{const t=r.innerText||'';
+                if(t.indexOf('价格上限')>=0&&r.querySelector('input[type=number]'))priceIn=true;
+                if(t.indexOf('排除跨天')>=0&&r.querySelector('input[type=checkbox]'))crossChk=true;
+                if(t.indexOf('到达时段窗口')>=0){arrWin=true;
+                  arrChip=[...r.querySelectorAll('.schip')].some(c=>c.textContent.indexOf('凌晨')>=0);}});
+              const bang=[...document.querySelectorAll('.rline')]
+                .some(c=>c.innerHTML.indexOf('!9C')>=0);
+              return {priceIn,crossChk,arrWin,arrChip,bang};}""")
+            ck("r341 航线卡三新门在场（价格上限/排除跨天/到达窗+快捷挡）",
+               _g341["priceIn"] and _g341["crossChk"] and _g341["arrWin"]
+               and _g341["arrChip"])
+            ck("r341 航司白名单 ! 排除语法提示", _g341["bang"])
+            pg.evaluate("""()=>{switchView('cfg');
+              const nav=document.querySelector('.cnav[data-p=globals]');
+              if(nav)nav.click();}""")
+            pg.wait_for_timeout(500)
+            _a341 = pg.evaluate("""()=>{const abs=[...document.querySelectorAll('.glabs')]
+                .map(e=>e.textContent);
+              return {n:abs.length,
+                absLike:abs.filter(t=>t.indexOf('绝对路径：')>=0).length,
+                bdirBtn:!!document.querySelector('[data-which="bdir"]')};}""")
+            ck("r341 启动级四件绝对路径展示+bdir 📂 钮",
+               _a341["n"] >= 3 and _a341["absLike"] >= 3 and _a341["bdirBtn"])
+            pg.evaluate("""()=>{const nav=document.querySelector('.cnav[data-p=users]');
+              if(nav)nav.click();}""")
+            pg.wait_for_timeout(300)
+
+            # ---- r342 配置工作台：日期双通道/航司自动完成/智能预设/
+            # 存储元数据/重启中心；明细筛选摘要与智能预设 ----
+            step("r342 配置工作台")
+            pg.evaluate("""()=>{switchView('cfg');showCfgPanel('users',true);
+              const rl=document.querySelector('.rline[data-rk="0:0"]');
+              const h=rl&&rl.querySelector('.rhead');
+              if(h&&h.getAttribute('aria-expanded')==='false')h.click();
+              const rt=rl&&rl.querySelector('.rthead');
+              if(rt&&rt.getAttribute('aria-expanded')==='false')rt.click();}""")
+            pg.wait_for_timeout(500)
+            _d342 = pg.evaluate("""()=>{
+              const rl=document.querySelector('.rline[data-rk="0:0"]');
+              const tabs=[...rl.querySelectorAll('.dctab')];
+              const pans=[...rl.querySelectorAll('.dpanel')];
+              const vis=pans.filter(p=>!p.hasAttribute('hidden'));
+              const rng=!!rl.querySelector('#dfrom-0-0'),
+                    one=!!rl.querySelector('#dadd-0-0');
+              rl.querySelector('.dctab[data-dm="single"]').click();
+              const vis2=[...rl.querySelectorAll('.dpanel')].filter(p=>!p.hasAttribute('hidden'));
+              const mode2=rl.querySelector('.dctab.on')?.dataset.dm;
+              rl.querySelector('.dctab[data-dm="range"]').click();
+              return {tabs:tabs.length,vis:vis.length,vis2:vis2.length,mode2,rng,one};}""")
+            ck("r345 日期模式条：两入口常显、编辑器一次只开一个",
+               _d342["tabs"] == 2 and _d342["vis"] == 1 and _d342["vis2"] == 1
+               and _d342["mode2"] == "single" and _d342["rng"] and _d342["one"])
+            _dd342 = pg.evaluate("""()=>{
+              const f=document.getElementById('dfrom-0-0'),
+                    t=document.getElementById('dto-0-0'),
+                    a=document.getElementById('dadd-0-0');
+              f.value='2031-05-06';t.value='2031-05-08';
+              setDateMode('d',0,0,'single');
+              a.value='2031-06-03';addDate(0,0);
+              const r=CFG[0].routes[0];
+              return {keep:f.value,t2:t.value,last:r.dates[r.dates.length-1]};}""")
+            ck("r345 切模式后草稿保留 + 显式加入（%s→%s）"
+               % (_dd342["keep"], _dd342["t2"]),
+               _dd342["keep"] == "2031-05-06"
+               and _dd342["t2"] == "2031-05-08"
+               and _dd342["last"] == "2031-06-03")
+            pg.evaluate("""()=>{const rl=document.querySelector('.rline[data-rk="0:0"]');
+              const rt=rl.querySelector('.rthead');
+              if(rt.getAttribute('aria-expanded')==='false')rt.click();
+              const inp=rl.querySelector('.airfield input');
+              inp.value='东';inp.dispatchEvent(new Event('input',{bubbles:true}));}""")
+            pg.wait_for_timeout(250)
+            _as342 = pg.evaluate("""()=>{
+              const box=document.getElementById('airsug-0-0');
+              const n=box?box.querySelectorAll('.asg').length:0;
+              if(n)box.querySelector('.asg').click();
+              const inp=document.querySelector('.rline[data-rk="0:0"] .airfield input');
+              const ch=document.getElementById('airchips-0-0');
+              return {n, val:inp.value, chip:ch?ch.innerText:''};}""")
+            ck("r342 航司自动完成（候选%d→结果%s/chip=%s）"
+               % (_as342["n"], _as342["val"], _as342["chip"][:12]),
+               _as342["n"] >= 1 and _as342["val"] == "MU"
+               and "MU" in _as342["chip"])
+            pg.evaluate("""()=>{const inp=document.querySelector(
+                '.rline[data-rk="0:0"] .airfield input');
+              inp.value='东航,!9C';inp.dispatchEvent(new Event('input',{bubbles:true}));
+              inp.dispatchEvent(new Event('change',{bubbles:true}));}""")
+            pg.wait_for_timeout(200)
+            _ap342 = pg.evaluate("""()=>{
+              const ch=document.getElementById('airchips-0-0');
+              const pv=document.getElementById('airpv-0-0');
+              return {txt:ch?ch.innerText:'',pv:pv?getComputedStyle(pv).display:''};}""")
+            ck("r342 航司全识别→chips 可读且不再重复解析行",
+               "东航" in _ap342["txt"] and "9C" in _ap342["txt"]
+               and _ap342["pv"] == "none")
+            pg.evaluate("loadCfg()"); pg.wait_for_timeout(700)
+            pg.evaluate("""()=>{const rl=document.querySelector('.rline[data-rk="0:0"]');
+              const h=rl.querySelector('.rhead');
+              if(h.getAttribute('aria-expanded')==='false')h.click();
+              const rt=rl.querySelector('.rthead');
+              if(rt.getAttribute('aria-expanded')==='false')rt.click();
+              rl.querySelector('.rfpresets .chip').click();}""")
+            pg.wait_for_timeout(400)
+            _ps342 = pg.evaluate("""()=>{const r=CFG[0].routes[0];
+              const b=document.querySelector('.rline[data-rk="0:0"] .rfltbadge');
+              return {d:!!r.direct_only,l:!!r.no_lcc,s:!!r.exclude_stop,
+                      h:!!r.exclude_share,badge:b?b.textContent:''};}""")
+            ck("r342 智能预设「省心直飞」四项写模+badge",
+               _ps342["d"] and _ps342["l"] and _ps342["s"] and _ps342["h"]
+               and "筛" in _ps342["badge"])
+            pg.evaluate("loadCfg()"); pg.wait_for_timeout(700)
+            # r343：渠道改单列手风琴；新增邮箱自动展开且卡头即可删除
+            pg.locator('#cfgform button[onclick="addEm(0)"]').click()
+            pg.wait_for_timeout(500)
+            _ch343 = pg.evaluate("""()=>{const g=document.querySelector('#cfgform .chgrid');
+              const c=document.querySelector('.chcard[data-ch="email0"]');
+              const cs=g?getComputedStyle(g):null;
+              const order=g?[...g.querySelectorAll('.chcard')]
+                .map(x=>x.dataset.ch):[];
+              return {dir:cs?cs.display+'/'+cs.flexDirection:'',
+                      open:c?c.querySelector('.chhead').getAttribute('aria-expanded'):'',
+                      del:c?!!c.querySelector('.chdel'):false,
+                      imgFirst:order.indexOf('imghost')>=0
+                        &&order.indexOf('imghost')<order.indexOf('email0'),
+                      order};}""")
+            ck("r343 渠道单列手风琴+邮箱末位+自动展开+卡头删除（%s）"
+               % _ch343["dir"], _ch343["dir"] == "flex/column"
+               and _ch343["open"] == "true" and _ch343["del"]
+               and _ch343["imgFirst"])
+            pg.locator('.chcard[data-ch="email0"] .chdel').click()
+            pg.wait_for_timeout(250)
+            _cd343 = pg.evaluate("""()=>({show:document.getElementById('confirmMask')
+              .classList.contains('on'),title:document.getElementById('cmTitle')
+              .textContent,n:(CFG[0].notifier.emails||[]).length})""")
+            ck("r343 邮箱删除确认层（%s）" % _cd343["title"],
+               _cd343["show"] and _cd343["title"] == "删除邮箱通道？"
+               and _cd343["n"] == 1)
+            pg.click("#cmCancel"); pg.wait_for_timeout(200)
+            ck("r343 邮箱删除可取消且不误删",
+               pg.evaluate("(CFG[0].notifier.emails||[]).length") == 1)
+            pg.evaluate("loadCfg()"); pg.wait_for_timeout(700)
+            pg.evaluate("""()=>{const nav=document.querySelector('.cnav[data-p=globals]');
+              if(nav)nav.click();}""")
+            pg.wait_for_timeout(500)
+            _pm342 = pg.evaluate("""()=>{const cards=[...document.querySelectorAll('.pathcard')];
+              const abs=[...document.querySelectorAll('.pathcard .glabs')]
+                .map(e=>e.textContent);
+              return {n:cards.length,glabs:abs.length,
+                abs:abs.filter(t=>t.indexOf('绝对路径：')>=0).length,
+                bdir:!!document.querySelector('[data-which="bdir"]')};}""")
+            ck("r342 存储四卡：绝对路径/体积/打开动作齐备",
+               _pm342["n"] == 4 and _pm342["glabs"] >= 4
+               and _pm342["abs"] >= 4 and _pm342["bdir"])
+            _pc342 = pg.evaluate("""async()=>{
+              const r=await fetch('/api/path-check?which=ud&path=user_data_probe');
+              const j=await r.json();
+              return {ok:j.ok,parent:j.parent_exists,mode:j.migration_mode,
+                      abs:j.abs};}""")
+            ck("r342 路径预检（父目录存在/迁移模式）",
+               _pc342["ok"] and _pc342["parent"]
+               and _pc342["mode"] == "move")
+            pg.evaluate("""()=>{const i=document.getElementById('glbUdd');
+              i.value='user_data_probe';
+              i.dispatchEvent(new Event('change',{bubbles:true}));}""")
+            pg.wait_for_timeout(650)
+            _rh342 = pg.evaluate("""()=>{
+              const h=document.getElementById('restartHint');
+              const c=document.getElementById('cfgChromeRestart');
+              openRestartCenter();
+              return {hint:h.style.display!=='none',
+                      diff:document.querySelectorAll('#rcBody .rcdiff').length,
+                      chrome:c?c.textContent:''};}""")
+            ck("r342 改启动级路径→弱提示+重启中心差量可读",
+               _rh342["hint"] and _rh342["diff"] >= 1
+               and "1" in _rh342["chrome"])
+            pg.evaluate("closeRestartCenter();loadCfg()"); pg.wait_for_timeout(700)
+            pg.evaluate("""()=>{switchView('mon');showMonTab('details');}""")
+            pg.wait_for_timeout(500)
+            pg.evaluate("applyFltPreset('direct')")
+            pg.wait_for_timeout(400)
+            _df342 = pg.evaluate("""()=>{const s=document.getElementById('fltsum');
+              return {sum:s?s.innerText:'',n:document.querySelectorAll(
+                '#fltpresets .fltpreset.on').length};}""")
+            ck("r342 明细智能预设+生效摘要",
+               "直飞" in _df342["sum"] and _df342["n"] >= 1)
+            pg.evaluate("resetFltUI()"); pg.wait_for_timeout(350)
+            ck("r342 明细清除全部→摘要收空",
+               pg.evaluate("!document.getElementById('fltsum').innerText.trim()"))
+            pg.evaluate("showMonTab('overview')"); pg.wait_for_timeout(250)
 
             bad0 = [n for n, v in checks if not v]
             prog.write("JS 错误: %s\n" % (errors[:3] if errors else "无"))

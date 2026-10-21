@@ -53,9 +53,9 @@ def test_savebar_height_dynamic_single_source():
     assert PAGE.count("padding-bottom:calc(var(--sbh") == 2, (
         "cfgview 垫底消费点应为两带 calc（桌面+窄带），实得 %d"
         % PAGE.count("padding-bottom:calc(var(--sbh"))
-    assert PAGE.count("body:has(.savebar.on) #toasts{bottom:calc(var(--sbh") == 2, (
-        "toast 抬升消费点应为两带 calc（savebar 在场档），实得 %d"
-        % PAGE.count("body:has(.savebar.on) #toasts{bottom:calc(var(--sbh"))
+    # r346：移动端 toast 移到 header 下缘避开拇指区，仅在桌面档消费 --sbh
+    assert PAGE.count("body:has(.savebar.on) #toasts{bottom:calc(var(--sbh") == 1
+    assert "#toasts{top:calc(var(--hdh,54px) + 12px)" in PAGE
     # 旧固定校准退役钉：固定像素形态零残留（含媒体块内覆写）
     assert "padding-bottom:88px" not in PAGE and \
         "padding-bottom:132px" not in PAGE, (

@@ -333,6 +333,17 @@ class QunarCrawler(BaseCrawler):
                 self.logger.warning("[qunar] 阶梯重试耗尽（%d 次），本轮放弃",
                                     attempt)
                 return []
+            if QunarCrawler.login_suspect:
+                # 会话失效证据在案（软性空列表+本地档案在，r290 产生点
+                # 捕获）——确定性拒绝不走全档退避（r339c 观测：退避链
+                # 570s+4 轮抓取≈17min 必触 900s 路由栅栏，单渠道超时
+                # 连锁是长链主因；登录态不会在退避窗内自愈，重试注定
+                # 同果，NOT_SUPPORT 同族律）。下轮调度自然重试，出数即
+                # 复位（上方 328 行）；不设冷却防顺带压制他线查询
+                self.logger.warning(
+                    "[qunar] 会话失效证据在案，跳过退避重试"
+                    "（请在配置页「渠道登录」重新登录 qunar）")
+                return []
             back = self._BACKOFF_S[attempt]
             self.logger.warning("[qunar] 三路径空结果——qunar 已于 09-12 起对"
                                 "未登录会话软性返回空列表（低价日历仍出价）；"
@@ -1941,15 +1952,15 @@ class QunarCrawler(BaseCrawler):
             if risk == "login":
                 # 登录态卡片分层「会话可能失效」同款证据（国内 313 同律）
                 QunarCrawler.login_suspect = True
-                # 1999 断路（r53e）：复用 fetch 冷却机制整段压 30 分钟
-                # ——24 航线日×3 档退避曾把一轮拖成连续重锤续期设备
-                # 标记（导航风暴+基线量叠加实锤）。后续所有 fetch 入口
-                # 自动错峰等待余量，成功一次即自清
-                import time as _t
-                QunarCrawler._cooldown_until = _t.time() + 1800
+                # 1999 硬拒不设 30 分钟冷却（r339 观测轮 2 定谳：cooldown
+                # sleep 在 worker 线程内同步等 1776s——错峰等待即栅栏内
+                # 泊车，每查询吃满 900s 路由栅栏实录 8 条/日）。硬拒面
+                # 已由 login_suspect 砍退避门（fetch 外壳单次放弃）+
+                # 下轮调度自然承接，30min 压制面的「1999 风暴」防御
+                # 对象已消失；「成功一次即自清」复位律不变
                 self.logger.warning(
                     "[qunar][intl] %s 未登录硬拒（1999/8）——请在配置页"
-                    "「渠道登录」重登 qunar；已断路 30 分钟", date)
+                    "「渠道登录」重登 qunar；本轮放弃不压制", date)
                 self._sleep()
                 continue
             if risk in ("slider", "captcha"):

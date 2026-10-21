@@ -73,7 +73,11 @@ class TestAuditV185Design:
         # 多租户 chip 后纯性破缺，按 #tabs 同律降级)，aria-pressed
         # 动态回写为实效档(mkactAll 同源挂载)
         assert "function tabAria()" in src, "tabAria 助手缺"
-        assert "setAttribute('aria-selected'" not in src, \
+        # r345：日期模式条（setDateMode）是唯一合法 tab 形制
+        _i = src.index("function setDateMode(")
+        assert "setAttribute('aria-selected'" in src[_i:_i + 700], \
+            "日期模式条 aria-selected 缺席"
+        assert "setAttribute('aria-selected'" not in src[:_i], \
             "aria-selected 旧形制复活"
         assert "querySelectorAll('.mtab').forEach(x=>" in src and \
             "aria-pressed" in src, ".mtab aria-pressed 回写缺"

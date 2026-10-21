@@ -91,9 +91,10 @@ class TestXrowWrapMobile:
         """结论句「（可省 ￥N）/（差…）/（仅一渠道报价）」整体 nowrap——
         折行断点曾把结论腰斩成「￥1)」孤行（决策语义被拆）。"""
         src = _src()
-        assert '<span style="white-space:nowrap">（可省 ￥${save}）</span>' in src
-        assert 'white-space:nowrap">（差 ￥${save}' in src
+        assert '<span style="white-space:nowrap">（换最低渠道可省 ￥${save}）</span>' in src
+        assert 'white-space:nowrap">（本行较最低高 ￥${save}' in src
         assert '<span style="white-space:nowrap">（仅一渠道报价）</span>' in src
+        assert '（本行已是同班最低）' in src
 
     def test_conclusion_before_chain(self):
         """结论句前置于渠道链（真机 390 实测：colspan td 宽=全表宽，

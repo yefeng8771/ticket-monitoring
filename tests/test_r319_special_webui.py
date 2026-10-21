@@ -146,14 +146,18 @@ def test_specials_cfg_survives_save_and_normalizes(page):
       CFG[0].specials = [{enabled: true, from_name: '上海',
                           max_price: ''}];
       buildForm();
+      /* r339j 价位门：pill 真值含 max_price>0——空起笔使 UI 真实走
+         setSp 输入路径（含价位），-pill「开」等价于完形配置在案 */
       if (typeof OPEN_USER === 'undefined' || OPEN_USER !== 0) {
         const h = document.querySelector('.uhead2');
         if (h) toggleUser(h);
       }
     }""")
+    # r339j 价位门：enabled+出发地而价位空=pill 恒「关」（如实断言），
+    # 价位经 UI 填入后再等「开」——保存链语义不变
     page.wait_for_function(
         "() => (document.body.textContent.match(/🎯特价[开关]/)||[''])[0]"
-        " === '🎯特价开'")
+        " === '🎯特价关'")
     captured = {}
 
     def _cap(route):
@@ -168,6 +172,10 @@ def test_specials_cfg_survives_save_and_normalizes(page):
     # 需失焦触发 change（Playwright fill 自带 blur 语义）
     page.fill('#panel-users .ucard [data-sp="from_name"]', "上海")
     page.fill('#panel-users .ucard [data-sp="max_price"]', "400")
+    page.keyboard.press("Tab")   # fill 只派 input；change 在失焦才发（探针实证 model 停留 ''）
+    page.wait_for_function(
+        "() => (document.body.textContent.match(/🎯特价[开关]/)||[''])[0]"
+        " === '🎯特价开'")   # 价位入模（setSp→头徽重渲）
     page.click("text=💾 保存全部并生效")
     page.wait_for_timeout(600)
     assert captured.get("body"), "保存请求未被发出"

@@ -33,7 +33,13 @@ window.__BAKED__=%s;
   if(u.indexOf('/api/health')===0)return Promise.resolve(J(B.health));
   if(u.indexOf('/api/preview')===0)return Promise.resolve(J(B.preview));
   if(u.indexOf('/api/logtail')===0)return Promise.resolve(J(B.logtail));
-  if(u.indexOf('/api/config')===0)return Promise.resolve(J(B.config));
+  if(u.indexOf('/api/config')===0){
+   if(o&&String(o.method||'GET').toUpperCase()==='POST')
+    return Promise.resolve(J({ok:false,demo:true,
+     err:'在线演示为静态站：保存仅在本机真实控制台可用'}));
+   return Promise.resolve(J(B.config));}
+  if(u.indexOf('/api/login-state')===0)
+   return Promise.resolve(J(B.login||{ok:true,plats:{}}));
   if(u.indexOf('/api/trend')===0){
    const q=new URLSearchParams(u.split('?')[1]||'');
    const k=q.get('from')+'|'+q.get('to')+'|'+q.get('date')+'|'+q.get('days');
@@ -86,35 +92,30 @@ def build():
         "health": demo_health(),
         "preview": webui._preview_payload(0),
         "logtail": {"ok": True, "demo": True, "lines": [
-            "2026-09-09 14:00:00 [INFO] ticket-monitor: ===== 开始一轮扫描（1 用户 / 3 航线） =====",
-            "2026-09-09 14:00:17 [INFO] ticket-monitor: [qunar] 2026-09-25 最低价 ￥1850（航班明细 70 条：直飞 44 / 中转 26）",
-            "2026-09-09 14:00:45 [INFO] ticket-monitor: ===== 本轮扫描结束 =====",
-        ], "plat": "qunar", "ts": "2026-09-09 14:00"},
-        "config": {"users": [{
-                       "name": "演示用户",
-                       "routes": [{"from": "SHA", "from_name": "上海",
-                                   "to": "URC", "to_name": "乌鲁木齐",
-                                   "dates": ["2026-09-25"],
-                                   "alert_direct": 1900,
-                                   "alert_transfer": 1700}],
-                       # 展示态特价订阅（r319 呈现面恒一致：与 --demo
-                       # GET 载荷同形，配置卡访客首屏即见「🎯特价开」）
-                       "specials": [{"enabled": True, "from": "SHA",
-                                     "from_name": "上海",
-                                     "max_price": 400, "days": 30}],
-                       "notifier": {"dingtalk": {"enabled": False}},
-                       "platforms": ["qunar", "ctrip", "fliggy",
-                                     "tongcheng", "tuniu"]}],
-                   "city": dict(_wCITY), "cityx": webui._cityx(),
-                   "intl": webui._intl_payload(), "demo": True,
-                   "globals": {"interval_minutes": 15, "jitter_minutes": 5,
-                               "port": 8765, "headless": True}},
+            "2026-11-05 14:00:00 [INFO] ticket-monitor: ===== 开始一轮扫描（1 用户 / 3 航线） =====",
+            "2026-11-05 14:00:17 [INFO] ticket-monitor: [qunar] 2026-11-05 最低价 ￥1850（航班明细 70 条：直飞 44 / 中转 26）",
+            "2026-11-05 14:00:45 [INFO] ticket-monitor: ===== 本轮扫描结束 =====",
+        ], "plat": "qunar", "ts": "2026-11-05 14:00"},
+        "config": webui._demo_config_payload(),
+        "login": {"ok": True, "plats": {
+            p: {"saved": False, "active": False,
+                "stale": False, "pending": False}
+            for p in ("qunar", "ctrip", "tongcheng", "tuniu", "fliggy")}},
     }
     shim = SHIM % json.dumps(baked, ensure_ascii=False)
     page = webui._page_html(webui._State.version)
     assert "__PAGEVER__" not in page, "页面代际令牌未替换（横幅会误报）"
     assert "<script>" in page, "PAGE 结构变化，找不到注入点"
     page = page.replace("<script>", "<script>" + shim, 1)
+    page = page.replace("<title>机票监控台</title>",
+        "<title>机票监控台 · 自托管五渠道价格监控与钉钉推送</title>")
+    page = page.replace(
+        '<meta name="description" content="自托管多渠道机票价格监控：五渠道明细、达标强提醒、配置全热加载">',
+        '<meta name="description" content="可在线试玩的机票价格监控：五平台报价、达标强提醒、'
+        '日期模式条与全量配置可视化；支持钉钉/邮件/ntfy/Bark，本机自托管。">'
+        '<meta property="og:title" content="机票监控台 · 在线演示">'
+        '<meta property="og:description" content="五渠道机票监控、达标强提醒与全量配置可视化。">'
+        '<meta property="og:type" content="website">')
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(page)

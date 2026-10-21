@@ -89,10 +89,11 @@ def test_srow_ios_zoom_guard_computed(srv):
             "s=>{const e=document.querySelector(s);"
             "return e?getComputedStyle(e).fontSize:null;}", sel)
 
-    # 审计实测 13px 的三类元素（无 type / number / 日期 dpick）
+    # 审计实测 13px 的三类元素（无 type / number / 日期 dadd——r339g
+    # 日期添加器二合一后 dpick 文本框退役，native date 顶位同受守卫）
     for sel in (".srow .sctl input:not([type])",
                 ".srow .sctl input[type=number]",
-                "input[id^=dpick-]"):
+                "input[id^=dadd-]"):
         v = fs(sel)
         assert v is not None, "取样元素缺失：%s" % sel
         assert v == "16px", (

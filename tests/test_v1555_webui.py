@@ -47,8 +47,21 @@ class TestWebuiV1555Pins:
         c = len(re.findall(r"</div\b", page))
         # r325：城市面板「🌐 国际目的地」页签（cp-sec/lhead/grid 三容器）
         # +3 对；R34：scope 分 Tab 行（cfgScopeBar 容器）+1 对；
-        # 后续并行 r326 对账至 391/391（含 cptabs 等后续增量）
-        assert (o, c, o - c) == (386, 386, 0)
+        # 后续并行 r326 对账至 391/391（含 cptabs 等后续增量）；
+        # r339 双特性对账至 426/426（Bark 通道卡 chcard+4 srow、
+        # 往返返程日期 chips 行 srow、渠道徽标 glab 增量）；
+        # 日期行两段式（.dwrap/.dline）对账至 430/430；
+        # r339g 启动级重启横幅（restartHint 预置位）+1 对 = 431/431；
+        # r341 到达窗快捷挡行/glAbs 绝对路径行等 +15 对 = 446/446；
+        # r339j 最长飞行时长行（srow+slab+sctl）+4 对 = 450/450；
+        # r342 配置工作台：概览容器 + 配置 chrome + 重启中心五件 +
+        # 日期双通道工具卡/航司选择/路径卡渲染模板 + 明细筛选摘要与
+        # 预设行 + 范围/状态零命中空态行 = 508/508；r343 统一确认层
+        # 五件 + 明细属性筛选 5 个 agrp = 518/518；r344 日期编排合并
+        # 共享快捷行（每行 -1 对，去/返程两行） = 516/516；r345 双卡
+        # 编辑器收为单编辑器模式条（每行再 -6 对，去/返程两行）= 504/504；
+        # r346 移动端筛选结果 CTA +1 对 = 505/505
+        assert (o, c, o - c) == (505, 505, 0)
 
     def test_dingtalk_card_closed_before_ntfy(self):
         """钉钉卡闭合补钉字面在位，且位于 ntfy 卡开标签之前（顺序钉死）。"""
@@ -177,8 +190,9 @@ class TestWebuiV1555Pins:
         七批字段只做段内扩展；八批 +1 段（transferTax 机建燃油）；
         r325 +1 段（intl 含税词，条件段——国内行 join 滤空不占位，
         容量口径按源码段位计）；R45 +1 段（codeShare 共享航班，
-        条件段）= 16。"""
-        assert self._subrow_segments(self._page()) == 16
+        条件段）= 16；r339j +1 段（托运 kg 命中片，bagkg 门开着才
+        渲染的条件段）= 17。"""
+        assert self._subrow_segments(self._page()) == 17
 
     def test_subrow_segment_extensions(self):
         page = self._page()
@@ -189,8 +203,9 @@ class TestWebuiV1555Pins:
         # 机场段同律——.nw 全局工具类声明生效，td .stl.nw 是压制豁免
         # 档；uitest r313 stl orphan 行为钉锁三窄带实效）；
         # r329 起 title 前缀机型细名（plane 三端收口：条件前缀，
-        # 无机型行 title 原样）
-        assert ('f.planeSize?\'<span class="nw" title="\'+(f.plane?\'机型\'+he(f.plane)+\'｜\':\'\')+\'数据源：渠道连廊率/机龄">\'+he(f.planeSize)'
+        # 无机型行 title 原样）；r339 起二段机型/体量同段并入
+        # （title 二段注记 + 词面「·二段X」并列，中转行全程机型判断）
+        assert ('f.planeSize?\'<span class="nw" title="\'+(f.plane?\'机型\'+he(f.plane)+(f.plane2?\'｜二段机型\'+he(f.plane2):\'\')+\'｜\':\'\')+\'数据源：渠道连廊率/机龄">\'+he(f.planeSize)+(f.planeSize2?\'·二段\'+he(f.planeSize2):\'\')'
                 in page)
         assert "'·机龄'+he(String(f.planeAge))+'年'" in page
         # 主行 tag 槽：lcc 廉航徽标（与经停/直挂同位，空值不占位）

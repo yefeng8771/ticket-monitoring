@@ -48,7 +48,15 @@ class Pulse:
             pass
 
     def _save(self):
-        """轮次落盘（持锁调用）：tmp+replace 原子写；失败只丢持久化不丢内存。"""
+        """轮次落盘（持锁调用）：tmp+replace 原子写；失败只丢持久化不丢内存。
+        写入端生产资格门（r339c 立案，与 notifier._append_push_history
+        同律）：非生产形态进程（pytest/旁路脚本）+ 默认路径 → 静默拒写
+        ——合成轮曾成批混入生产 pulse.json（控制台脉冲卡显示 pytest
+        假轮）；显式注入 store（压测/探针独立账本）永远放行。"""
+        if self._store == STORE:
+            from core.notifier import _prod_ledger_allowed
+            if not _prod_ledger_allowed():
+                return
         try:
             os.makedirs(os.path.dirname(self._store) or ".", exist_ok=True)
             tmp = self._store + ".tmp"

@@ -23,7 +23,7 @@ def main():
     with sync_playwright() as p:
         b = p.chromium.launch()
         # 1512 视口布局舒展；device_scale_factor=2 出高清图（GitHub 缩放后依然锐利）
-        pg = b.new_page(viewport={"width": 1512, "height": 860},
+        pg = b.new_page(viewport={"width": 1512, "height": 1042},
                         device_scale_factor=2)
         pg.on("console",
               lambda m: errors.append(m.text) if m.type == "error" else None)
@@ -37,8 +37,7 @@ def main():
             pg.wait_for_timeout(1100)
 
         theme("light")
-        pg.screenshot(path=os.path.join(OUT, "console-light.png"),
-                      full_page=True)
+        pg.screenshot(path=os.path.join(OUT, "console-light.png"))
         # 走势子视图（折线+日历）暗色：覆盖 canvas 暗色渲染。
         # 先切国际长航线片（SHA→伦敦希思罗：长坡缓降+跨天直飞的
         # 国际曲线形态；chip 高亮跟随由 buildChartChips 显式重建）
@@ -51,23 +50,22 @@ def main():
         }""")
         pg.wait_for_timeout(700)
         theme("dark")
-        pg.screenshot(path=os.path.join(OUT, "console-dark.png"),
-                      full_page=True)
+        pg.screenshot(path=os.path.join(OUT, "console-dark.png"))
         # 推送预览弹层（暗色下再截一张，覆盖弹层渲染；预览从 demo 库
         # 现渲染，国际达标行随 digest 全量视觉）
         pg.click("#pvBtn")
         pg.wait_for_function(
             "() => {const b = document.querySelector('#pvBody');"
             "return !!b && b.innerText.length > 50;}", timeout=15000)
-        pg.screenshot(path=os.path.join(OUT, "console-preview.png"),
-                      full_page=True)
+        pg.locator(".pvcard").screenshot(
+            path=os.path.join(OUT, "console-preview.png"))
         pg.keyboard.press("Escape")
         pg.wait_for_timeout(300)
         # K线模式（蜡烛图组件；仍在 LHR 国际长曲线语境）
         pg.click("#mdK")
         pg.wait_for_timeout(600)
-        pg.screenshot(path=os.path.join(OUT, "console-kline.png"),
-                      full_page=True)
+        pg.locator("#chartcard").screenshot(
+            path=os.path.join(OUT, "console-kline.png"))
         pg.click("#mdLine")
         pg.wait_for_timeout(300)
         # 航班明细子视图（工作台表格）：筛国际航线片（SHA→东京成田——
@@ -82,8 +80,13 @@ def main():
           if (c) c.click();
         }""")
         pg.wait_for_timeout(500)
-        pg.screenshot(path=os.path.join(OUT, "console-details.png"),
-                      full_page=True)
+        pg.evaluate("""() => {
+          const t=document.getElementById('tablecard');
+          if(t)window.scrollTo(0, Math.max(0,
+            t.getBoundingClientRect().top + window.scrollY - 150));
+        }""")
+        pg.wait_for_timeout(300)
+        pg.screenshot(path=os.path.join(OUT, "console-details.png"))
         pg.evaluate("""() => {
           const c = [...document.querySelectorAll('#routechips .chip')]
             .find(x => x.textContent.trim() === '全部航线'
@@ -104,10 +107,33 @@ def main():
             const h = document.querySelector('.uhead2');
             if (h) toggleUser(h);
           }
+          // r342：展开首航线呈现「区间+逐日」双通道日期编排
+          const rh = document.querySelector('.rline[data-rk] .rhead');
+          if (rh && rh.getAttribute('aria-expanded') === 'false') rh.click();
         }""")
         pg.wait_for_timeout(500)
-        pg.screenshot(path=os.path.join(OUT, "console-config.png"),
-                      full_page=True)
+        # r347：视口级最佳构图——日期模式条、已选片、快捷行与保存条同屏
+        pg.evaluate("""() => {
+          if(typeof CFG!=='undefined'&&CFG[0]&&CFG[0].routes[0]){
+            CFG[0].routes[0].alert_direct =
+              (Number(CFG[0].routes[0].alert_direct)||0) + 10;
+            buildForm();
+          }
+        }""")
+        pg.wait_for_timeout(1300)
+        pg.evaluate("""() => {
+          const f=document.getElementById('dfrom-0-0'),
+                t=document.getElementById('dto-0-0');
+          if(f)f.value='2026-11-05';
+          if(t)t.value='2026-11-15';
+          const d=document.querySelector('.dateSrow');
+          if(d)window.scrollTo(0, Math.max(0,
+            d.getBoundingClientRect().top + window.scrollY - 260));
+        }""")
+        pg.wait_for_timeout(300)
+        pg.screenshot(path=os.path.join(OUT, "console-config.png"))
+        pg.locator(".dateSrow").first.screenshot(
+            path=os.path.join(OUT, "console-date-modes.png"))
         # 城市面板「🌐 国际」页签（地区分组+三路搜索：国际监控能力
         # 的配置面主秀；注入拼音搜索词让搜索框带词出镜）
         pg.evaluate("""() => {
@@ -138,8 +164,24 @@ def main():
         # 全局配置中心（调度/采集热载 + 启动级只读三组）
         pg.click('#cfgnav .cnav[data-p="globals"]')
         pg.wait_for_timeout(700)
-        pg.screenshot(path=os.path.join(OUT, "console-globals.png"),
-                      full_page=True)
+        pg.evaluate("window.scrollTo(0,0)")
+        pg.wait_for_timeout(250)
+        pg.screenshot(path=os.path.join(OUT, "console-globals.png"))
+        # 重启与迁移中心（r342）：演示一次未保存路径变更→旧→新+迁移预案
+        pg.evaluate("""() => {
+          const i = document.getElementById('glbUdd');
+          if (i) {
+            i.value = 'user_data_migrated';
+            i.dispatchEvent(new Event('change', {bubbles: true}));
+          }
+        }""")
+        pg.wait_for_timeout(500)
+        pg.evaluate("openRestartCenter && openRestartCenter()")
+        pg.wait_for_timeout(500)
+        pg.screenshot(path=os.path.join(OUT, "console-restart.png"))
+        pg.evaluate("closeRestartCenter && closeRestartCenter();"
+                    "loadCfg && loadCfg()")
+        pg.wait_for_timeout(500)
         # 移动端（筛选抽屉 + 首列吸附 + 国际行窄带折行形态）
         pg.set_viewport_size({"width": 390, "height": 844})
         pg.click("#navMon")
@@ -147,8 +189,22 @@ def main():
         pg.evaluate("showMonTab('details')")
         pg.wait_for_timeout(500)
         theme("light")
-        # 首屏视口截图：fullPage 超长条在 README 里缩成细长一条，观感差
+        pg.evaluate("resetFlt()")
+        pg.wait_for_timeout(300)
+        pg.evaluate("""() => {
+          const t=document.getElementById('tablecard');
+          if(t)window.scrollTo(0, Math.max(0,
+            t.getBoundingClientRect().top + window.scrollY - 120));
+        }""")
+        pg.wait_for_timeout(350)
         pg.screenshot(path=os.path.join(OUT, "console-mobile.png"))
+        # r347：移动筛选抽屉 + 常驻「查看筛选结果」CTA（真实单手出口）
+        pg.evaluate("(()=>{const fb=document.querySelector('.fbar');"
+                    "if(fb&&!fb.classList.contains('open'))togFlt();})()")
+        pg.wait_for_timeout(500)
+        pg.screenshot(path=os.path.join(OUT, "console-mobile-filter.png"))
+        pg.evaluate("closeFltShow&&closeFltShow()")
+        pg.wait_for_timeout(300)
         b.close()
     if errors:
         print("!! 页面 JS 错误：")

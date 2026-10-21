@@ -180,10 +180,15 @@ def _toast_last(page):
 
 
 def _fcnt(page):
+    """(可见报价, 全部报价)——r345 KPI 第二段改为唯一班次；测试语义
+    一直是「行/报价数」，总数直接从模型取，避免拿 69 班比 194 报价。"""
     import re
-    m = re.search(r"：(\d+) / (\d+)", page.evaluate(
+    m = re.search(r"：(\d+) 条报价", page.evaluate(
         "document.getElementById('fcnt').textContent") or "")
-    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    total = page.evaluate(
+        "(S&&S.users&&S.users[U]&&S.users[U].flights)?"
+        "S.users[U].flights.length:0")
+    return (int(m.group(1)), int(total)) if m else (None, None)
 
 
 def _flt(page):
@@ -760,7 +765,7 @@ def test_dt09_moreflt_eight_dims(page):
             "(() => {const b = document.getElementById('morefltN');"
             "return [b.style.display, b.textContent];})()")
         assert badge[0] == "" and badge[1] == "3", badge   # 时长/准点/机龄
-        for grp, probe in [("cross", "f.date&&f.arrDate&&f.arrDate>f.date"),
+        for grp, probe in [("cross", "Number(f.crossDayN)>0"),
                            ("child", "f.childPrice!=null")]:
             has = page.evaluate("S.users[U].flights.some(f=>%s)" % probe)
             disp = page.evaluate(

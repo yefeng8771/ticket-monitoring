@@ -65,11 +65,19 @@ class TestWebuiV1559Pins:
 
     def test_aria_modal_on_pvcard(self):
         """aria-modal 语义须与 role="dialog" 同元素（读屏按 role 定位
-        dialog 取语义）——原挂 #pvMask 遮罩上读屏拿不到。静态随 .pvcard
-        落 HTML，运行时 setAttribute 入口清零。"""
+        dialog 取语义）——原挂 #pvMask 遮罩上读屏拿不到。静态随弹层卡
+        落 HTML，运行时 setAttribute 入口清零。城市面板（citypanel）与
+        推送预览（pvcard）两真弹层各自成对，aria-modal 计数==dialog 数。"""
         page = self._page()
         assert 'role="dialog" aria-modal="true"' in page
-        assert page.count('aria-modal="true"') == 1
+        # 每个 aria-modal 都以 role="dialog" 前缀成对（role 计数含
+        # CSS 注释字面，不可作分母——LESSONS 十八§10 注释同被计数）
+        n_am = page.count('aria-modal="true"')
+        assert page.count('role="dialog" aria-modal="true"') == n_am, \
+            "aria-modal 与 role=dialog 须逐元素成对"
+        # 受控枚举：两真弹层（城市面板 + 推送预览）+ r342 重启中心
+        # + r343 统一删除确认层 = 4，新增模态弹层同轮 +1
+        assert n_am == 4
         assert "_m.setAttribute('aria-modal'" not in self._src()
 
     # ---- brief 级孤儿键 date ----------

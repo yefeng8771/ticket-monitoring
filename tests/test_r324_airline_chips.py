@@ -264,7 +264,9 @@ def test_attrchips_top_aligned(page):
                   chipH: Math.round(cr.height),
                   topDelta: Math.round(Math.abs(lr.top - cr.top))};
         })()""")
-        assert out["ai"] == "flex-start", out
+        # r343：属性筛选改单行横滚分组，组内标签/片按中心轴对齐
+        # （topDelta 仍受 ≤2 约束，不会回到多行墙的悬中错位）
+        assert out["ai"] == "center", out
         assert out["topDelta"] <= 2, out
         assert abs(out["labH"] - out["chipH"]) <= 3, out
     finally:
@@ -280,5 +282,7 @@ def test_source_pins_carrier_code_aggregation():
     assert "new Set(u.flights.map(carrierOf))" not in src, (
         "旧词面键聚合应退役")
     assert "function carrierOf(" not in src, "旧词面派生单源应退役"
-    assert 'style="align-items:flex-start"' in src and \
-        src.count('id="attrchips"') == 1, "P3-1 顶轴对齐应在案"
+    assert 'class="frow attrgrid"' in src and \
+        src.count('id="attrchips"') == 1, "r343 属性筛选横滚分组应在案"
+    assert ".attrgrid .agrp .chips-wrap{" in src, \
+        "单行横滚容器样式应在案"

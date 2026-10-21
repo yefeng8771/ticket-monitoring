@@ -132,10 +132,11 @@ def test_expand_state_persisted():
     import webui
     # r320 行属性筛选族入快照：尾键随轮演进（pmax 后接 airlines/ps/
     # few/nostop/noshare/safe/lmin/lmax/dmin/dmax/pr/ag/bg/ml/nl/cr/ch
-    # ——准点率/机龄/行李/餐食/廉航/跨天/儿童价等维度陆续入排）
+    # ——准点率/机龄/行李/餐食/廉航/跨天/儿童价等维度陆续入排；
+    # r339 起 bkg（托运 kg）/wb（仅大型机明细门）随两 facet 入排成尾键）
     assert ("chr:CHR,exp:EXP,tg:TGOPEN,pmin:FLT.pmin||0,pmax:FLT.pmax||0,"
             in webui.PAGE)
-    assert "ch:FLT.child}" in webui.PAGE
+    assert "wb:FLT.wb}" in webui.PAGE
     assert "if(typeof j.exp==='string')EXP=j.exp;" in webui.PAGE
     assert "if(typeof j.tg==='string')TGOPEN=j.tg;" in webui.PAGE
 
