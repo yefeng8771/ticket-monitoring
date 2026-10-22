@@ -52,11 +52,15 @@ class TestWebuiV172Pins:
         单源——.hcells 成员走弹性实判定+滚动暗示，其余成员函数内
         保持原 xhint 判定，语义担保不变）。"""
         src = self._src()
-        assert ("if(t==='health')document.querySelectorAll("
+        assert ("if(t==='health'){document.querySelectorAll("
                 "'.hcells,#montab-details .tabs,#montabs"
-                ",#opscard .opsbtns')"
-                ".forEach(_hfit);") in src, \
+                ",#opscard .opsbtns').forEach(_hfit);") in src, \
             "showMonTab 缺 health 分支批次重跑（主路径渐隐死档回潮）"
+        # v1.5.274：激活时补滚最新一轮（隐藏容器首渲 scrollWidth=0）
+        assert ("if(window.innerWidth<=760)document.querySelectorAll("
+                "'#hbody .hcells').forEach(x=>{try{x.scrollLeft="
+                "x.scrollWidth}catch(_){}})") in src, \
+            "health 激活未补滚最新轮"
         # 禁复活：内联匿名回调形态（弹性实判定从批次旁路=fit 恒缺席）
         assert ("if(t==='health')document.querySelectorAll("
                 "'.hcells,#montab-details .tabs,#montabs"

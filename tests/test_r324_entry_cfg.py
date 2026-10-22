@@ -274,7 +274,7 @@ class TestW1Name:
               return {model: CFG[0].name,
                       headName: head.querySelector('b').textContent,
                       uava: head.querySelector('.uava').textContent,
-                      delBtn: del.textContent.trim()};
+                      delBtn: (del.getAttribute('aria-label')||'').trim()};
             })()""")
             assert out["model"] == "入口改名甲", out
             assert out["headName"] == "入口改名甲", out
@@ -344,7 +344,7 @@ class TestW2Notifier:
                         '#cfgform .grouplab[data-sec="A"] .gsum').textContent};
             })()""")
             assert page.evaluate("CFG[0].notifier.win_toast") is False
-            assert out["t"] == "🔔弹窗关" and not out["ok"], out
+            assert out["t"] == "弹窗 关" and not out["ok"], out
             assert "弹窗关" in out["aHead"], out
         finally:
             _restore(page, snap)
@@ -725,7 +725,7 @@ class TestW13Route:
             _open_route(page, "0:0")
             _open_rtadv(page, "0:0")
             fin = '.rline[data-rk="0:0"] input[onchange*="\'from_name\'"]'
-            _click(page, fin)   # onclick=cityPanelOpen(this)
+            _click(page, fin + ' + .rt-citymore')   # ▾ 全量城市面板
             page.wait_for_selector("#citypanel", state="visible")
             assert page.locator(
                 "#cpbody .cp-city").count() > 100   # 全量城表面在场
@@ -750,7 +750,7 @@ class TestW13Route:
             assert out["panel"] == "none", out   # 选后即关
             # 到达城市同链
             tin = '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"]'
-            _click(page, tin)
+            _click(page, tin + ' + .rt-citymore')
             page.wait_for_selector("#citypanel", state="visible")
             page.locator('#cpbody .cp-city[data-n="长沙"]').first.click()
             page.wait_for_timeout(120)
@@ -775,7 +775,7 @@ class TestW13Route:
         try:
             _open_route(page, "0:0")
             _open_rtadv(page, "0:0")
-            _click(page, '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"]')
+            _click(page, '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"] + .rt-citymore')
             page.wait_for_selector("#citypanel", state="visible")
             page.locator("#cpq").fill("长沙")
             page.wait_for_timeout(120)
@@ -799,7 +799,7 @@ class TestW13Route:
             _open_rtadv(page, "0:0")
             before = page.evaluate(
                 "[CFG[0].routes[0].from_name, CFG[0].routes[0].to_name]")
-            _click(page, '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"]')
+            _click(page, '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"] + .rt-citymore')
             page.wait_for_selector("#citypanel", state="visible")
             _click(page, "#citypanel .cp-x")
             page.wait_for_timeout(120)
@@ -919,7 +919,7 @@ class TestW15Specials:
                         '#cfgform .grouplab[data-sec="D"] .gsum').textContent};
             })()""")
             assert out["m"] is False, out
-            assert out["t"] == "🎯特价关" and not out["ok"], out
+            assert out["t"] == "特价 关" and not out["ok"], out
             assert out["dHead"] == "未启用", out
             _click(page, sel)
             out = page.evaluate("""(() => {
@@ -931,7 +931,7 @@ class TestW15Specials:
                         '#cfgform .grouplab[data-sec="D"] .gsum').textContent};
             })()""")
             assert out["m"] is True, out
-            assert out["t"] == "🎯特价开" and out["ok"], out
+            assert out["t"] == "特价 开" and out["ok"], out
             assert out["dHead"] == "已启用", out
         finally:
             _restore(page, snap)
@@ -1160,7 +1160,7 @@ class TestW1920Users:
         _to_cfg(page)
         snap = page.evaluate(_SNAP)
         try:
-            _click(page, '#panel-users .row button[onclick="addUser()"]')
+            _click(page, '#panel-users .cfgtoolbar button[onclick="addUser()"]')
             page.wait_for_timeout(250)
             out = page.evaluate("""(() => {
               const cards = document.querySelectorAll('#cfgform .ucard');
@@ -1180,7 +1180,7 @@ class TestW1920Users:
         _to_cfg(page)
         snap = page.evaluate(_SNAP)
         try:
-            _click(page, '#panel-users .row button[onclick="addUser()"]')
+            _click(page, '#panel-users .cfgtoolbar button[onclick="addUser()"]')
             page.wait_for_timeout(250)
             sel = '#cfgform button.danger[onclick^="delUser(1"]'
             _click(page, sel)
@@ -1402,7 +1402,8 @@ class TestW3436SaveDiscardImport:
         try:
             _fill(page, '#cfgform input[onchange*="CFG[0].name"]',
                   "保存门探针")
-            _click(page, '#panel-users button.warn[onclick="saveCfg()"]')
+            page.wait_for_selector("#savebar.on")
+            _click(page, '#savebar button[onclick="saveCfg()"]')
             page.wait_for_function(
                 "document.getElementById('cfgmsg').textContent"
                 ".startsWith('❌')", timeout=6000)

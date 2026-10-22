@@ -171,7 +171,7 @@ class QunarCrawler(BaseCrawler):
 
     # 去哪儿单程列表 H5（用户提供的真实入口）
     URL_TPL = (
-        "https://touch.qunar.com/ncs/page/flightlist"
+        "https://m.flight.qunar.com/ncs/page/flightlist"
         "?depCity={from_name}&arrCity={to_name}"
         "&goDate={date}&from=touch_index_search"
         "&child=0&baby=0&cabinType=0"
@@ -281,13 +281,15 @@ class QunarCrawler(BaseCrawler):
     # token 有效期（保守取 20h，实际约 24h）
     TOKEN_TTL_S = 20 * 3600
 
+    # 2026-10-10 起 PC /site/ 只留停服通知与 App 下载入口，统一登录页
+    # 仍提供手机号验证码/扫码（2026-10-22 实测），Cookie 落 .qunar.com
+    # 主域，与 H5 列表/明细取数共用。
+    LOGIN_URL = "https://user.qunar.com/passport/login.jsp"
+    # H5 机票首页：停服后的用户入口（自动取数仍走 URL_TPL 列表页）。
+    H5_HOME = "https://touch.qunar.com/h5/flight/"
+
     def login_url(self) -> str:
-        # 登录引导页落 /site/ 机票列表页（r324 用户实报）：根路径
-        # flight.qunar.com/ 会 302 到 www.qunar.com 促销聚合门户——
-        # 首屏无登录入口埋在 JS 后；/site/ 稳定落机票列表页，登录
-        # 入口右上角可达。cookie 落 .qunar.com 主域，PC 主路径与
-        # H5 兜底共用（桌面视口登录，手机模拟下滑块失灵）
-        return "https://flight.qunar.com/site/"
+        return self.LOGIN_URL
 
     # ==================== 主流程 ====================
     # 阶梯式限流自锁（替代固定 310s 预防等待——实测一轮 11 分钟里
@@ -403,18 +405,20 @@ class QunarCrawler(BaseCrawler):
         return results
 
     def _fetch_one(self, from_city: str, to_city: str, date: str) -> Optional[tuple]:
-        """单日期抓取：PC 版优先（wbdflightlist 完整明细），失败回退
-        H5 浏览器，再回退 httpx（token 直连，分片还原完整明细；
-        真截断/风控形态整单拒落价）。"""
-        got = self._fetch_via_pc(from_city, to_city, date)
-        if got is not None:
-            return got
-        self.logger.info("[qunar] PC 未命中，回退 H5 浏览器")
+        """单日期抓取：H5 浏览器优先（2026-10 起 PC 断供），
+        再探测 PC 复活，最后 httpx token 直连；真截断/风控整单拒落价。"""
+        # 2026-10-10 起 PC 列表页 302 回 www.qunar.com 促销聚合，
+        # wbdflightlist 断供；H5 列表页（m.flight）仍出全量明细。
+        # H5 先行，PC 仅作未来复活探测/兜底，最后 token 直连。
         got = self._fetch_via_browser(from_city, to_city, date)
         if got is not None:
             self.logger.info("[qunar] H5 浏览器命中（完整明细）")
             return got
-        self.logger.info("[qunar] H5 未命中，回退 httpx")
+        self.logger.info("[qunar] H5 未命中，探测 PC 是否复活")
+        got = self._fetch_via_pc(from_city, to_city, date)
+        if got is not None:
+            return got
+        self.logger.info("[qunar] PC 未命中，回退 httpx")
         return self._fetch_via_httpx(from_city, to_city, date)
 
     # ==================== PC 版主路径（wbdflightlist） ====================
@@ -1288,7 +1292,7 @@ class QunarCrawler(BaseCrawler):
         body["st"] = now_ms - 1
 
         headers = dict(token["headers"])
-        headers["referer"] = "https://touch.qunar.com/ncs/page/flightlist"
+        headers["referer"] = "https://m.flight.qunar.com/ncs/page/flightlist"
         cookies = dict(token["cookies"])
 
         try:

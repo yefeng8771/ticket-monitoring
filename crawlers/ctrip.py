@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import json
+import time
 import urllib.parse
 from typing import List
 
@@ -71,9 +72,22 @@ class CtripCrawler(BaseCrawler):
                     "&acity={to_city}&acityName={to_name}"
                     "&ddate={date}")
 
+    # 国际 PC 列表页（2026-10-22 实证）：国际 14488 列表业务性拒答，
+    # 但 flights.ctrip.com PC 站在受信 profile 下会发 batchSearch 出
+    # 真实行程列表（SHA→TYO 174 行程/2.5MB，含税价/舱位/余票/行李）。
+    # 机场码先归并城市码（NRT→TYO），与日历端点同口径。
+    URL_LIST_INTL = ("https://flights.ctrip.com/online/list/"
+                     "oneway-{from_city}-{to_city}?depdate={date}")
+
     # 仅认航班列表接口；LowestPriceSearch 是跨日期低价日历，会混入其他日期价格
     XHR_KEYS = [
         "flightListSearchForH5",
+    ]
+
+    # PC 国际列表分页/增量：batchSearch 首批全量，pull 为滚动补量
+    XHR_KEYS_INTL_LIST = [
+        "international/search/api/search/batchSearch",
+        "international/search/api/search/pull/",
     ]
 
     CITY_NAME = {
@@ -182,9 +196,411 @@ class CtripCrawler(BaseCrawler):
 
     def _fetch_intl(self, from_city: str, to_city: str,
                     dates: List[str]) -> List[FlightPrice]:
-        """国际=日历通道（R44b 定谳改道）：14488 列表端点对国际查询
-        业务性拒答（请求体与国内逐字段同构仍 30212，r39_reqdiff 同
-        profile 对照实证），国际真价面=壳页自动加载的
+        """国际=PC 航班列表优先，缺日回退日历（R44b → r360 换面）。
+
+        R44b 时 14488 国际列表业务性拒答，只能采日历；2026-10-22 复核
+        发现 PC 国际站（flights.ctrip.com）在受信 profile 下会发
+        international/search/api/search/batchSearch 真列表（SHA→TYO
+        174 行程/2.5MB，含税价/舱位/余票/行李/时刻）。列表优先，日历
+        只补列表缺日：国际面首次具备航班维度（可同班比价/监控/走势），
+        同一路由不再让「日历最低价」顶替真实航班。两边都无价=当日无数据。
+        """
+        # 机场→城市归并（R44c：端点键是城市级码——生产 acity=NRT
+        # 机场码直传=全窗 380 行零报价实锤，同程/飞猪 _fetch_intl 同律）
+        fc, tc = (airport_city_code(from_city.upper()),
+                  airport_city_code(to_city.upper()))
+        results = self._fetch_intl_list(from_city, to_city, fc, tc, dates)
+        got = {r.depart_date for r in results}
+        missing = [d for d in dates if d not in got]
+        if missing:
+            self.logger.warning(
+                "[ctrip][intl] PC 列表覆盖 %d/%d 天，日历兜底: %s",
+                len(got), len(dates), ",".join(missing))
+            results.extend(self._fetch_intl_calendar(
+                from_city, to_city, fc, tc, missing))
+        return results
+
+    def _fetch_intl_list(self, from_city: str, to_city: str,
+                         fc: str, tc: str,
+                         dates: List[str]) -> List[FlightPrice]:
+        """PC 国际列表：batchSearch/pull 捕获 → 行程行解析。
+
+        profile 未登录时 data.needUserLogin=true 且无行程——置
+        login_suspect 供 main.py 登录门槛，不造假数据。pull 为滚动
+        补量，行结构与 batchSearch 同构，解析器同源。
+        """
+        results: List[FlightPrice] = []
+        with self.browser() as ctx:
+            warm = self.new_page(ctx)
+            try:
+                warm.goto("https://flights.ctrip.com/",
+                          wait_until="domcontentloaded", timeout=30000)
+                warm.wait_for_timeout(2500)
+            except Exception as e:
+                self.logger.warning("[ctrip][intl] PC 预热失败: %s", e)
+            finally:
+                try:
+                    warm.close()
+                except Exception:
+                    pass
+            for date in dates:
+                # 每日独立 page：上一日的 pull 迟到响应不会混进下一日
+                # 的 finished 判定（多日期监控窗实测必需）
+                page = self.new_page(ctx)
+                captured = self.attach_xhr_collector(
+                    page, self.XHR_KEYS_INTL_LIST)
+                url = self.URL_LIST_INTL.format(
+                    from_city=fc.lower(), to_city=tc.lower(), date=date)
+                self.logger.info("[ctrip][intl] GET %s", url)
+                try:
+                    page.goto(url, wait_until="domcontentloaded",
+                              timeout=45000)
+                    # 首包 batchSearch 可能只带 finished:false 空壳，真实
+                    # 行程随后由 pull 补量（实测 6.7s/9.7s 两包，均 174
+                    # 行）——等到「有行且 finished=true」或首包有行后
+                    # 9s 宽限，既不在空壳上早退，也不为空结果干等
+                    t0 = time.monotonic()
+                    parsed, flights, need_login = set(), [], False
+                    finished = False
+                    while time.monotonic() - t0 < 20:
+                        for item in list(captured):
+                            u = item.get("url", "")
+                            if u in parsed:
+                                continue
+                            parsed.add(u)
+                            body = item.get("text") or ""
+                            part, nl = self._extract_intl_list(body, date)
+                            flights.extend(part)
+                            need_login = need_login or nl
+                            if '"finished":true' in body:
+                                finished = True
+                        if finished:
+                            break
+                        if flights and time.monotonic() - t0 > 9:
+                            break
+                        page.wait_for_timeout(600)
+                    # 两包各约 2.6MB，debug 全量落盘会按日×14 膨胀数十
+                    # MB；国际列表只在内存解析并落 extra 行（可溯源到
+                    # 每行价格/舱位/余票/行李），这里只记捕获体积
+                    self.logger.info(
+                        "[ctrip][intl] %s 捕获 %d 包（%s 字节）", date,
+                        len(captured),
+                        ",".join(str(len(x.get("text") or ""))
+                                 for x in captured))
+                    # 同班多政策/两接口重叠：保留最低价（H5 同律）
+                    dedup = {}
+                    for f in flights:
+                        k = (f["code"], f["depTime"])
+                        if k not in dedup or f["price"] < dedup[k]["price"]:
+                            dedup[k] = f
+                    flights = list(dedup.values())
+                    try:
+                        _body = page.inner_text("body")[:1200]
+                    except Exception:
+                        _body = ""
+                    if not flights and (need_login or "手机登录/注册" in _body
+                                        or "账号密码登录" in _body):
+                        CtripCrawler.login_suspect = True
+                        self.logger.warning(
+                            "[ctrip][intl] 需登录 · PC 列表需携程会话"
+                            "（请在配置页「渠道登录」重登 ctrip）")
+                    if not flights:
+                        self.logger.warning(
+                            "[ctrip][intl] %s PC 列表未解析到航班", date)
+                        self._sleep()
+                        continue
+                    CtripCrawler.login_suspect = False
+                    best = min(flights, key=lambda f: f["price"])
+                    results.append(FlightPrice(
+                        platform=self.name,
+                        from_city=from_city, to_city=to_city,
+                        depart_date=date, price=best["price"],
+                        flight_no=best.get("name", ""),
+                        depart_time=best.get("depTime", ""),
+                        arrive_time=best.get("arrTime", ""),
+                        extra=json.dumps(flights, ensure_ascii=False),
+                    ))
+                    n_d = sum(1 for f in flights if not f.get("transCity"))
+                    self.logger.info(
+                        "[ctrip][intl] %s 最低含税价 ￥%.0f（明细 %d 条："
+                        "直飞 %d / 中转 %d）", date, best["price"],
+                        len(flights), n_d, len(flights) - n_d)
+                except Exception as e:
+                    self.logger.exception(
+                        "[ctrip][intl] %s PC 抓取异常: %s", date, e)
+                finally:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+                self._sleep()
+        return results
+
+    @staticmethod
+    def _extract_intl_list(body: str, date: str):
+        """PC 国际列表 batchSearch/pull → (统一航班行, needUserLogin)。
+
+        行程顶层 flightSegments[].flightList 为全部航段（直飞 1 段、
+        中转多段）。priceList 每项一个销售政策，含税总价=
+        adultPrice+adultTax；ticketCount 缺省=渠道未下发（实测 363/489
+        行缺省且页面照常展示），不是无票，显式<=0 才剔除。价格取
+        目标日起飞、价带内最低政策；舱位看 priceUnitList.cabinClass
+        （S=超级经济，itineraryCabin=Y-@S 是混合舱不能直接当 S）；
+        余票/行李/共享承运随最低价政策配对。只认 depDate==目标日。
+        """
+        try:
+            obj = json.loads(body)
+        except Exception:
+            return [], False
+        data = (obj or {}).get("data") or {}
+        if not isinstance(data, dict):
+            return [], False
+        need_login = bool(data.get("needUserLogin"))
+        out = []
+        for it in data.get("flightItineraryList") or []:
+            if not isinstance(it, dict):
+                continue
+            segs = [s for s in (it.get("flightSegments") or [])
+                    if isinstance(s, dict)]
+            legs = [f for s in segs for f in (s.get("flightList") or [])
+                    if isinstance(f, dict)]
+            if not legs:
+                continue
+            first, last = legs[0], legs[-1]
+            dd = str(first.get("departureDateTime") or "")
+            ad = str(last.get("arrivalDateTime") or "")
+            if len(dd) < 16 or len(ad) < 16 or dd[:10] != date:
+                continue
+            best = None
+            for p in it.get("priceList") or []:
+                if not isinstance(p, dict):
+                    continue
+                q = p.get("ticketCount")
+                if q is not None:
+                    try:
+                        if int(q) <= 0:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                try:
+                    total = (float(p.get("adultPrice") or 0)
+                             + float(p.get("adultTax") or 0))
+                except (TypeError, ValueError):
+                    continue
+                if not price_band_ok(total, el={"intl": 1}):
+                    continue
+                if best is None or total < best[0]:
+                    best = (total, p)
+            if best is None:
+                continue
+            price, pol = best
+            cabin_classes, seat_classes = [], []
+            for u in pol.get("priceUnitList") or []:
+                for fs in (u or {}).get("flightSeatList") or []:
+                    cc = str(fs.get("cabinClass") or "").upper()
+                    sc = str(fs.get("seatClass") or "").upper()
+                    if cc and cc not in cabin_classes:
+                        cabin_classes.append(cc)
+                    if sc and sc not in seat_classes:
+                        seat_classes.append(sc)
+            visa = {}
+            try:
+                visa = json.loads(pol.get("luggageVisaKey") or "{}")
+            except (TypeError, ValueError):
+                visa = {}
+            visa_legs = ((visa.get("criteria") or {}).get("FlightInfoList")
+                         or [])
+            if not seat_classes:
+                seat_classes = [str(v.get("SeatClass") or "").upper()
+                                for v in visa_legs
+                                if v.get("SeatClass")]
+            if not cabin_classes:
+                cabin_classes = [str(v.get("Cabin") or "").upper()
+                                 for v in visa_legs if v.get("Cabin")]
+            if cabin_classes and all(c == "S" for c in cabin_classes):
+                cabin_cn = "超级经济舱"
+            elif cabin_classes and all(c in ("Y", "S")
+                                       for c in cabin_classes):
+                cabin_cn = ("经济舱" if all(c == "Y" for c in cabin_classes)
+                            else "经济舱/超经")
+            elif cabin_classes and all(c == "C" for c in cabin_classes):
+                cabin_cn = "公务舱"
+            elif cabin_classes and all(c == "F" for c in cabin_classes):
+                cabin_cn = "头等舱"
+            else:
+                cabin_cn = "/".join(cabin_classes)
+            cabin_code = "/".join(seat_classes)
+            share, share2 = "", ""
+            for idx, vl in enumerate(visa_legs):
+                opn = str(vl.get("OperatingFlightNo") or "").strip()
+                mfn = str(vl.get("MarketingFlightNo") or "").strip()
+                if opn and mfn and opn != mfn:
+                    if idx == 0:
+                        share = opn
+                    elif idx == 1:
+                        share2 = opn
+            bag = ""
+            for dl in ((pol.get("baggage") or {}).get("dataList") or []):
+                cb = (((dl or {}).get("adultBaggage") or {})
+                      .get("checkedBaggage") or {})
+                c = str(cb.get("baggageContent") or "").strip()
+                if c:
+                    bag = c
+                    break
+            dep_ap = str(first.get("departureAirportShortName")
+                         or first.get("departureAirportName")
+                         or first.get("departureAirportCode") or "")
+            arr_ap = str(last.get("arrivalAirportShortName")
+                         or last.get("arrivalAirportName")
+                         or last.get("arrivalAirportCode") or "")
+            dep_apc = str(first.get("departureAirportCode") or "").upper()
+            arr_apc = str(last.get("arrivalAirportCode") or "").upper()
+            fnos = [str(f.get("flightNo") or "").strip()
+                    for f in legs if f.get("flightNo")]
+            if not fnos:
+                continue
+            dep_d, arr_d = dd[:10], ad[:10]
+            try:
+                from datetime import datetime as _dt
+                _xday = (_dt.strptime(arr_d, "%Y-%m-%d")
+                         - _dt.strptime(dep_d, "%Y-%m-%d")).days
+            except Exception:
+                _xday = 0
+            cross = ({0: "", 1: "+1天", 2: "+2天"}.get(_xday)
+                     or (f"+{_xday}天" if _xday > 0 else ""))
+            tz_dep = tz_offset_min(dep_apc)
+            tz_arr = tz_offset_min(arr_apc)
+            dur_min = 0
+            try:
+                dur_min = int(segs[0].get("duration") or 0)
+            except (TypeError, ValueError):
+                dur_min = 0
+            if dur_min <= 0:
+                try:
+                    from datetime import datetime as _dt
+                    t0 = _dt.strptime(dd[:19], "%Y-%m-%d %H:%M:%S")
+                    t1 = _dt.strptime(ad[:19], "%Y-%m-%d %H:%M:%S")
+                    dur_min = int((t1 - t0).total_seconds() // 60)
+                    if tz_dep is not None and tz_arr is not None:
+                        dur_min -= (tz_arr - tz_dep)
+                except Exception:
+                    dur_min = 0
+            lay_min = 0
+            lay_src = "ct"
+            _tds = []
+            for l in legs[:-1]:
+                try:
+                    _v = int(l.get("transferDuration") or 0)
+                except (TypeError, ValueError):
+                    _v = 0
+                _tds.append(_v)
+            if _tds and all(v > 0 for v in _tds):
+                lay_min = sum(_tds)
+            else:
+                lay_src = "times"
+                try:
+                    from datetime import datetime as _dt
+                    for _i in range(len(legs) - 1):
+                        _a = _dt.strptime(
+                            str(legs[_i].get("arrivalDateTime"))[:19],
+                            "%Y-%m-%d %H:%M:%S")
+                        _b = _dt.strptime(
+                            str(legs[_i + 1].get("departureDateTime"))[:19],
+                            "%Y-%m-%d %H:%M:%S")
+                        lay_min += max(0, int((_b - _a).total_seconds()
+                                              // 60))
+                except Exception:
+                    lay_min = 0
+            dur = f"{dur_min // 60}时{dur_min % 60}分" if dur_min else ""
+            is_transfer = len(legs) > 1
+            _lay2dep = _tgd = ""
+            if is_transfer:
+                _b2dd = str(legs[1].get("departureDateTime") or "")
+                if len(_b2dd) >= 16 and _b2dd[11:16] != dd[11:16]:
+                    _lay2dep = _b2dd[11:16]
+                if _b2dd[:10] > dep_d:
+                    _tgd = _b2dd[:10]
+            trans = ""
+            trans_terminal = ""
+            if is_transfer:
+                trans = str(first.get("arrivalCityName") or "").strip()
+                trans_terminal = str(first.get("arrivalTerminal") or "")
+            plane = str(first.get("aircraftName") or "").strip()
+            plane_size = {"L": "大型机", "M": "中型机",
+                          "S": "小型机"}.get(
+                              str(first.get("aircraftSize") or "").upper(), "")
+            plane2 = ""
+            plane_size2 = ""
+            if is_transfer:
+                plane2 = str(legs[1].get("aircraftName") or "").strip()
+                plane_size2 = {"L": "大型机", "M": "中型机",
+                               "S": "小型机"}.get(
+                                   str(legs[1].get("aircraftSize")
+                                       or "").upper(), "")
+            left = None
+            q = pol.get("ticketCount")
+            if q is not None:
+                try:
+                    if int(q) > 0:
+                        left = int(q)
+                except (TypeError, ValueError):
+                    left = None
+            tax = 0.0
+            try:
+                tax = float(pol.get("adultTax") or 0)
+            except (TypeError, ValueError):
+                tax = 0.0
+            row = {
+                "price": price,
+                "code": "/".join(fnos),
+                "name": fnos[0],
+                "depTime": dd[11:16],
+                "arrTime": ad[11:16],
+                "depDate": dep_d,
+                "arrDate": arr_d,
+                "totalDuration": dur,
+                "cabin": cabin_cn,
+                "depAirport": dep_ap,
+                "arrAirport": arr_ap,
+                "depAirportCode": iata3(dep_apc),
+                "arrAirportCode": iata3(arr_apc),
+                "intl": 1,
+                **({"tz_dep": tz_dep, "tz_arr": tz_arr}
+                   if tz_dep is not None and tz_arr is not None
+                   and tz_dep != tz_arr else {}),
+                **({"transCity": trans} if trans else {}),
+                **({"crossDayDesc": cross} if cross else {}),
+                **({"layover": lay_min} if lay_min else {}),
+                **({"lay2dep": _lay2dep} if _lay2dep else {}),
+                **({"transGoDate": _tgd} if _tgd else {}),
+                **({"layoverSrc": lay_src} if lay_min else {}),
+                **({"plane": plane} if plane else {}),
+                **({"planeSize": plane_size} if plane_size else {}),
+                **({"plane2": plane2} if plane2 else {}),
+                **({"planeSize2": plane_size2} if plane_size2 else {}),
+                **({"shareCarrier": share} if share else {}),
+                **({"shareCarrier2": share2} if share2 else {}),
+                **({"airlineCode": iata2(
+                    first.get("marketAirlineCode"))}
+                   if iata2(first.get("marketAirlineCode")) else {}),
+                **({"depTerminal": str(first.get("departureTerminal"))}
+                   if first.get("departureTerminal") else {}),
+                **({"arrTerminal": str(last.get("arrivalTerminal"))}
+                   if last.get("arrivalTerminal") else {}),
+                **({"transTerminal": trans_terminal}
+                   if trans_terminal else {}),
+                **({"cabinCode": cabin_code} if cabin_code else {}),
+                **({"baggage": bag} if bag else {}),
+                **({"leftTickets": left} if left is not None else {}),
+                **({"tax": tax} if tax > 0 else {}),
+            }
+            out.append(row)
+        return out, need_login
+
+    def _fetch_intl_calendar(self, from_city: str, to_city: str,
+                             fc: str, tc: str,
+                             dates: List[str]) -> List[FlightPrice]:
+        """国际=日历兜底（R44b）：壳页自动加载的
         FlightIntlAndInlandLowestPriceSearch 日历（soa2/15380）——
         受信 profile 200 出价，逐日 price/totalPrice/transportPrice
         （税费构成）。采集=壳 URL 直达日历自发请求+收集器捕获，目标
@@ -193,11 +609,6 @@ class CtripCrawler(BaseCrawler):
         （宁缺勿错）。日历无时刻语义：depTime/arrTime 结构化占位
         空串（飞猪/同程日历行律），intl=1 直接落键（无 tz 可戳）。"""
         results: List[FlightPrice] = []
-        # 机场→城市归并（R44c：日历端点请求体是 arriveNewCityCode
-        # 城市级键——生产 acity=NRT 机场码直传=全窗 380 行零报价
-        # 实锤，同程/飞猪 _fetch_intl 同律先行）
-        fc, tc = (airport_city_code(from_city.upper()),
-                  airport_city_code(to_city.upper()))
         with self.browser() as ctx:
             page = self.new_page(ctx)
             try:
@@ -215,6 +626,20 @@ class CtripCrawler(BaseCrawler):
                     page.goto(url, wait_until="domcontentloaded")
                     page.wait_for_timeout(9000)
                     self._dump_xhr(captured, f"ctrip_intlcal_{date}")
+                    # 国际列表/日历对匿名会话会弹「手机登录/注册」；
+                    # 服务器异常则不是登录问题，单独记录不冒充已登录。
+                    try:
+                        _body = page.inner_text("body")[:1200]
+                    except Exception:
+                        _body = ""
+                    if "手机登录/注册" in _body or "账号密码登录" in _body:
+                        CtripCrawler.login_suspect = True
+                        self.logger.warning(
+                            "[ctrip][intl] 需登录 · 国际列表需携程会话"
+                            "（请在配置页「渠道登录」重登 ctrip）")
+                    elif "服务器发生异常" in _body:
+                        self.logger.warning(
+                            "[ctrip][intl] %s 渠道返回服务器异常", date)
                     flights = []
                     for item in captured:
                         flights.extend(self._extract_intl_calendar(

@@ -262,8 +262,8 @@ def test_p21_band_541_760_tw_release():
     # 吸顶筛选条为 ≤760 全带形制，抽屉拉升门原「锚 ≤540 独有吸顶条」
     # 的例外前提消失，随族扩带）；r248 起明细空态指路随族 +1
     # （≤760「重置筛选」按钮在默认收起的筛选抽屉内，词面须给抽屉语境）
-    assert s.count('window.innerWidth<=760') == 5, \
-        "窄档宽度族门应恰 5 处消费 <=760"
+    assert s.count('window.innerWidth<=760') == 7, \
+        "窄档宽度族门应恰 7 处消费 <=760（r349 配置收口 +1；健康格滚到最新 +1）"
     assert s.count('window.innerWidth>760') == 1, \
         "window 侧续载门应恰 1 处消费 >760"
     assert 'window.innerWidth>540)' not in s, \

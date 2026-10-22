@@ -35,19 +35,19 @@ def _route():
                  to_name="海口", dates=["2027-01-29"])
 
 
-def test_qunar_view_url_pc_listpage():
-    """P1-1：qunar 链接=PC 单程列表页，与爬虫 PC_URL_TPL 同参（查询
-    键全集在场）；H5 列表页禁复活（对匿名已上登录墙=死形，登录态
-    接口仍风控）。其余渠道出口不回归。"""
+def test_qunar_view_url_h5_listpage():
+    """2026-10-10 起 qunar PC 单程页 302 回官网首页（断供）；
+    用户链接改指 m.flight H5 列表页，与爬虫 URL_TPL 同参。
+    其余渠道出口不回归。"""
     a = Alerter(logging.getLogger("t"), storage=None)
     u = a._build_view_url(_route(), "2027-01-29", "qunar")
-    assert "flight.qunar.com/site/oneway_list.htm" in u, u
-    assert "touch.qunar.com/ncs/page/flightlist" not in u, u
-    assert ("searchDepartureAirport=" + quote("上海")) in u, u
-    assert ("searchArrivalAirport=" + quote("海口")) in u, u
-    assert "searchDepartureTime=2027-01-29" in u, u
+    assert "m.flight.qunar.com/ncs/page/flightlist" in u, u
+    assert "flight.qunar.com/site/oneway_list.htm" not in u, u
+    assert ("depCity=" + quote("上海")) in u, u
+    assert ("arrCity=" + quote("海口")) in u, u
+    assert "goDate=2027-01-29" in u, u
     from crawlers.qunar import QunarCrawler as QC
-    for kv in QC.PC_URL_TPL.split("?", 1)[1].split("&"):
+    for kv in QC.URL_TPL.split("?", 1)[1].split("&"):
         key = kv.split("=")[0]
         assert (key + "=") in u, (key, u)
     # 其余渠道出口不回归
@@ -58,23 +58,18 @@ def test_qunar_view_url_pc_listpage():
         _route(), "2027-01-29", "fliggy")
 
 
-def test_no_dead_h5_list_link_in_page():
-    """H5 列表页对匿名已上登录墙、登录态接口仍风控——webui.py 全文件
-    （含页面与 demo 推送教学样本，desp 样例在 Python 侧通知详情分支
-    里）与 docs/site 烘焙产物均不得再产出该死链形态；烘焙态的 view
-    来自 demo 库状态快照，陈旧 .statecache 会把死链原样重烘（快照
-    签名不含链接构建语义），重烘前须删 ticket_demo_*.db.statecache。
-    crawlers/qunar.py 的 URL_TPL 是爬虫自身兜底路径不在锁面（禁复活
-    钉）。"""
+def test_no_dead_pc_list_link_in_page():
+    """2026-10-10 起 qunar PC 单程页 302 回 www.qunar.com 促销聚合，
+    `flight.qunar.com/site/oneway_list.htm` 是死链；webui.py 与
+    docs/site 烘焙产物统一改指 m.flight H5 列表页。"""
     import os
     with open(webui.__file__, encoding="utf-8") as f:
-        assert "ncs/page/flightlist" not in f.read(), "webui 残留 H5 死链形态"
+        assert "flight.qunar.com/site/oneway_list.htm" not in f.read(),             "webui 残留 PC 死链形态"
     site = os.path.join(os.path.dirname(webui.__file__),
                         "site", "index.html")
-    if os.path.isfile(site):   # 未烘焙的全新 clone 容忍产物缺席
+    if os.path.isfile(site):
         with open(site, encoding="utf-8") as f:
-            assert "ncs/page/flightlist" not in f.read(), \
-                "烘焙态残留 H5 死链（删 demo .statecache 后重烘）"
+            assert "flight.qunar.com/site/oneway_list.htm" not in f.read(),                 "烘焙态残留 PC 死链（删 demo .statecache 后重烘）"
 
 
 def test_routes_txt_grouping():

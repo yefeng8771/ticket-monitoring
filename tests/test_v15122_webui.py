@@ -64,15 +64,17 @@ def test_p2d_letter_spacing_two_tier_tokens():
     assert "letter-spacing:1.5px" not in s
     # 微签族消费点全走令牌：主站 9 + notify .top b = 10 处 --ls1；
     # r342 配置工作台新增 5 处微签（配置 chrome/概览卡/筛选预设/分组/
-    # 明细摘要）同走令牌 → 15；r344 存储卡 pstat 微签 +1 → 16
-    #（新增微签不得裸写 px 字距）
-    assert s.count("letter-spacing:var(--ls1)") == 16
+    # 明细摘要）同走令牌 → 15；r344 存储卡 pstat 微签 +1 → 16；
+    # r340 生产检索页新增 7 处微签（eyebrow/live/lab/kpi/thead/dlab/prov）
+    # → 23；r340b 三重对齐表头再 +1 → 24；r348 探针字段/城市分组 +2 → 26；
+    # r351 关注航班配置/清单微签 +6 → 32（新增微签不得裸写 px 字距）
+    assert s.count("letter-spacing:var(--ls1)") == 37  # r352 关注台/试看/K线微签 +6
     # --ls2 消费四处：装饰英文签两处（.seclab .en / .grouplab .en）
     # + r273 收编的两处 15px 展示签（.pvbody .md-g 主站 / .md .g notify）
     assert s.count("letter-spacing:var(--ls2)") == 4
     # r325：+1 处 .rintl 国际徽标消费（源码钉随消费点记账）
     # R15：+1 处 .rrt 往返徽标消费（源码钉随消费点记账）
-    assert s.count("letter-spacing:var(--ls05)") == 6
+    assert s.count("letter-spacing:var(--ls05)") == 8  # r352 关注台试看条/航线内切换微签 +2
     # 裸字距声明清零（半像素/两像素档全入令牌）
     assert "letter-spacing:.5px" not in s
     assert "letter-spacing:2px" not in s
@@ -85,8 +87,9 @@ def test_p2e_tile_radius_token():
     assert s.count("--r10:10px") == 2          # 主站 + notify
     assert s.count("border-radius:10px") == 0
     assert s.count("border-radius:0 10px 10px 10px") == 0
-    # 主站 7 处 + notify 2 处 + .pldesp 单角变体 1 处
-    assert s.count("border-radius:var(--r10)") == 9
+    # 主站 7 处 + notify 2 处 + .pldesp 单角变体 1 处 + r340 检索浮层 1 处
+    # + r340b 详情抽屉/校准册 2 处 + r357 配置表面 4 处 = 16
+    assert s.count("border-radius:var(--r10)") == 16
     assert "border-radius:0 var(--r10) var(--r10) var(--r10)" in s
     # --r3=9px 值不动（uitest 在案钉：notify logo 9px）
     assert "--r3:9px" in s

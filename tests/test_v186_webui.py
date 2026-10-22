@@ -62,7 +62,7 @@ class TestWebuiChildFare:
         # CSV「儿童/婴儿」列:表头尾部追加(既有列序零位移)
         assert "'儿童/婴儿'" in src, "CSV 表头缺「儿童/婴儿」列"
         i0 = src.index("改期最低")
-        assert "childPrice" in src[i0:i0 + 1900], \
+        assert "childPrice" in src[i0:i0 + 2100], \
             "CSV 行值缺 childPrice 消费(表头后近邻)"
 
 

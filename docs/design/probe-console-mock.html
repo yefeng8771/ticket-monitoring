@@ -1,4 +1,4 @@
-<!-- r339 检索·探针台 mock v31.8 · 2026-10-20
+<!-- r339 检索·探针台 mock v31.10 · 2026-10-21
      夜航签派台：顶栏导航内联 / 检索台 + 14 日价带 + 5 源现势 briefing /
      解析列表 13 格字段刻度 + 同航班多源 / 同航班价梯 / 内嵌字段面 /
      2×2 四源同屏（同航班置顶+跨源高亮）/ 三重对齐详情 + 底部签核轨 /
@@ -21,12 +21,16 @@
      矩阵键盘/Space/Enter+价格排序+空态放宽 · 未对齐队列守卫+清筛选 ·
      结论/备注/复核/台账本机留存+按日期隔离+单行清除 · 深链 https+详情行渠道+全日期令牌 ·
      Esc 失焦可关 · 日历回中+方向键 · dump 采集日不被查询日改写 · 320/390/768 详情 /
+     v31.10 五审修复：drift 不串他航班/合并时刻不误报/无快照不冒充一致 · 平台册墙位随路由/切路由清 pin/键盘焦点
+     + 溯源日期兼容下划线/空搜索禁对齐/字段聚焦恒有 raw 节点 · 门禁 268→277 项
+     v31.9 证据面收口：采集快照扩机型/舱位并机器可读 · 平台册列表溯源行（dump/采集日/非原站截图）
+     + 六维逐字段等式（薄行宁缺、权益在场）· 门禁 263→268 项
      v31.8 并发五审收口：图标盒居中+平台册字形+字段状态去重 · 768 单列+平板三 tab ·
      1200/1280 当前页签可见+320 工作台头不叠 · 列表 ↑↓ 按 DOM 序+aria-pressed ·
      配置/抽屉/校准册焦点进入+Tab 环 · 详情上下处禁用+J/K 全局 · 多选状态串幂等 ·
      筛选/快照即存刷新不丢 · 深链全号匹配 · tuniu 真值行/日历星期/墙体诚实 ·
      无 dump 不伪造 · CSV 跨日原页价宁缺
-     门禁：_scratch/r339_v30_gate.py 104 项 + r339_v31_gate.py 254 项（逐行同源 × 全链路幂等 × 七档 × 深链同源 × 5×4 平台页 × ARIA/键盘/触控，零 pageerror） -->
+     门禁：_scratch/r339_v30_gate.py 104 项 + r339_v31_gate.py 277 项（逐行同源 × 全链路幂等 × 七档 × 深链同源 × 5×4 平台页 × ARIA/键盘/触控，零 pageerror） -->
 <div id="probe-mock" class="pm-dark">
 <style>
 #probe-mock{--bg:#0a0e15;--s1:#101724;--s2:#151f2f;--s3:#1c2839;
@@ -504,6 +508,7 @@ background:linear-gradient(90deg,var(--cyan),var(--ok));transition:width .4s}
 .pm-stat .covl{display:flex;justify-content:space-between;font-size:9px;color:var(--tx3);
 margin-top:4px;font-family:var(--mono)}
 .vp-tint{height:3px;margin:-13px -13px 11px;border-radius:11px 11px 0 0}
+#probe-mock .vp-tint{margin-left:-8px;margin-right:-8px}
 .vp-meta{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--tx3);
 padding:9px 2px 0;margin-top:2px;border-top:1px dashed var(--bd)}
 .vp-meta svg{width:10px;height:10px}
@@ -2099,10 +2104,14 @@ max-width:100%;box-sizing:border-box}
  background:var(--s1);border-color:transparent;color:var(--tx3)}
 #probe-mock .pm-embedbar button:hover{background:var(--s2);color:var(--blue)}
 #probe-mock .pm-live{font-size:8px}
+#probe-mock .pm-cap{font:8px var(--mono);color:var(--tx3);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;white-space:nowrap}
+#probe-mock button.pm-cap{background:transparent;cursor:help}
+#probe-mock .pm-cap.bad{color:var(--warn);border-color:rgba(238,180,85,.45)}
 #probe-mock .pm-rawhead{gap:4px;margin-bottom:5px}
 #probe-mock .pm-rawpath{font-size:8px;padding:0 5px;border-radius:3px;color:var(--cyan);
  background:rgba(79,209,197,.06);border-color:rgba(79,209,197,.3)}
 #probe-mock .pm-rawpath.rawflash{animation:rawflash .8s ease-out 1}
+#probe-mock #pm-d-rawjson .rawkeyon{background:rgba(79,209,197,.18);outline:1px solid rgba(79,209,197,.5);border-radius:3px}
 @keyframes rawflash{0%{background:rgba(79,209,197,.28);box-shadow:0 0 0 3px rgba(79,209,197,.12)}
  100%{background:rgba(79,209,197,.06);box-shadow:none}}
 #probe-mock .pm-rawhead button{font-size:8px;padding:0 5px;border-radius:3px;border-color:transparent;
@@ -2534,7 +2543,17 @@ max-width:100%;box-sizing:border-box}
  #probe-mock #pm-d-copy{width:32px;height:32px;min-width:32px}
  #probe-mock .pm-chainrow .fmpin{width:26px;height:26px}
 }
+@media(max-width:360px){
+ #probe-mock .galfoot{gap:5px}
+ #probe-mock .galfoot .sp{display:none}
+ #probe-mock .galfoot button{flex:1 1 calc(50% - 3px);margin:0}
+ #probe-mock .gleq .gq b{display:none}
+ #probe-mock .gleq .gq{padding:3px 7px}
+}
 @media(max-width:540px){
+ #probe-mock .gprovline b{max-width:calc(100% - 96px)}
+ #probe-mock .gprovline .mir{margin-left:0}
+ #probe-mock .vp-row button{min-height:24px}
  #probe-mock .pm-cTabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
  #probe-mock .pm-cTabs::-webkit-scrollbar{display:none}
  #probe-mock .pm-cTabs .pm-rtab{flex:none;white-space:nowrap}
@@ -2567,7 +2586,27 @@ max-width:100%;box-sizing:border-box}
 #probe-mock .galhead b{font-size:13px}
 #probe-mock .galhead .gr{font:10px var(--mono);color:var(--tx3)}
 #probe-mock .galhead .gs{margin-left:auto;font:9.5px var(--mono);color:var(--tx3)}
-#probe-mock .galhead button{height:26px;padding:0 8px;font-size:10px}
+#probe-mock .galhead>button{height:26px;padding:0 8px;font-size:10px;margin-left:auto}
+#probe-mock .galprov{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin:-2px 0 7px;font:8px var(--mono);color:var(--tx3)}
+#probe-mock .galprov .gp{border:1px solid var(--bd);border-radius:4px;padding:1px 5px;white-space:nowrap}
+#probe-mock .galprov .gp.ok{color:var(--ok);border-color:rgba(59,208,127,.35)}
+#probe-mock .galprov .gp.warn{color:var(--warn);border-color:rgba(238,180,85,.35)}
+#probe-mock .galprov .gp.bad{color:var(--red);border-color:rgba(255,112,112,.35)}
+#probe-mock .galprov .gpnote{margin-left:auto;white-space:nowrap;opacity:.85}
+#probe-mock .gprovline{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:7px 9px 0;font:8.5px var(--mono);color:var(--tx2)}
+#probe-mock .gprovline .pl{color:var(--tx2);border:1px solid var(--bd);border-radius:4px;padding:0 4px}
+#probe-mock .gprovline .pd{color:var(--tx2);border:1px solid rgba(79,209,197,.32);border-radius:4px;padding:0 4px;white-space:nowrap}
+#probe-mock .gprovline b{font-weight:500;color:var(--tx2);max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#probe-mock .gprovline .mir{margin-left:auto;color:var(--warn);border:1px solid rgba(238,180,85,.35);border-radius:4px;padding:0 4px;white-space:nowrap}
+#probe-mock .gleq{display:flex;gap:4px;flex-wrap:wrap;padding:7px 9px 9px;margin-top:7px;border-top:1px solid var(--bd);font:9px var(--mono);color:var(--tx3)}
+#probe-mock .gleq .gq{display:inline-flex;align-items:center;gap:4px;min-height:24px;border:1px solid var(--bd);border-radius:5px;padding:3px 6px;background:var(--s2)}
+#probe-mock .gleq .gq i{font-style:normal;color:var(--tx2)}
+#probe-mock .gleq .gq b{font-weight:500;color:var(--tx)}
+#probe-mock .gleq .gq em{font-style:normal;color:var(--ok)}
+#probe-mock .gleq .gq.warn{border-color:rgba(238,180,85,.4)}
+#probe-mock .gleq .gq.warn em{color:var(--warn)}
+#probe-mock .gleq .gq.bad{border-color:rgba(255,112,112,.4)}
+#probe-mock .gleq .gq.bad em{color:var(--red)}
 #probe-mock .galrail{display:flex;gap:4px;overflow-x:auto;padding:4px 0 7px;scrollbar-width:none}
 #probe-mock .galrail::-webkit-scrollbar{display:none}
 #probe-mock .galrail button{display:inline-flex;align-items:center;gap:5px;flex:none;height:28px;
@@ -2635,9 +2674,11 @@ max-width:100%;box-sizing:border-box}
  text-overflow:ellipsis;white-space:nowrap}
 #probe-mock .gbook button{height:28px;padding:0 12px;background:var(--cyan);color:#06231f;border:0;
  border-radius:6px;font-weight:600;font-size:10px}
-#probe-mock .gsrcmeta{display:grid;gap:2px;margin-top:7px;font:8.5px var(--mono);color:var(--tx3);min-width:0}
-#probe-mock .gsrcmeta span{display:flex;gap:5px;min-width:0}
+#probe-mock .gsrcmeta{display:grid;gap:2px;margin-top:7px;font:8.5px var(--mono);color:var(--tx2);min-width:0}
+#probe-mock .gsrcmeta span{display:grid;grid-template-columns:44px minmax(0,1fr);gap:5px;align-items:center;min-width:0}
 #probe-mock .gsrcmeta b{color:var(--tx2);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#probe-mock .gsrcmeta .gmir{color:var(--warn)}
+#probe-mock .gsrcmeta .gmir b{color:var(--warn);font-weight:500}
 #probe-mock .gwall{min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;
  gap:6px;text-align:center;padding:16px}
 #probe-mock .gwico{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;
@@ -2965,6 +3006,8 @@ max-width:100%;box-sizing:border-box}
    <section class="pm-pane" id="pm-dpanel-embed" role="tabpanel" aria-labelledby="pm-dtab-embed">
     <div class="pm-embedbar">
      <span class="pm-live"><i></i>CDP 只读</span>
+     <span class="pm-cap" id="pm-d-capsig" data-tooltip="采集快照指纹：初始化时冻结，跨查询日不变">cap —</span>
+     <button type="button" class="pm-cap" id="pm-d-capdiff" aria-label="采集快照与当前镜像差异" data-tooltip="采集快照与当前镜像差异">差 —</button>
      <span class="eu" id="pm-d-url">touch.qunar.com/…</span>
      <span class="pm-scrollhint" id="pm-d-scrollhint" hidden>↕ 滚动原页</span>
      <span class="sp"></span>
@@ -3016,7 +3059,7 @@ max-width:100%;box-sizing:border-box}
  <span>今日推送 3 · 达标 1</span>
  <span class="sp"></span>
  <span class="pm-docpath">docs/design/probe-console-design.md</span>
- <span id="pm-footshared">原型 v31.8 · 单源 13/13 · 零解析缺口 · 三重对齐</span></div>
+ <span id="pm-footshared">原型 v31.10 · 单源 13/13 · 零解析缺口 · 三重对齐</span></div>
 <div class="pm-tip" id="pm-tip" role="tooltip"></div>
 
 <div class="pm-drawer" id="pm-drawer"></div>
@@ -3062,7 +3105,7 @@ var REAL = {
  rows:[{"mid": "r0", "p": "tuniu", "pr": "¥750", "tm": "23:30-05:30", "du": "6时00分 · 直飞", "no": "9C8551 春秋", "tags": ["经济舱", "空客320"], "ok": 1, "fresh": "18:21 轮", "tr": "direct", "xd": 1, "real": 1, "tax": 450, "base": 300}, {"mid": "r1", "p": "tuniu", "pr": "¥750", "tm": "10:30-16:40", "du": "6时10分 · 直飞", "no": "9C7677 春秋", "tags": ["经济舱", "空客320"], "ok": 1, "fresh": "18:21 轮", "tr": "direct", "xd": 0, "real": 1, "tax": 450, "base": 300}, {"mid": "r2", "p": "tuniu", "pr": "¥837", "tm": "20:10-00:05", "du": "27时55分 · 中转", "no": "SC1168-SC8061 山航", "tags": ["经济舱", "余票紧张", "中转·济南"], "ok": 1, "fresh": "18:21 轮", "tr": "trans", "xd": 1, "real": 1, "tax": 707, "base": 130}, {"mid": "r3", "p": "tuniu", "pr": "¥877", "tm": "11:30-03:10", "du": "15时40分 · 中转", "no": "HU7120-HU447 新海航｜海南航空", "tags": ["经济舱", "中转·海口", "波音737MAX8 · 波音738(窄体)"], "ok": 1, "fresh": "18:21 轮", "tr": "trans", "xd": 1, "real": 1, "tax": 557, "base": 320}, {"mid": "r4", "p": "tuniu", "pr": "¥877", "tm": "09:00-03:10", "du": "18时10分 · 中转", "no": "HU7320-HU447 新海航｜海南航空", "tags": ["经济舱", "中转·海口", "波音737MAX8 · 波音738(窄体)"], "ok": 1, "fresh": "18:21 轮", "tr": "trans", "xd": 1, "real": 1, "tax": 557, "base": 320}, {"mid": "r5", "p": "tuniu", "pr": "¥917", "tm": "18:45-15:35(+1)", "du": "20时50分 · 中转", "no": "3U6996/3U3909 川航", "tags": ["经济舱", "空客320", "中转·成都"], "ok": 1, "fresh": "18:21 轮", "tr": "trans", "xd": 1, "real": 1, "tax": 897, "base": 20}, {"mid": "r6", "p": "tuniu", "pr": "¥917", "tm": "10:45-15:35(+1)", "du": "28时50分 · 中转", "no": "3U6992/3U3909 川航", "tags": ["经济舱", "空客321", "中转·成都"], "ok": 1, "fresh": "18:21 轮", "tr": "trans", "xd": 1, "real": 1, "tax": 897, "base": 20}, {"mid": "r7", "p": "tuniu", "pr": "¥917", "tm": "18:45-00:10(+2)", "du": "29时25分 · 中转", "no": "3U6996/3U3919 川航", "tags": ["经济舱", "空客320", "中转·成都"], "ok": 1, "fresh": "18:21 轮", "tr": "trans", "xd": 1, "real": 1, "tax": 897, "base": 20}],
  crows:[{"mid": "rc0", "p": "ctrip", "pr": "¥703", "tm": "薄行·日历", "du": "仅名称+税费", "no": "国际日历薄行", "tags": ["真实 intlcal", "cal"], "ok": 1, "fresh": "18:21 轮", "tr": "thin", "real": 1}],
  det:{"r0": [["价格 price", "¥750", "productList[].avgTotalPrice", "750", "ok", ""], ["税费 tax", "¥450", "productList[].avgTax", "450", "ok", ""], ["裸价 nakedPrice", "¥300", "productList[].avgBasePrice", "300", "ok", "税前裸价与 flightnorm 单源"], ["起飞 depTime", "23:30", "productList[].dTime", "\"2026-11-16 23:30\"", "ok", ""], ["到达 arrTime", "05:30", "productList[].aTime", "\"2026-11-17 05:30\"", "ok", "真实含日期，跨天自推导"], ["机场/航站楼", "浦东 T2 → 樟宜 T4", "dPortName/dTerminal/aPortName/aTerminal", "全维", "ok", ""], ["舱位 cabin", "经济舱", "productList[].cabinName", "\"经济舱\"", "ok", ""], ["机型 craftType", "空客320", "segmentList[].craftTypeDetail", "\"空客320\"", "ok", "段级全维"], ["余票 seat", "9", "productList[].seat", "9", "ok", "0<seat<9 门"]], "r1": [["价格 price", "¥750", "productList[].avgTotalPrice", "750", "ok", ""], ["税费 tax", "¥450", "productList[].avgTax", "450", "ok", ""], ["裸价 nakedPrice", "¥300", "productList[].avgBasePrice", "300", "ok", "税前裸价与 flightnorm 单源"], ["起飞 depTime", "10:30", "productList[].dTime", "\"2026-11-16 10:30\"", "ok", ""], ["到达 arrTime", "16:40", "productList[].aTime", "\"2026-11-16 16:40\"", "ok", "真实含日期，跨天自推导"], ["机场/航站楼", "浦东 T2 → 樟宜 T4", "dPortName/dTerminal/aPortName/aTerminal", "全维", "ok", ""], ["舱位 cabin", "经济舱", "productList[].cabinName", "\"经济舱\"", "ok", ""], ["机型 craftType", "空客320", "segmentList[].craftTypeDetail", "\"空客320\"", "ok", "段级全维"], ["余票 seat", "9", "productList[].seat", "9", "ok", "0<seat<9 门"]], "r2": [["价格 price", "¥837", "productList[].avgTotalPrice", "837", "ok", ""], ["税费 tax", "¥707", "productList[].avgTax", "707", "ok", ""], ["裸价 nakedPrice", "¥130", "productList[].avgBasePrice", "130", "ok", "税前裸价与 flightnorm 单源"], ["起飞 depTime", "20:10", "productList[].dTime", "\"2026-11-16 20:10\"", "ok", ""], ["到达 arrTime", "00:05", "productList[].aTime", "\"2026-11-18 00:05\"", "ok", "真实含日期，跨天自推导"], ["机场/航站楼", "虹桥 T2 → 樟宜 T1", "dPortName/dTerminal/aPortName/aTerminal", "全维", "ok", ""], ["舱位 cabin", "经济舱", "productList[].cabinName", "\"经济舱\"", "ok", ""], ["机型 craftType", "波音737-8MAX · 波音738(窄体)", "segmentList[].craftTypeDetail", "\"波音737-8MAX · 波音738(窄体)\"", "ok", "段级全维"], ["余票 seat", "1", "productList[].seat", "1", "ok", "0<seat<9 门"], ["中转城市 transCity", "济南", "productList[].transferCity", "\"济南\"", "ok", "渠道真值在场即定谳"], ["段结构", "2 段", "segmentList[]", "段链", "ok", "同号续段=经停不入转点"]], "r3": [["价格 price", "¥877", "productList[].avgTotalPrice", "877", "ok", ""], ["税费 tax", "¥557", "productList[].avgTax", "557", "ok", ""], ["裸价 nakedPrice", "¥320", "productList[].avgBasePrice", "320", "ok", "税前裸价与 flightnorm 单源"], ["起飞 depTime", "11:30", "productList[].dTime", "\"2026-11-16 11:30\"", "ok", ""], ["到达 arrTime", "03:10", "productList[].aTime", "\"2026-11-17 03:10\"", "ok", "真实含日期，跨天自推导"], ["机场/航站楼", "浦东 T2 → 樟宜 T4", "dPortName/dTerminal/aPortName/aTerminal", "全维", "ok", ""], ["舱位 cabin", "经济舱", "productList[].cabinName", "\"经济舱\"", "ok", ""], ["机型 craftType", "波音737MAX8 · 波音738(窄体)", "segmentList[].craftTypeDetail", "\"波音737MAX8 · 波音738(窄体)\"", "ok", "段级全维"], ["余票 seat", "6", "productList[].seat", "6", "ok", "0<seat<9 门"], ["中转城市 transCity", "海口", "productList[].transferCity", "\"海口\"", "ok", "渠道真值在场即定谳"], ["段结构", "2 段", "segmentList[]", "段链", "ok", "同号续段=经停不入转点"]], "r4": [["价格 price", "¥877", "productList[].avgTotalPrice", "877", "ok", ""], ["税费 tax", "¥557", "productList[].avgTax", "557", "ok", ""], ["裸价 nakedPrice", "¥320", "productList[].avgBasePrice", "320", "ok", "税前裸价与 flightnorm 单源"], ["起飞 depTime", "09:00", "productList[].dTime", "\"2026-11-16 09:00\"", "ok", ""], ["到达 arrTime", "03:10", "productList[].aTime", "\"2026-11-17 03:10\"", "ok", "真实含日期，跨天自推导"], ["机场/航站楼", "虹桥 T2 → 樟宜 T4", "dPortName/dTerminal/aPortName/aTerminal", "全维", "ok", ""], ["舱位 cabin", "经济舱", "productList[].cabinName", "\"经济舱\"", "ok", ""], ["机型 craftType", "波音737MAX8 · 波音738(窄体)", "segmentList[].craftTypeDetail", "\"波音737MAX8 · 波音738(窄体)\"", "ok", "段级全维"], ["余票 seat", "6", "productList[].seat", "6", "ok", "0<seat<9 门"], ["中转城市 transCity", "海口", "productList[].transferCity", "\"海口\"", "ok", "渠道真值在场即定谳"], ["段结构", "2 段", "segmentList[]", "段链", "ok", "同号续段=经停不入转点"]], "r5": [["价格 price", "¥917", "productList[].avgTotalPrice", "917", "ok", ""], ["税费 tax", "¥897", "productList[].avgTax", "897", "ok", ""], ["裸价 nakedPrice", "¥20", "productList[].avgBasePrice", "20", "ok", "税前裸价与 flightnorm 单源"], ["起飞 depTime", "18:45", "productList[].dTime", "\"2026-11-16 18:45\"", "ok", ""], ["到达 arrTime", "15:35", "productList[].aTime", "\"2026-11-17 15:35\"", "ok", "真实含日期，跨天自推导"], ["机场/航站楼", "浦东 T2 → 樟宜 T2", "dPortName/dTerminal/aPortName/aTerminal", "全维", "ok", ""], ["舱位 cabin", "经济舱", "productList[].cabinName", "\"经济舱\"", "ok", ""], ["机型 craftType", "空客320", "segmentList[].craftTypeDetail", "\"空客320\"", "ok", "段级全维"], ["余票 seat", "6", "productList[].seat", "6", "ok", "0<seat<9 门"], ["中转城市 transCity", "成都", "productList[].transferCity", "\"成都\"", "ok", "渠道真值在场即定谳"], ["段结构", "2 段", "segmentList[]", "段链", "ok", "同号续段=经停不入转点"]], "r6": [["价格 price", "¥917", "productList[].avgTotalPrice", "917", "ok", ""], ["税费 tax", "¥897", "productList[].avgTax", "897", "ok", ""], ["裸价 nakedPrice", "¥20", "productList[].avgBasePrice", "20", "ok", "税前裸价与 flightnorm 单源"], ["起飞 depTime", "10:45", "productList[].dTime", "\"2026-11-16 10:45\"", "ok", ""], ["到达 arrTime", "15:35", "productList[].aTime", "\"2026-11-17 15:35\"", "ok", "真实含日期，跨天自推导"], ["机场/航站楼", "浦东 T2 → 樟宜 T2", "dPortName/dTerminal/aPortName/aTerminal", "全维", "ok", ""], ["舱位 cabin", "经济舱", "productList[].cabinName", "\"经济舱\"", "ok", ""], ["机型 craftType", "空客321", "segmentList[].craftTypeDetail", "\"空客321\"", "ok", "段级全维"], ["余票 seat", "9", "productList[].seat", "9", "ok", "0<seat<9 门"], ["中转城市 transCity", "成都", "productList[].transferCity", "\"成都\"", "ok", "渠道真值在场即定谳"], ["段结构", "2 段", "segmentList[]", "段链", "ok", "同号续段=经停不入转点"]], "r7": [["价格 price", "¥917", "productList[].avgTotalPrice", "917", "ok", ""], ["税费 tax", "¥897", "productList[].avgTax", "897", "ok", ""], ["裸价 nakedPrice", "¥20", "productList[].avgBasePrice", "20", "ok", "税前裸价与 flightnorm 单源"], ["起飞 depTime", "18:45", "productList[].dTime", "\"2026-11-16 18:45\"", "ok", ""], ["到达 arrTime", "00:10 +2", "productList[].aTime", "\"2026-11-18 00:10\"", "ok", "真实含日期，跨天自推导"], ["机场/航站楼", "浦东 T2 → 樟宜 T2", "dPortName/dTerminal/aPortName/aTerminal", "全维", "ok", ""], ["舱位 cabin", "经济舱", "productList[].cabinName", "\"经济舱\"", "ok", ""], ["机型 craftType", "空客320", "segmentList[].craftTypeDetail", "\"空客320\"", "ok", "段级全维"], ["余票 seat", "9", "productList[].seat", "9", "ok", "0<seat<9 门"], ["中转城市 transCity", "成都", "productList[].transferCity", "\"成都\"", "ok", "渠道真值在场即定谳"], ["段结构", "2 段", "segmentList[]", "段链", "ok", "同号续段=经停不入转点"]]},
- cdet:{"rc0": [["价格 price", "¥703", "priceList[].price", "703", "ok", "真实 intlcal 当日最低价点"], ["航班号 flightNo", "（日历点未带）", "priceList[].flightNo", "\"\"", "raw", "intlcal 最低价点常无航班号——明细薄行同形态"], ["日期 departDate", "11-16", "priceList[].departDate", "/Date(ms)/", "ok", "/Date(ms)/ 转 +0800 自然日"], ["最低价标记 flag", "—", "priceList[].flag", 1, "ok", "月最低价标记哨"]]},
+ cdet:{"rc0": [["价格 price", "¥703", "priceList[].price", "703", "ok", "真实 intlcal 当日最低价点"], ["航班号 flightNo", "（日历点未带）", "priceList[].flightNo", "\"\"", "raw", "intlcal 最低价点常无航班号——明细薄行同形态"], ["日期 departDate", "11-16", "priceList[].departDate", "/Date(ms)/", "ok", "/Date(ms)/ 转 +0800 自然日"], ["最低价标记 flag", "1", "priceList[].flag", 1, "ok", "月最低价标记在场"]]},
  cal:[["11-16", "周一", 703], ["11-18", "周三", 650], ["11-19", "周四", 650], ["11-20", "周五", 650], ["11-21", "周六", 749], ["11-22", "周日", 749], ["11-23", "周一", 650], ["11-24", "周二", 650], ["11-25", "周三", 650], ["11-26", "周四", 650], ["11-27", "周五", 650], ["11-28", "周六", 749], ["11-29", "周日", 650]],
  meta:{route:"上海(SHA)→新加坡(SIN) · 樟宜 T4",tuniu_dump:"debug/tuniu_intl_2026-11-16.json · 18:21 · 100 行",ctrip_dump:"debug/ctrip_intlcal_2026-11-16.txt · 18:21 · 366 点"}
 };
@@ -3233,7 +3276,7 @@ intl:{dep:['上海','SHA'],arr:['东京成田','NRT'],date:'2026-11-16',linkmode
    ['到港楼 transTerminal','仁川 T2','trlinfos','"T2"','ok',''],
    ['行李 transferBaggage','否','政策级判定','false','ok','跨段行李直挂门'],
    ['段结构','2 段','code[] 段链','MU7050+MU271','ok','同号续段=经停不入转点'],
-   ['spliceFlag','—','extparams.spliceFlag','"CB_2"','raw','英文供给码 · 观察哨备案']],
+   ['spliceFlag','CB_2','extparams.spliceFlag','"CB_2"','ok','英文供给码 · 观察哨备案']],
   c1:[['航班名 name','MU5235','fltitem.basinfo.flgno','"MU5235"','ok',''],
    ['价格 price','¥859','fltitem.price','859','ok',''],
    ['税费 tax','¥246','fltitem.tax','246','ok',''],
@@ -3258,8 +3301,8 @@ intl:{dep:['上海','SHA'],arr:['东京成田','NRT'],date:'2026-11-16',linkmode
    ['起飞 depTime','08:20','binfo.depTime','"08:20"','ok',''],
    ['到达 arrTime','13:55','binfo2.arrTime','"13:55"','ok','binfo2 时刻在案']],
   f2:[['价格 price','¥874','innerText 词面','"¥874"','ok',''],
-   ['航班名 name','9C8515','innerText 词面','"春秋航空"','ok',''],
-   ['时刻 depTime','08:20–13:55','页面 08:20 → 13:55','在场','ok','双段时刻完整'],
+   ['航班名 name','春秋航空','innerText 词面','"春秋航空"','ok','承运人名与航班号分列'],
+   ['时刻 depTime','08:20–13:55','innerText 词面','"08:20–13:55"','ok','双段时刻完整'],
    ['机型 plane','空客320','页面「空客320」','在场','ok','词面收割'],
    ['舱位 cabin','经济舱','页面「经济舱」','在场','ok','']]}},
 rtsin:{dep:['上海','SHA'],arr:['新加坡','SIN'],date:'2026-11-16',real:1,
@@ -3675,7 +3718,7 @@ function rawDetFor(row){
  if(row._detArr&&row._detArr.length)return row._detArr;
  var d=null;
  if(typeof row.det==='string'){
-  d=(R().det&&R().det[row.det])||(RT.intl.det&&RT.intl.det[row.det])||(RT.dom.det&&RT.dom.det[row.det])||null}
+  d=(R().det&&R().det[row.det])||(R().detx&&R().detx[row.det])||null}
  else if(row.mid&&R().det&&R().det[row.mid]){d=R().det[row.mid]}
  if(!d)d=[['价格 price',row.pr,'行级 raw','一致','ok',''],
   ['时刻 dep/arr',row.tm,'行级 raw','一致','ok',''],
@@ -4225,9 +4268,10 @@ function vpHTML(ch,pinKey,pinFirst,showDetail){var c=R().ch[ch];
   var am=String(a.no).indexOf(pinKey)===0?0:1,bm=String(b.no).indexOf(pinKey)===0?0:1;return am-bm});
  var detailDone=false;
  list.forEach(function(it){
-  var tl='<div class="vp-tl"><div class="vp-tm"><b>'+it.tm+'</b><span class="ln"></span>'
-  +'<span class="du">'+it.du+'</span><span class="ln"></span><b>'+it.ta+'</b></div>'
-  +'<div class="vp-ap">'+esc(it.ap)+'</div></div>';
+  var vtm=it.tm||'—',vta=it.ta||'—',vdu=it.du||'—',vap=it.ap||'—';
+  var tl='<div class="vp-tl"><div class="vp-tm"><b>'+esc(vtm)+'</b><span class="ln"></span>'
+  +'<span class="du">'+esc(vdu)+'</span><span class="ln"></span><b>'+esc(vta)+'</b></div>'
+  +'<div class="vp-ap">'+esc(vap)+'</div></div>';
   var tg='';(it.tg||[]).forEach(function(t){tg+='<span class="vtag">'+esc(t)+'</span>'});
   var pin=pinKey&&String(it.no).indexOf(pinKey)===0;
   h+='<div class="vp-row cursor'+(pin?' pinned':'')+'" data-mid="'+it.mid+'" data-fno="'+sourceKey(it.no)+'">'+alo(ch)
@@ -4383,6 +4427,14 @@ function detailUrl(){
  R().links.forEach(function(L){if(L.p===row.p&&L.u)u=L.u.replace(/%DATE%/g,R().date)});
  return fullUrl(u);
 }
+function rawKeyFor(path,name){
+ var p=String(path||''),nm=String(name||'');
+ if(/价格|价差|折扣/.test(nm)||/minPrice|avgTotalPrice|listPrice|fltitem\.price/i.test(p))return'minPrice';
+ if(/^起飞/.test(nm)||/depTime|dTime|departTime/i.test(p))return'depTime';
+ if(/^到达/.test(nm)||/arrTime|aTime|arriveTime/i.test(p))return'arrTime';
+ if(/航班号|航班名/.test(nm)||/flights\[.*\]\.code|flightNos?|\bcode\b/i.test(p))return'code';
+ return'';
+}
 function domFor(name){
  if(/价格|价差|折扣/.test(name))return{sel:'.vp-pr b',label:'[data-qa="price"]'};
  if(/税费|裸价/.test(name))return{sel:'',label:'无独立节点'};
@@ -4498,8 +4550,12 @@ function sourceCardHTML(row,ch){
  if(!item)return '<div class="pm-srcdetail empty" style="--chc:'+col+'"><div class="sx-h"><span class="sx-lab">原页航班详情</span><b>'+esc(flightKey(row))+'</b><span class="sx-ch">'+PLAT[ch][0]+'</span><span class="sx-price">—</span></div><div class="sx-empty">该渠道本态无此航班 · 跨渠道差异</div>'+casebox+'</div>';
  return '<div class="pm-srcdetail" style="--chc:'+col+'">'+sourceDetailBody(row,ch,item)+casebox+'</div>';
 }
-var GALST={qunar:['原页列表','ok'],ctrip:['日历薄行','warn'],tuniu:['真实 dump','ok'],
- fliggy:['innerText','warn'],tongcheng:['账号墙','bad']};
+function galStatus(ch){
+ var c=R().ch[ch];if(!c)return['未供','warn'];
+ if(c.vp===null)return['账号墙','bad'];
+ var thin=(ch==='ctrip'&&(cur.rt==='intl'||cur.rt==='rtsin'));
+ if(c.dumps&&c.dumps.length)return[thin?'日历薄行':'真实 dump',thin?'warn':'ok'];
+ return[thin?'日历薄行':'样例 / 聚合','warn']}
 function galChannel(){var p=cur.galch||cur.ch;if(!PLAT[p])p='qunar';return p}
 function galRowFor(ch){var sel=selectedRow();if(sel&&sel.row&&sel.row.p===ch)return sel.row;
  var all=R().rows.filter(function(r){return r.p===ch});
@@ -4521,16 +4577,43 @@ function galCalHTML(ch){var r=R(),days=r.cal&&r.cal.days||[],real=(ch==='ctrip'&
   +'<div class="gcalnote">点击日期切到该日；平台列表 / 详情与主列表同步重算。'+(real?' dump：'+esc(calDump)+' · 366 点真实全维':' 本渠道无日历 dump，仅作聚合参考')+'</div></div>'}
 function galListHTML(ch){var c=R().ch[ch];
  if(!c||c.vp===null)return galWallHTML(ch,'list');
- var row=galRowFor(ch);return '<div class="glistwrap">'+vpHTML(ch,row?sourceKey(row):'',false,false)+'</div>'}
+ var row=galRowFor(ch),item=galItemFor(ch,row),src=vpHTML(ch,row?sourceKey(row):'',false,false);
+ var dump=c.dumps&&c.dumps[0]?String(c.dumps[0]):'无 dump（本态未供）';
+ var dumpDate=((dump.match(/\d{4}[-_]\d{2}[-_]\d{2}/)||[''])[0]).replace(/_/g,'-');
+ var host=c.host?c.host.replace(/%DATE%/g,R().date):'—';
+ var thin=!!(row&&(row.tr==='thin'||splitTm(row.tm).thin))||!!(item&&item.du==='薄行');
+ var eq='';
+ if(row&&item){
+  var tm=splitTm(row.tm),pairs=[
+   ['价','¥'+String(row.pr).replace(/[^0-9]/g,''),'¥'+String(item.pr||'').replace(/[^0-9]/g,''),0],
+   ['航班号',String(row.no||'').split(' ')[0],String(item.no||'').split(' ')[0],0],
+   ['起飞',tm.dep||'—',item.tm||'—',1],
+   ['到达',tm.arr||'—',item.ta||'—',1],
+   ['时长',String(row.du||'').replace(/\s*·\s*(直飞|中转)$/,''),String(item.du||'').replace(/\s*·\s*(直飞|中转)$/,''),1],
+   ['权益',(row.tags||[]).join('/')||'—',(item.tg||[]).join('/')||'—',2]];
+  eq='<div class="gleq" data-gleqn="'+pairs.length+'">'+pairs.map(function(q){
+   var a=q[1],b=q[2],na=a==='—'||a==='¥'||a==='',nb=b==='—'||b==='¥'||b==='';
+   var dim=q[3],na2=thin&&dim===1,srcArr=dim===2?(item.tg||[]):[],driftGap=DRIFT&&((SHARED_AUDIT[cur.rt]||{}).issues||[]).indexOf('drift:'+row.p+':'+flightKey(row))>=0;
+   var cover=dim===2?srcArr.filter(function(t){return t&&a.indexOf(t)>=0}).length:0;
+   var full=dim===2&&srcArr.length>0&&cover===srcArr.length;
+   var ok=na2||na||nb||(dim===2?cover>0:a===b);
+   var cls=na2?'ok':dim===2?(full?'ok':(cover>0?'warn':'bad')):(ok?'ok':'bad');
+   var em=na2?'薄行':dim===2?(srcArr.length?('覆盖 '+cover+'/'+srcArr.length):'未供'):(ok?'✓':'≠ '+esc(b));
+   var tip=na2?' · 薄行无此维':dim===2?(' · 行标签覆盖原页 '+cover+'/'+srcArr.length):' · 逐字等式';
+   if(driftGap&&q[0]==='到达'){cls='bad';em='断供';tip=' · 改版演练断供'}
+   return '<span class="gq '+cls+'" data-gq="'+esc(q[0])+'" data-a="'+esc(a)+'" data-b="'+esc(b)+'" data-tooltip="列表 '+esc(a)+' · 原页 '+esc(b)+tip+'">'
+    +'<i>'+esc(q[0])+'</i><b>'+esc(a)+'</b><em>'+em+'</em></span>'}).join('')+'</div>'}
+ var prov='<div class="gprovline" data-prov-kind="'+(dumpDate?'dump':'none')+'" data-prov-date="'+esc(dumpDate)+'" data-prov-dump="'+esc(dump)+'"><span class="pl">溯源</span><span class="pd">'+esc(dumpDate||'—')+'</span><b>'+esc(dump)+'</b><span>'+esc(host)+'</span><span class="mir">结构重绘镜像 · 非原站截图</span></div>';
+ return '<div class="glistwrap">'+prov+eq+src+'</div>'}
 function galWallHTML(ch,kind){var c=R().ch[ch]||{},host=c.host?c.host.replace(/%DATE%/g,R().date):'—';
  return '<div class="gwall"><span class="gwico">'+ic('lock')+'</span><b>'+PLAT[ch][0]+' · 账号墙</b>'
-  +'<p>710114 登录墙维持 · '+kind+' 本态无'+(kind==='list'?'列表':'详情')+'可采；国内 book1 正常</p>'
+  +'<p>710114 登录墙维持 · 本态无'+(kind==='list'?'列表':'详情')+'可采；国内 book1 正常</p>'
   +'<div class="gwmeta"><span>host '+esc(host)+'</span><span>登录态 未登录</span><span>恢复哨 在岗</span></div>'
   +'<div class="gwact"><button type="button" data-galwall="login">登录后可见</button><button type="button" data-galwall="dom">切国内 book1</button></div></div>'}
 function galDetailHTML(ch){var c=R().ch[ch],row=galRowFor(ch),item=galItemFor(ch,row);
  if(cur.galfno){var vr=c&&c.vp||[];vr.forEach(function(it){if(flightKey(it.no)===cur.galfno){item=it;row=parsedRowForItem(it,ch)||row}})}
  if(row&&item&&(item.no==='真实 intlcal'||item.pr==='0')){var fit=galItemFor(ch,row);if(fit)item=fit}
- if(ch==='tongcheng'&&(!c||c.vp===null))return galWallHTML(ch,'detail');
+ if(!c||c.vp===null)return galWallHTML(ch,'detail');
  if(!row&&!item)return '<div class="vp-ph"><b>该渠道此航线无详情页</b>宁缺勿错 · 切其他渠道查看</div>';
  var src=item?sourceDetailBody(row,ch,item):'<div class="vp-ph"><b>'+PLAT[ch][0]+' 本态无详情</b>账号墙 / 宁缺</div>';
  var d=row?detailFields(row):[];
@@ -4542,9 +4625,10 @@ function galDetailHTML(ch){var c=R().ch[ch],row=galRowFor(ch),item=galItemFor(ch
  var bd=row?benefitData(row,item):{cabin:'—',bag:'—'};
  var realCal=(ch==='ctrip'&&(cur.rt==='intl'||cur.rt==='rtsin'));
  var cc=R().ch[ch]||{},ghost=cc.host?cc.host.replace(/%DATE%/g,R().date):'—',gdump=cc.dumps&&cc.dumps[0]?cc.dumps[0]:'—',gfresh=row?row.fresh:'—';
+ var gdumpDate=((String(gdump).match(/\d{4}[-_]\d{2}[-_]\d{2}/)||[''])[0]).replace(/_/g,'-');
  var gx=strip?'<div class="gsrcx"><div class="lab">票价日历 · 近 7 天 · '+(realCal?'真实 intlcal':'聚合参考')+'</div><div class="gcalstrip">'+strip+'</div><div class="gbook"><div class="p">含税总价<b>'+esc(row?row.pr:(item&&item.pr?'¥'+item.pr:'—'))+'</b></div><div class="fare">'+esc(bd.cabin+' · '+bd.bag)+'</div><button type="button" data-galbook>'+(ch==='qunar'?'去订票':ch==='ctrip'?'预订':ch==='tuniu'?'立即预订':ch==='fliggy'?'抢购':'订票')+'</button></div>'
-  +'<div class="gsrcmeta"><span>URL <b>'+esc(ghost)+'</b></span><span>dump <b>'+esc(gdump)+'</b></span><span>轮次 <b>'+esc(gfresh)+'</b></span></div></div>':'';
- var picks=[['价格',/^价格/],['航班号',/^航班号/],['起飞',/^起飞/],['到达',/^到达/],['时长',/^时长|^全程/],['舱位',/^舱位/],['行李',/^行李/]];
+  +'<div class="gsrcmeta" data-prov-kind="'+(gdumpDate?'dump':'none')+'" data-prov-date="'+esc(gdumpDate)+'" data-prov-dump="'+esc(gdump)+'"><span>URL <b title="'+esc(ghost)+'">'+esc(ghost)+'</b></span><span>dump <b title="'+esc(gdump)+'">'+esc(gdump)+'</b></span><span>轮次 <b>'+esc(gfresh)+'</b></span><span class="gmir">镜像 <b>结构重绘 · 非原站截图</b></span></div></div>':'';
+ var picks=[['价格',/^价格/],['航班号',/^(航班号|航班名)/],['起飞',/^起飞/],['到达',/^到达/],['时长',/^时长|^全程/],['舱位',/^舱位/],['机型',/^机型/],['行李',/^行李/]];
  var ev=picks.map(function(p){var f=null;d.forEach(function(x){if(!f&&p[1].test(x[0]))f=x});
   if(!f)return '<div class="gev"><span class="n">'+p[0]+'</span><b>—</b><span class="raw">渠道未供</span><span class="st">—</span></div>';
   var st=f[4]==='ok'?'ok':f[4]==='miss'?'bad':'warn',lab=f[4]==='ok'?'一致':f[4]==='miss'?'未采':'未供';
@@ -4577,7 +4661,7 @@ function galCrossHTML(){
  var badN=plats.filter(function(p){return data[p].bad}).length;
  var mn=prices.length?Math.min.apply(null,prices):0,mx=prices.length?Math.max.apply(null,prices):0;
  var lowP='';plats.forEach(function(p){if(data[p].price===mn&&!data[p].bad&&!lowP)lowP=p});
- var cards=plats.map(function(p){var d=data[p],row=d.row,item=d.item,st=GALST[p]||['原页','ok'],price=d.price,bad=d.bad;
+ var cards=plats.map(function(p){var d=data[p],row=d.row,item=d.item,st=galStatus(p),price=d.price,bad=d.bad;
   var link=null;R().links.forEach(function(x){if(x.p===p)link=x});if(!link||!link.u)st=['无落地页','warn'];
   if(d.wall)return '<div class="gccard na" style="--chc:'+PLAT[p][2]+'"><div class="gch">'+alo(p)+'<b>'+PLAT[p][0]+'</b><span class="gcst bad">账号墙</span></div><div class="gcp">—</div><div class="gct">本态未供</div><div class="gca">710114 登录墙维持</div><div class="gcact"><button type="button" data-gcwall="'+p+'">查看墙页</button></div></div>';
   if(!row&&!item)return '<div class="gccard na" style="--chc:'+PLAT[p][2]+'"><div class="gch">'+alo(p)+'<b>'+PLAT[p][0]+'</b><span class="gcst">未供</span></div><div class="gcp">—</div><div class="gct">该航班未采</div><div class="gca">N/A</div><div class="gcact"><button type="button" disabled>对齐</button></div></div>';
@@ -4601,22 +4685,37 @@ function galCrossHTML(){
 }
 function galHTML(){var ch=galChannel(),view=cur.galview||'list';
  var plats=['qunar','ctrip','tuniu','fliggy','tongcheng'];
- var rail=plats.map(function(p){var st=GALST[p]||['原页','ok'],on=p===ch;
+ var rail=plats.map(function(p){var st=galStatus(p),on=p===ch;
   return '<button type="button" data-galch="'+p+'" class="'+(on?'on':'')+'" aria-pressed="'+on+'">'+alo(p)+'<span>'+PLAT[p][0]+'</span><i class="gd '+st[1]+'"></i></button>'}).join('');
  var vt=[['cal','日历'],['list','列表'],['detail','详情'],['cross','对照']].map(function(v){return '<button type="button" data-galview="'+v[0]+'" aria-pressed="'+(view===v[0])+'" class="'+(view===v[0]?'on':'')+'">'+v[1]+'</button>'}).join('');
- var st=GALST[ch]||['原页','ok'],body=view==='cross'?galCrossHTML():(view==='cal'?galCalHTML(ch):view==='list'?galListHTML(ch):galDetailHTML(ch));
+ var st=galStatus(ch),body=view==='cross'?galCrossHTML():(view==='cal'?galCalHTML(ch):view==='list'?galListHTML(ch):galDetailHTML(ch));
+ var realN=0,wallN=0,statBy={};(R().stats||[]).forEach(function(s0){statBy[s0.p]=s0});
+ plats.forEach(function(p){var c=R().ch[p],s0=statBy[p]||{gt:[]};if(c&&c.vp===null||(s0.gt&&s0.gt[2]==='bad'))wallN++;else if(c&&c.dumps&&c.dumps.length)realN++});
+ var sampleN=Math.max(0,plats.length-realN-wallN);
+ var provHTML='<div class="galprov"><span class="gp ok">真实 dump '+realN+'</span><span class="gp warn">样例 / 聚合 '+sampleN+'</span><span class="gp bad">账号墙 '+wallN+'</span><span class="gpnote">页面=结构重绘镜像 · 非原站截图</span></div>';
  var gst=view==='cross'?'同航班 × 5 平台':PLAT[ch][0]+' · '+st[0];
  var row=galRowFor(ch),link='';R().links.forEach(function(L){if(L.p===ch&&L.u)link=L.u.replace(/%DATE%/g,R().date)});
  var foot=view==='cross'
   ?'<div class="galfoot"><span>同航班五平台对照 · 卡片可查看原站详情或对齐列表</span><span class="sp"></span><button type="button" data-galclose>收起</button></div>'
   :'<div class="galfoot"><span>证据链：原站页面 ⇄ 解析行 ⇄ 原始报文</span><span class="sp"></span>'
    +(link?'<button type="button" data-galopen>打开原页</button><button type="button" data-galcopy>复制深链</button>':'<button type="button" disabled>宁缺链接</button>')
-   +(row?'<button type="button" data-galselect>对齐到列表</button><button type="button" data-galdetail>打开三重对齐</button>':'')
+   +(row?'<button type="button" data-galselect'+(noVisibleRows()?' disabled':'')+'>对齐到列表</button><button type="button" data-galdetail>打开三重对齐</button>':'')
    +'</div>';
- return '<div class="galhead"><b>五平台页面校准册</b><span class="gr">'+esc(R().dep[0]+'→'+R().arr[0]+' · '+R().date)+'</span><span class="gs">5 平台 · 4 视图 · 页面 ⇄ 行 ⇄ raw</span><button type="button" data-galclose>收起</button></div>'
-  +'<div class="galrail">'+rail+'</div><div class="galvt">'+vt+'<span class="gst">'+gst+'</span></div>'
+ return '<div class="galhead"><b>五平台页面校准册</b><span class="gr">'+esc(R().dep[0]+'→'+R().arr[0]+' · '+R().date)+'</span><span class="gs" data-tooltip="页面为按五平台结构重绘的镜像，不是原站截图；数据真假以卡片状态为准">5 平台 · 4 视图 · 页面镜像（非原站截图）· 行 ⇄ raw</span><button type="button" data-galclose>收起</button></div>'
+  +'<div class="galrail">'+rail+'</div>'+provHTML+'<div class="galvt">'+vt+'<span class="gst">'+gst+'</span></div>'
   +'<div class="galframe">'+body+'</div>'+foot}
-function renderGal(){var d=$('#pm-gal');if(!d)return;d.innerHTML=galHTML();d.classList.add('show');refresh()}
+function renderGal(){var d=$('#pm-gal');if(!d)return;
+ var act=document.activeElement,key='';
+ if(act&&act.getAttribute&&d.contains(act)){
+  ['data-galch','data-galview','data-gcopen','data-gcflight','data-galdetail','data-galselect','data-galwall'].some(function(a){
+   var v=act.getAttribute(a);if(v==null)return false;
+   key='['+a+'="'+(window.CSS&&CSS.escape?CSS.escape(v):v)+'"]';return true});
+ }
+ d.innerHTML=galHTML();d.classList.add('show');
+ var restored=false;
+ if(key){var el=d.querySelector(key);if(el){try{el.focus({preventScroll:true});restored=true}catch(e){}}}
+ if(!restored&&act&&d.contains(act)){var cb=d.querySelector('[data-galclose]');if(cb)try{cb.focus({preventScroll:true})}catch(e2){}}
+ refresh()}
 function openGal(){cur.galch=cur.galch||cur.ch||'qunar';cur.galview=cur.galview||'list';cur.galfno=null;cur.galflight=null;
  var g=$('#pm-gal');g.setAttribute('role','dialog');g.setAttribute('aria-modal','true');g.setAttribute('aria-label','五平台页面校准册');renderGal();
  setTimeout(function(){var b=$('#pm-gal [data-galclose]');if(b)try{b.focus()}catch(e){}},0)}
@@ -4688,7 +4787,7 @@ function buildSharedDet(row,item){
  var b=thin?{cabin:'—',plane:'—',bag:'—',meal:'—',prate:'—',refund:'—'}:benefitData(row,item);
  var sp=splitTm(row.tm),dur=String(row.du||'').replace(/\s*·\s*(直飞|中转)$/,'');
  var fmt=function(v){return (v===undefined||v===null||v==='')?'—':v};
- var CORE=[['price',/^价格/],['tax',/^税费/],['naked',/^裸价/],['dep',/^起飞/],['arr',/^到达/],
+ var CORE=[['price',/^价格/],['flightNo',/^航班号/],['tax',/^税费/],['naked',/^裸价/],['dep',/^起飞/],['arr',/^到达/],
   ['dur',/^时长|^全程/],['cabin',/^舱位/],['plane',/^机型/],['bag',/^行李/],['labels',/^退改/],
   ['prate',/^准点/],['meal',/^餐食/],['lt',/^余票/]];
  var out=[],matched={};
@@ -4711,6 +4810,7 @@ function buildSharedDet(row,item){
   matched[k]=1;
  }
  add('price','价格 price',row.pr,'list.price / 原页',item.pr,'ok','列表/原页同价');
+ add('flightNo','航班号 flightNo',String(row.no||'').split(' ')[0],'list.no / 原页',item.no||'—','ok','航班号同源');
  add('tax','税费 tax','—','（渠道本态未提供）','—','raw','渠道本态未提供税费拆分');
  add('naked','裸价 nakedPrice','—','（渠道本态未提供）','—','raw','渠道本态未提供裸价');
  add('dep','起飞 depTime',thin?'—':sp.dep,'list.tm / 原页',thin?'—':item.tm,thin?'raw':'ok',thin?'薄行/本态无时刻':'时刻同源');
@@ -4730,7 +4830,7 @@ function rawCanonicalData(row,ch){
  var t=splitTm(row.tm),thin=row.tr==='thin'||t.thin||t.dep==='—';
  var price=parseInt(String(row.pr).replace(/[^0-9]/g,''),10)||0,dl='';
  (row._detArr||existingDetFor(row)).forEach(function(f){if(!dl&&/^日期/.test(f[0]))dl=f[1]});
- return {no:flightKey(row),price:price,dep:thin?'':t.dep,arr:thin?'':t.arr,thin:thin,ch:ch,date:dl};
+ return {no:sourceKey(row)||flightKey(row),price:price,dep:thin?'':t.dep,arr:thin?'':t.arr,thin:thin,ch:ch,date:dl};
 }
 function rawCanonicalHTML(row,ch){
  var d=rawCanonicalData(row,ch);
@@ -4748,8 +4848,8 @@ function rawCanonicalHTML(row,ch){
   +'  <span class="k">ret</span>: <span class="n">true</span>,\n'
   +'  <span class="k">data</span>: {\n'
   +'    <span class="k">flights</span>: [\n'
-  +'      { <span class="k">code</span>: <span class="s">"'+esc(d.no+(d.thin&&d.date?' · '+d.date:''))+'"</span>, <span class="k">minPrice</span>: '+priceNode+',\n'
-  +'        <span class="k">binfo</span>: { <span class="k">depTime</span>: '+depNode+', <span class="k">arrTime</span>: '+arrNode+' }'+(d.thin?', <span class="k">cal</span>: <span class="n">true</span>':'')+' }\n'
+  +'      { <span class="k" data-rawkey="code">code</span>: <span class="s">"'+esc(d.no+(d.thin&&d.date?' · '+d.date:''))+'"</span>, <span class="k" data-rawkey="minPrice">minPrice</span>: '+priceNode+',\n'
+  +'        <span class="k">binfo</span>: { <span class="k" data-rawkey="depTime">depTime</span>: '+depNode+', <span class="k" data-rawkey="arrTime">arrTime</span>: '+arrNode+' }'+(d.thin?', <span class="k">cal</span>: <span class="n">true</span>':'')+' }\n'
   +'    ]\n  }\n}'+foot+'</div>';
 }
 function syncSharedData(){
@@ -4855,8 +4955,8 @@ function updateSharedBadge(){
   ?('改版演练：'+a.issues.length+' 个缺口 · 当前路由 '+a.aligned+'/'+a.rows+' · 默认数据单源 100%')
   :('实时解析 / 明细 / 原页共享同一行记录 · '+a.rows+' 行完整'+(a.thin?' · '+a.thin+' 薄行（渠道本态）':'')+' · 0 解析缺口'));
  var fs=$('#pm-footshared');
- if(fs)fs.textContent=DRIFT?('原型 v31.8 · 改版演练 · '+a.aligned+'/'+a.rows+' · '+a.issues.length+' 缺口 · 三重对齐')
-  :('原型 v31.8 · 单源 '+a.aligned+'/'+a.rows+' · 零解析缺口 · 三重对齐');
+ if(fs)fs.textContent=DRIFT?('原型 v31.10 · 改版演练 · '+a.aligned+'/'+a.rows+' · '+a.issues.length+' 缺口 · 三重对齐')
+  :('原型 v31.10 · 单源 '+a.aligned+'/'+a.rows+' · 零解析缺口 · 三重对齐');
  refresh();
 }
 function stateRoundTrip(){
@@ -4930,7 +5030,9 @@ function renderDetailFields(){
   +'<span class="fs '+st[2]+(rev?' rev':'')+'" data-rev="'+fi2+'" role="button" tabindex="0" data-tooltip="'
    +(rev?'已复核 · 点击取消':'标记该字段已复核')+'">'+ic(st[0])+st[1]+'</span></div>'});
  if(!fh)fh='<div class="pm-empty" style="padding:22px"><b>该筛选下无字段</b><span>切回「全部」查看 '+d.length+' 个字段</span></div>';
+ var hadFocus=$('#pm-d-fields').contains(document.activeElement);
  $('#pm-d-fields').innerHTML=fh;
+ if(hadFocus&&cur.dfield>=0){var fe=$('#pm-d-fields .frow[data-fi="'+cur.dfield+'"]');if(fe)try{fe.focus({preventScroll:true})}catch(eF){}}
  $$('#pm-dfilter [data-df]').forEach(function(b){
   var k=b.getAttribute('data-df'),n=k==='all'?d.length:k==='diff'?difn:miss;
   b.innerHTML=(k==='all'?'全部':k==='diff'?'仅差异':'仅未采')+' '+n;b.classList.toggle('on',k===cur.dfilter)});
@@ -4971,6 +5073,9 @@ function focusField(idx,silent){
  $$('#pm-d-fields .frow').forEach(function(el){el.classList.toggle('on',+el.getAttribute('data-fi')===idx)});
  var rpth=$('#pm-d-rawpath');rpth.textContent=f[2]+'  →  '+(f[3]||'—');
  rpth.classList.remove('rawflash');void rpth.offsetWidth;rpth.classList.add('rawflash');
+ var rj=$('#pm-d-rawjson'),rk=rawKeyFor(f[2],f[0]),rn=rk&&rj?rj.querySelector('[data-rawkey="'+rk+'"]'):null;
+ $$('#pm-d-rawjson .rawkeyon').forEach(function(x){x.classList.remove('rawkeyon')});
+ if(rn){rn.classList.add('rawkeyon');setTimeout(function(){try{rn.scrollIntoView({block:'nearest'})}catch(e){}},0)}
  var dm=domFor(f[0]),em=$('#pm-d-embedpane');
  $$('#pm-d-embedpane .fspot').forEach(function(x){x.classList.remove('fspot');x.removeAttribute('data-focustag')});
  var rowEl=em?em.querySelector('.vp-row.hl'):null;
@@ -5079,13 +5184,59 @@ function openDetail(i){
  var snapFresh=String((R().rows[cur.didx]||{}).fresh||'12:57 轮');
  var hasDump0=!!(R().ch[ch].dumps&&R().ch[ch].dumps[0]);
  var dump0=hasDump0?R().ch[ch].dumps[0]:'无 dump';
- var dumpDay=(dump0.match(/\d{4}-\d{2}-\d{2}/)||[])[0]||'';
+ var dumpDay=((dump0.match(/\d{4}[-_]\d{2}[-_]\d{2}/)||[])[0]||'').replace(/_/g,'-');
  var dumpTxt=hasDump0?'debug/'+dump0.replace(/\s*·\s*\d{1,2}:\d{2}(?:\s*轮)?/g,''):'无 dump（渠道本态）';
  $('#pm-d-snap').textContent='原始快照：'+dumpTxt+' · '+snapFresh+' · 与解析同轮取证 · 双重校准可回溯'
   +(dumpDay&&dumpDay!==R().date?' · 查询日 '+R().date+'（价按日历因子重算，dump 仍为采集日）':'');
  $('#pm-d-snap').setAttribute('title',$('#pm-d-snap').textContent);
  var live0=$('#pm-d-embedwrap .pm-live');
- if(live0)live0.innerHTML='<i></i>'+(hasDump0&&dumpDay&&dumpDay!==R().date?'CDP 镜像 · 查询日重算':hasDump0?'CDP 只读':'行级镜像 · 无 dump');
+ var capm=window.PROBE_CAPTURE&&window.PROBE_CAPTURE[cur.rt]&&window.PROBE_CAPTURE[cur.rt][ch];
+ var capItem=capm?capm[sourceKey(row)]:null;
+ var capPr=capItem?String(capItem.pr).replace(/[^0-9]/g,''):'';
+ var capsig=(window.PROBE_CAPTURE_SIG&&window.PROBE_CAPTURE_SIG[cur.rt]&&window.PROBE_CAPTURE_SIG[cur.rt][ch])||'';
+ var livePr=String(row.pr).replace(/[^0-9]/g,'');
+ var capEl=$('#pm-d-capsig');
+ if(capEl){capEl.textContent='cap '+(capsig||'—');
+  capEl.setAttribute('title','采集快照指纹 '+(capsig||'—')+' · 初始化冻结 · 跨查询日不变 / 采集 '+(dumpDay||'—'))}
+ var capParts=[],capDiff=0;
+ if(capPr&&livePr&&capPr!==livePr){capDiff++;capParts.push('价：采集 ¥'+capPr+' → 当前 ¥'+livePr)}
+ var capDu=capItem&&capItem.du?String(capItem.du).replace(/\s*·\s*(直飞|中转)$/,''):'';
+ var curDu=String(row.du||'').replace(/\s*·\s*(直飞|中转)$/,'');
+ var rowThin=row.tr==='thin'||splitTm(row.tm).thin||curDu==='薄行'||curDu==='时刻缺失'||capDu==='薄行';
+ var capTm=capItem&&capItem.tm,capTa=capItem&&capItem.ta,curTm=splitTm(row.tm);
+ if(!rowThin&&capTm&&capTm!=='—'&&curTm.dep&&curTm.dep!=='—'&&curTm.dep!=='--:--'&&curTm.dep!==capTm){capDiff++;capParts.push('起飞：'+capTm+' → '+curTm.dep)}
+ if(!rowThin&&capTa&&capTa!=='—'&&curTm.arr&&curTm.arr!=='—'&&curTm.arr!=='--:--'&&curTm.arr!==capTa){capDiff++;capParts.push('到达：'+capTa+' → '+curTm.arr)}
+ if(!rowThin&&capDu&&curDu&&capDu!==curDu){capDiff++;capParts.push('时长：'+capDu+' → '+curDu)}
+ var capTags=capItem&&capItem.tg?capItem.tg:[];
+ var srcNow=sourceItemFor(row,row.p)||row._srcItem||null;
+ var curTags=((row.tags||[]).concat((srcNow&&srcNow.tg)||[])).join(' ');
+ var missingTags=capTags.filter(function(t){return t&&curTags.indexOf(t)<0});
+ if(missingTags.length){capDiff++;capParts.push('权益：采集 '+missingTags.join('/')+' 未在镜像标签')}
+ var capPlane=capItem&&capItem.pl?String(capItem.pl):'',capCabin=capItem&&capItem.cb?String(capItem.cb):'';
+ var curPlane='',curCabin='';
+ d.forEach(function(f){
+  if(!curPlane&&/^机型/.test(f[0])&&f[4]!=='miss'&&f[1]&&f[1]!=='—')curPlane=String(f[1]);
+  if(!curCabin&&/^舱位/.test(f[0])&&f[4]!=='miss'&&f[1]&&f[1]!=='—')curCabin=String(f[1])});
+ function capNorm(x){return String(x||'').toLowerCase().replace(/[\s\-_/（）()]/g,'')}
+ if(capPlane&&curPlane&&capNorm(capPlane)!==capNorm(curPlane)&&capNorm(curPlane).indexOf(capNorm(capPlane))<0&&capNorm(capPlane).indexOf(capNorm(curPlane))<0){capDiff++;capParts.push('机型：采集 '+capPlane+' → 详情 '+curPlane)}
+ if(capCabin&&curCabin&&capNorm(capCabin)!==capNorm(curCabin)){capDiff++;capParts.push('舱位：采集 '+capCabin+' → 详情 '+curCabin)}
+ var cdEl=$('#pm-d-capdiff');
+ if(cdEl){
+  if(!capItem){cdEl.textContent='无快照';cdEl.classList.remove('bad');cdEl.classList.add('warn');
+   cdEl.setAttribute('data-capdiff','');cdEl.setAttribute('data-capdiff-parts','');
+   cdEl.setAttribute('data-tooltip','该航班/渠道无采集快照：仅行级镜像，不判定为一致');
+   cdEl.setAttribute('aria-label','无采集快照，仅行级镜像')}
+  else{cdEl.textContent='差 '+capDiff;cdEl.classList.remove('warn');cdEl.classList.toggle('bad',capDiff>0);
+   cdEl.setAttribute('data-capdiff',String(capDiff));
+   cdEl.setAttribute('data-capdiff-parts',capParts.join('|'));
+   cdEl.setAttribute('data-tooltip','采集快照 vs 当前镜像：'+(capParts.join(' · ')||'一致'));
+   cdEl.setAttribute('aria-label','采集快照与当前镜像差异 '+capDiff+' 项')}}
+ if(live0){live0.innerHTML='<i></i>'+(capItem?(hasDump0?'CDP 镜像 · 采集 '+(capPr?'¥'+capPr:dumpDay):'行级镜像 · 无 dump'):'行级镜像 · 无采集快照')
+  +(capPr&&livePr&&capPr!==livePr?' → 当前 ¥'+livePr:'');
+  live0.setAttribute('title','原页镜像（非实时外网）· '+(capItem?('采集价 '+(capPr?'¥'+capPr:'—')+' · 采集 '+(dumpDay||'—')):'无采集快照（仅行级镜像）')+' · 当前 ¥'+livePr+' · 查询日 '+R().date)}
+ var ep0=$('#pm-d-embedpane');
+ if(ep0){ep0.setAttribute('data-capture',dumpDay||'');ep0.setAttribute('data-querydate',R().date);ep0.setAttribute('data-mirror',hasDump0?'dump':'none');
+  ep0.setAttribute('data-capture-price',capPr||'');ep0.setAttribute('data-live-price',livePr||'');ep0.setAttribute('data-capsig',capsig||'');ep0.setAttribute('data-capture-tm',capItem?((capItem.tm||'')+'-'+(capItem.ta||'')):'');ep0.setAttribute('data-capture-du',capItem?(capItem.du||''):'');ep0.setAttribute('data-capture-tags',capItem&&capItem.tg?capItem.tg.join('|'):'');ep0.setAttribute('data-capture-plane',capPlane||'');ep0.setAttribute('data-capture-cabin',capCabin||'')}
  $('#pm-d-embedwrap').style.display=cur.embed?'':'none';
  $('#pm-d-embed').innerHTML=ic('panel-right')+'内嵌：'+(cur.embed?'开':'关');
  cur.view='detail';
@@ -5213,11 +5364,12 @@ function syncRouteUI(){
  else if(cur.rt==='intl'){tc.disabled=true;tc.setAttribute('data-tooltip','国际航线无落地页（宁缺链接）· 切国内航线可用')}
  else{tc.disabled=true;tc.setAttribute('data-tooltip','未供日历 · 宁缺')}}
 $('#pm-routechips').addEventListener('click',function(e){var t=e.target.closest('[data-rt]');
- if(!t)return;cur.rt=t.getAttribute('data-rt');
+ if(!t)return;cur.rt=t.getAttribute('data-rt');cur.galflight=null;cur.galfno=null;
  var qin=$('#pm-q');if(qin){qin.value='';cur.q='';$('#pm-searchwrap').classList.remove('has')}
  var defch=cur.rt==='rtsin'?'tuniu':'qunar';cur.ch=defch;cur.sel=R().rows[0].mid;
  cur.F=fdef();cur.exp=-1;syncRouteUI();renderFbar();
  renderHead();renderRows();renderPanes();renderFmore();
+ if($('#pm-gal').classList.contains('show'))renderGal();
  setTimeout(function(){revealCalSel()},0);
  toast('已切 '+R().dep[0]+'→'+R().arr[0]+' · '+R().date);});
 $('#pm-dumpsel').addEventListener('change',function(){
@@ -5254,6 +5406,9 @@ $('#pm-dfilter').addEventListener('click',function(e){var b=e.target.closest('[d
 $('#pm-d-verdict').addEventListener('click',function(e){var b=e.target.closest('[data-vd]');if(!b)return;
  cur.verdict=b.getAttribute('data-vd');syncVerdict()});
 $('#pm-mobsave').addEventListener('click',function(){var b=$('#pm-d-save');if(b)b.click()});
+$('#pm-d-capdiff').addEventListener('click',function(){
+ var n=this.getAttribute('data-capdiff'),t=this.getAttribute('data-tooltip');
+ toast(n===''?t:(n==='0'?'采集快照与当前镜像一致 · cap '+($('#pm-d-capsig')?$('#pm-d-capsig').textContent.replace('cap ',''):''):t))});
 $('#pm-d-save').addEventListener('click',function(){
  var d=cur.lastDet||[],key=detailKey();
  var applicable=d.filter(function(f){return f[4]!=='raw'}).length;
@@ -5908,7 +6063,8 @@ $('#pm-gal').addEventListener('click',function(e){
  var gr=e.target.closest('#pm-gal .vp-row');
  if(gr){cur.galfno=gr.getAttribute('data-fno');cur.galview='detail';renderGal();return}
  var gs=e.target.closest('[data-galselect]');
- if(gs){var row=galRowFor(galChannel());if(row){pick(R().rows.indexOf(row));closeGal();
+ if(gs){if(noVisibleRows()){toast('当前筛选无可见行 · 放宽搜索/筛选后再对齐');return}
+  var row=galRowFor(galChannel());if(row){pick(R().rows.indexOf(row));closeGal();
   var lz=$('#pm-left');if(lz)try{lz.scrollIntoView({behavior:'smooth',block:'center'})}catch(ex){}
   toast('已对齐到列表：'+flightKey(row)+' · '+PLAT[galChannel()][0])}return}
  var gd=e.target.closest('[data-galdetail]');
@@ -5944,6 +6100,25 @@ Object.keys(RT).forEach(function(k){
  (rr.links||[]).forEach(function(L){if(L.u)L.u=L.u.split(base).join('%DATE%')});
  Object.keys(rr.ch||{}).forEach(function(p){var c=rr.ch[p];if(c&&c.host)c.host=c.host.split(base).join('%DATE%')});
 });
+var CAPTURE={};
+Object.keys(RT).forEach(function(k){
+ var rr=RT[k],m={};
+ Object.keys(rr.ch||{}).forEach(function(ch){
+  var c=rr.ch[ch],cm={};
+  (c&&c.vp||[]).forEach(function(it){var sk=sourceKey(it.no);if(sk&&sk!=='—'&&!cm[sk]){var ap=it.ap||'',pi=ap.indexOf(' · '),pl0=pi>=0?ap.slice(pi+3).trim():'';
+   if(!/^(空客|波音|商飞|巴航)/.test(pl0))pl0='';
+   var cb0=(it.tg||[]).filter(function(t){return /^(经济舱|公务舱|头等舱|超级经济舱)$/.test(t)})[0]||'';
+   var tmv=String(it.tm||''),tav=String(it.ta||''),tmm=tmv.split(/\s*→\s*/);
+   if(tmm.length>1){tmv=tmm[0].trim();if(!tav)tav=tmm.slice(1).join(' → ').trim()}
+   cm[sk]={pr:String(it.pr||''),tm:tmv,ta:tav,du:it.du||'',ap:ap,tg:(it.tg||[]).slice(),pl:pl0,cb:cb0}}});
+  m[ch]=cm;
+ });
+ CAPTURE[k]=m;
+});
+window.PROBE_CAPTURE=CAPTURE;
+window.PROBE_CAPTURE_SIG={};
+Object.keys(CAPTURE).forEach(function(rt){window.PROBE_CAPTURE_SIG[rt]={};Object.keys(CAPTURE[rt]).forEach(function(ch){
+ window.PROBE_CAPTURE_SIG[rt][ch]=(hashStr(JSON.stringify(CAPTURE[rt][ch]))+'00000000').slice(0,8)})});
 syncSharedData();
 loadLS();
 var ldb=$('#pm-ledgern');if(ldb)ldb.textContent=cur.led.length;

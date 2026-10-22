@@ -4893,10 +4893,10 @@ class Alerter:
         """用户侧「查看详情」跳转链接——与各渠道爬虫已验证取数路径同源。
         链接是给人点的，页面必须真的出数据：主路径在 PC↔H5 间任一
         向摆动都要复核链接指向（只按正向执行过会漏反向回退面）。
-        qunar 指 PC 单程列表页（PC_URL_TPL 同参）：爬虫主路径已迁
-        PC wbdflightlist，链接与取数同源；H5 列表页对匿名已上登录墙、
-        登录态接口仍风控=死形。渠道任一头再摆动，切换前先复核目标
-        页壳对真人在线（双向同律）。"""
+        qunar 指 H5 单程列表页（crawlers/qunar.py URL_TPL 同参）：
+        2026-10-10 PC 网页版停服，取数与用户深链同走 H5；H5 匿名
+        不出价，登录态直达真列表。渠道入口再摆动，切换前先复核
+        目标页壳对真人在线（双向同律）。"""
         from urllib.parse import quote as _q
         # 城市名归一：曾直用 route 原文——用户非规范写法时
         # 用户搜索词 ≠ 爬虫搜索词（爬虫侧统一 CITY_NAME.get(code)），
@@ -4931,11 +4931,15 @@ class Alerter:
             if _intl_route(fc_up, tc_up):
                 from core.intl import airport_city_code as _apcity
                 _fc_v, _tc_v = _apcity(fc_up), _apcity(tc_up)
-            _from_scope = ("outer"
-                           if _intl_route(fc_up, tc_up) else "inner")
+                # r360 取数与出链同源：PC 国际列表 batchSearch 是国际
+                # 航班维度的真源（H5 只出日历），深链必须指到能看见
+                # 航班列表的页面，否则用户点开所见非所采
+                return ("https://flights.ctrip.com/online/list/"
+                        f"oneway-{_fc_v.lower()}-{_tc_v.lower()}"
+                        f"?depdate={date}")
             return (
                 "https://m.ctrip.com/html5/flight/taro/first"
-                f"?from={_from_scope}"
+                "?from=inner"
                 "&tripType=ONE_WAY"
                 f"&dcity={_fc_v}&dcityName={fn}"
                 f"&acity={_tc_v}&acityName={tn}&ddate={date}"
@@ -4985,23 +4989,25 @@ class Alerter:
             # PC 版单程列表页（crawlers/qunar.py PC_URL_TPL 同参）：爬虫
             # 主路径已迁 PC wbdflightlist，链接同源迁移。H5 列表页对
             # 匿名已上登录墙、登录态接口仍风控=死形（禁复活钉在案）；
-            # 匿名点开 PC 落 qunar.com 首页=软着陆可手动重搜，登录
-            # 用户直达真列表（真机双落点复核在案）
+            # 2026-10-10 起 PC 单程页 302 回 www.qunar.com 促销聚合，
+            # 原页深链改指 H5（m.flight）列表页；与爬虫 URL_TPL 同参。
+            # H5 匿名不出价（实测返回 0 条），登录态直达真列表。
             return (
-                "https://flight.qunar.com/site/oneway_list.htm"
-                f"?searchDepartureAirport={fn}"
-                f"&searchArrivalAirport={tn}"
-                f"&searchDepartureTime={date}"
-                "&nextNDays=0&startSearch=true"
-                f"&fromCode={fc_up}&toCode={tc_up}"
-                "&from=flight_dom_search"
+                "https://m.flight.qunar.com/ncs/page/flightlist"
+                f"?depCity={fn}&arrCity={tn}&goDate={date}"
+                "&from=touch_index_search&child=0&baby=0&cabinType=0"
             )
         if platform == "tuniu":
-            # 国际航线回落空串：国际列表页是接口非落地板（INTL_LIST_PG
-            # 是 XHR 取数端点），给国际三字码拼国内落地页=挂羊头——
-            # 宁缺链接勿给错链（消费端真值门剥链接壳只出文本）
+            # 国际列表页是 m2015 带参落地页（crawlers/tuniu.py
+            # INTL_LIST_PG 同参，线上 200 + 「航班列表」壳；token 隐藏域
+            # 由页内 JS 完成查询）。旧实现按「XHR 端点」判空，导致
+            # 150 条真实国际明细全部无原页可溯源。
             if _intl_route(fc_up, tc_up):
-                return ""
+                return (
+                    "https://m.tuniu.com/m2015/intlFlight/flight/list"
+                    f"?route={fc_up}-{tc_up}&date={date}"
+                    "&adult=1&child=0&baby=0&cabinClass=0"
+                )
             return (
                 "https://m.tuniu.com/flight/domestic/new/"
                 f"{fc_up}_{tc_up}_OW_1_0_0"

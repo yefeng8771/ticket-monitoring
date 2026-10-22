@@ -329,14 +329,15 @@ class TestWebuiV197Pins:
         with open(_w.__file__, encoding="utf-8") as f:
             return f.read()
 
-    def test_route_label_gate_includes_dates(self):
-        """📈 跳走势门：单启用航线×多日期（最常见形态）也须产出
-        route 标签——len(routes)>1 恒假曾让 599/599 行无走势入口。"""
+    def test_route_label_always_emitted(self):
+        """📈 走势入口：每一行都必须带 route 标签，不再按航线/日期数量
+        设门——单启用航线×单日期也必须能点开走势（旧门曾让整表入口消失）。"""
         src = self._src()
-        i = src.index("rt_label = (")
-        seg = src[i:i + 260]
-        assert 'rr.get("dates")' in seg.replace("'", '"'), \
-            "route 门未含日期维度（单启用航线多日期形态全表无📈入口）"
+        i = src.index("rt_label = ")
+        seg = src[i:i + 180]
+        assert "if rr else" in seg, "route 标签仍受条件门限制"
+        assert "len(routes) > 1" not in seg, "旧多航线门残留"
+        assert "len(rr.get(\"dates\")" not in seg, "旧多日期门残留"
 
     def test_anim_clip_covers_tag_zone(self):
         """入场动画 clip 终帧须覆盖标签可达域（低标注可画到 W-3）：

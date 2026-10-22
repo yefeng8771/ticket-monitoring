@@ -162,13 +162,20 @@ def test_state_field_injection_never_executes(srv):
         pg.wait_for_timeout(1200)
         # 进明细视图（行渲染发生）
         pg.evaluate("typeof showMonTab==='function'&&showMonTab('details')")
+        pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                    "if(fb&&getComputedStyle(fb).display==='none')togFlt();}")
         pg.wait_for_timeout(600)
         flags = pg.evaluate(
             "Object.keys(window).filter(k=>k.indexOf('__XSS_')===0)")
         assert flags == [], ("注入串被当 HTML 解释执行，旗标点亮：%s" % flags)
+        # 官方渠道图标是受控的内嵌 img.bic（非毒字段实体化）：排除后
+        # 仍要求表内/chips 内零任意 img，XSS 意图不变。
+        # 官方图标把 .bic 放在可信 wrapper span 上（渠道方形/航司圆形），
+        # img 自身无类；按 closest('.bic') 排除受控图标后，毒字段仍须零 img。
         stray = pg.evaluate(
-            "document.querySelectorAll('#ftable img,#platchips img,"
-            "#datechips img,#routechips img').length")
+            "()=>[...document.querySelectorAll("
+            "'#ftable img,#platchips img,#datechips img,#routechips img')]"
+            ".filter(i=>!i.closest('.bic')).length")
         assert stray == 0, "表内/chips 内实体化 img=%d" % stray
         assert errs == [], "页面 JS 错误：%s" % errs[:3]
         br.close()
@@ -186,6 +193,8 @@ def test_row_expand_and_chip_toggle_still_work(srv):
         pg.goto(srv)
         pg.wait_for_timeout(1200)
         pg.evaluate("typeof showMonTab==='function'&&showMonTab('details')")
+        pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                    "if(fb&&getComputedStyle(fb).display==='none')togFlt();}")
         pg.wait_for_timeout(600)
         # 行点击展开：xrow display none → 可见（tgrow 兼 xrow 类，
         # 断言「存在可见 xrow」而非第一条——首行带改期胶囊时第一条
@@ -221,6 +230,8 @@ def test_price_bounds_persist_across_reload(srv):
         pg.goto(srv)
         pg.wait_for_timeout(1200)
         pg.evaluate("typeof showMonTab==='function'&&showMonTab('details')")
+        pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                    "if(fb&&getComputedStyle(fb).display==='none')togFlt();}")
         pg.wait_for_timeout(400)
         pg.evaluate("$('fpmin').value='500';applyFlt();saveUI();")
         pg.wait_for_timeout(200)
@@ -243,6 +254,8 @@ def test_print_media_disables_entry_animations(srv):
         pg.goto(srv)
         pg.wait_for_timeout(1200)
         pg.evaluate("typeof showMonTab==='function'&&showMonTab('details')")
+        pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                    "if(fb&&getComputedStyle(fb).display==='none')togFlt();}")
         pg.wait_for_timeout(600)
         pg.emulate_media(media="print")
         names = pg.evaluate(
@@ -270,6 +283,8 @@ def test_main_landmark_and_caption_behavior(srv):
         assert pg.evaluate(
             "!!(document.querySelector('main,[role=main]'))"), "无 main 地标"
         pg.evaluate("typeof showMonTab==='function'&&showMonTab('details')")
+        pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                    "if(fb&&getComputedStyle(fb).display==='none')togFlt();}")
         pg.wait_for_timeout(400)
         assert pg.evaluate(
             "!!document.querySelector('#ftable caption')"), "明细表无 caption"

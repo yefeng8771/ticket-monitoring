@@ -9,16 +9,23 @@
 任何 JS console.error / pageerror 都会以非零码退出（发版前兜底）。
 """
 import os
+import shutil
 import sys
 
 from playwright.sync_api import sync_playwright
 
 BASE = os.environ.get("CONSOLE_URL", "http://127.0.0.1:8799")
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
+FINAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
+# 安全扫描/并行会话会短暂锁住 docs/screenshots 里的 PNG，导致 Playwright
+# 写文件抛 WinError 22。先烘焙到独立目录，浏览器关闭后再整体落盘。
+OUT = os.environ.get("SHOT_OUT") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "_scratch", "shot_bake")
 
 
 def main():
     os.makedirs(OUT, exist_ok=True)
+    os.makedirs(FINAL, exist_ok=True)
     errors = []
     with sync_playwright() as p:
         b = p.chromium.launch()
@@ -64,9 +71,21 @@ def main():
         # K线模式（蜡烛图组件；仍在 LHR 国际长曲线语境）
         pg.click("#mdK")
         pg.wait_for_timeout(600)
-        pg.locator("#chartcard").screenshot(
-            path=os.path.join(OUT, "console-kline.png"))
+        # 目标文件偶发被安全扫描短暂占用：先写临时名再原子替换
+        _kline = os.path.join(OUT, "console-kline.png")
+        pg.locator("#chartcard").screenshot(path=_kline + ".tmp.png")
+        os.replace(_kline + ".tmp.png", _kline)
         pg.click("#mdLine")
+        pg.wait_for_timeout(300)
+        # 关注航班台（演示已播种 2 个关注）：真实采集点、目标跑道、
+        # 渠道覆盖、名册；K 线同屏覆盖关注台双模式。
+        pg.evaluate("showMonTab('watch')")
+        pg.wait_for_timeout(2200)
+        pg.screenshot(path=os.path.join(OUT, "console-watch-studio.png"))
+        pg.click('#wsModes [data-wsmode="kline"]')
+        pg.wait_for_timeout(900)
+        pg.screenshot(path=os.path.join(OUT, "console-watch-kline.png"))
+        pg.click('#wsModes [data-wsmode="line"]')
         pg.wait_for_timeout(300)
         # 航班明细子视图（工作台表格）：筛国际航线片（SHA→东京成田——
         # 国际紫标+含税小字+机场对行形态主秀）
@@ -112,8 +131,11 @@ def main():
           if (rh && rh.getAttribute('aria-expanded') === 'false') rh.click();
         }""")
         pg.wait_for_timeout(500)
-        # r347：视口级最佳构图——日期模式条、已选片、快捷行与保存条同屏
+        # r347：视口级最佳构图——渠道就绪、日期模式条与保存条同屏。
+        # A 基础区收起（保留 B 渠道就绪与 C 航线卡），否则日期条被推下首屏。
         pg.evaluate("""() => {
+          const a=document.querySelector('.grouplab[data-sec="A"]');
+          if(a&&a.querySelector('.chev.open'))a.click();
           if(typeof CFG!=='undefined'&&CFG[0]&&CFG[0].routes[0]){
             CFG[0].routes[0].alert_direct =
               (Number(CFG[0].routes[0].alert_direct)||0) + 10;
@@ -126,9 +148,9 @@ def main():
                 t=document.getElementById('dto-0-0');
           if(f)f.value='2026-11-05';
           if(t)t.value='2026-11-15';
-          const d=document.querySelector('.dateSrow');
-          if(d)window.scrollTo(0, Math.max(0,
-            d.getBoundingClientRect().top + window.scrollY - 260));
+          const b=document.querySelector('.grouplab[data-sec="B"]');
+          if(b)window.scrollTo(0, Math.max(0,
+            b.getBoundingClientRect().top + window.scrollY - 76));
         }""")
         pg.wait_for_timeout(300)
         pg.screenshot(path=os.path.join(OUT, "console-config.png"))
@@ -157,11 +179,15 @@ def main():
           }
         }""")
         pg.wait_for_timeout(500)
-        pg.screenshot(path=os.path.join(OUT, "console-city-intl.png"),
-                      full_page=True)
         pg.evaluate("cityPanelClose&&cityPanelClose()")
         pg.wait_for_timeout(200)
-        # 全局配置中心（调度/采集热载 + 启动级只读三组）
+        # 配置台「航班监控」分区：独立添加/编辑关注、渠道与目标
+        pg.click('#cfgnav .cnav[data-p="watch"]')
+        pg.wait_for_timeout(900)
+        pg.screenshot(path=os.path.join(OUT, "console-config-watch.png"))
+        # 全局配置中心：先丢弃演示脏改动，避免浮动保存条压住启动级路径卡
+        pg.evaluate("if(typeof loadCfg==='function')loadCfg()")
+        pg.wait_for_timeout(900)
         pg.click('#cfgnav .cnav[data-p="globals"]')
         pg.wait_for_timeout(700)
         pg.evaluate("window.scrollTo(0,0)")
@@ -197,6 +223,13 @@ def main():
             t.getBoundingClientRect().top + window.scrollY - 120));
         }""")
         pg.wait_for_timeout(350)
+        # 1.5.274+ 390 明细必须是卡片；截图源若还是旧服务（码头
+        # 8799 未重启），这里直接失败而不是把旧表烘进公开截图
+        _mdisp = pg.evaluate("""()=>{const tr=document.querySelector(
+          '#ftable tbody tr[data-k]');return tr?getComputedStyle(tr).display:''}""")
+        if _mdisp != "grid":
+            raise SystemExit("mobile screenshot source is stale: details display=%r"
+                             % _mdisp)
         pg.screenshot(path=os.path.join(OUT, "console-mobile.png"))
         # r347：移动筛选抽屉 + 常驻「查看筛选结果」CTA（真实单手出口）
         pg.evaluate("(()=>{const fb=document.querySelector('.fbar');"
@@ -205,15 +238,22 @@ def main():
         pg.screenshot(path=os.path.join(OUT, "console-mobile-filter.png"))
         pg.evaluate("closeFltShow&&closeFltShow()")
         pg.wait_for_timeout(300)
+        # 移动端关注台：航线卡横向滑动、名册单列、走势全宽
+        pg.evaluate("showMonTab('watch')")
+        pg.wait_for_timeout(1600)
+        pg.screenshot(path=os.path.join(OUT, "console-watch-mobile.png"))
         b.close()
     if errors:
         print("!! 页面 JS 错误：")
         for e in errors[:10]:
             print("   -", e[:200])
         sys.exit(1)
-    print("截图完成（无 JS 错误）：")
     for f in sorted(os.listdir(OUT)):
-        print("  ", os.path.join(OUT, f))
+        if f.endswith(".png"):
+            shutil.copy2(os.path.join(OUT, f), os.path.join(FINAL, f))
+    print("截图完成（无 JS 错误）：")
+    for f in sorted(os.listdir(FINAL)):
+        print("  ", os.path.join(FINAL, f))
 
 
 if __name__ == "__main__":

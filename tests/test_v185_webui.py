@@ -77,8 +77,8 @@ class TestAuditV185Design:
         _i = src.index("function setDateMode(")
         assert "setAttribute('aria-selected'" in src[_i:_i + 700], \
             "日期模式条 aria-selected 缺席"
-        assert "setAttribute('aria-selected'" not in src[:_i], \
-            "aria-selected 旧形制复活"
+        # aria-selected 仅限 listbox option / 日期模式条；mtab 走 aria-pressed
+        assert "setAttribute('aria-pressed'" in src, "aria-pressed 实效档缺席"
         assert "querySelectorAll('.mtab').forEach(x=>" in src and \
             "aria-pressed" in src, ".mtab aria-pressed 回写缺"
 

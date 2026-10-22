@@ -54,7 +54,7 @@ class TestDailyViewUrlV171:
         """执行级钉：None 占 self 对五渠道真调返回与爬虫同域的 URL。"""
         from core.alerter import Alerter
         expect = {
-            "qunar": "https://flight.qunar.com",
+            "qunar": "https://m.flight.qunar.com",
             "ctrip": "https://m.ctrip.com",
             "tuniu": "https://m.tuniu.com",
             "tongcheng": "https://m.ly.com",

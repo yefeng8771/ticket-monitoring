@@ -219,9 +219,24 @@ class TongchengCrawler(BaseCrawler):
                 row = self._parse_intl_calendar(body, date,
                                                 ret_date=ret_date or "")
                 if row is None:
-                    self.logger.warning(
-                        "[tongcheng][intl] %s 未拿到日历价（body %dB）",
-                        date, len(body))
+                    _code = _msg = ""
+                    try:
+                        _o = json.loads(body or "")
+                        _code = str(_o.get("code") or "")
+                        _msg = str(_o.get("message") or "")
+                    except Exception:
+                        pass
+                    if _code == "444" or "非法链接" in (body or ""):
+                        # 会话层门拒（不是无航班）：给健康页/用户可执行的
+                        # 重登提示，禁止混同为「日历无价」。
+                        self.logger.warning(
+                            "[tongcheng][intl] %s 会话门拒（code=%s %s，"
+                            "body %dB）——请在配置页「渠道登录」重登 tongcheng",
+                            date, _code, _msg, len(body))
+                    else:
+                        self.logger.warning(
+                            "[tongcheng][intl] %s 未拿到日历价（body %dB）",
+                            date, len(body))
                     self._sleep()
                     continue
                 price, tax, transfer = row[0], row[1], row[2]

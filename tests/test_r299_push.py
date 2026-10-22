@@ -219,7 +219,7 @@ def test_cfg_platform_pills_channel_colors():
     import webui
     src = webui.PAGE
     assert 'class="chip pch p-${p}' in src, "胶囊模板未挂渠道类"
-    assert '<i class="pdot ${p}"></i>' in src, "渠道点缺席"
+    assert '${srxPlatIcon(p)}${PLATS[p]}' in src, "渠道官方图标缺席"
     for p in ("qunar", "fliggy", "ctrip", "tongcheng", "tuniu"):
         assert (".chip.pch.p-" + p + ".on{background:color-mix" in src), p
         assert (".chip.pch.p-" + p + ".on .pdot{background:var(--c-"

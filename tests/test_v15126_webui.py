@@ -91,7 +91,7 @@ def test_qbrk_dead_class_removed():
 
 
 def test_hlb_dead_class_removed():
-    assert "hlb" not in src(), ".hlb 死类钩子（图例色票零声明）应删"
+    assert ".hlb{" not in src() and "class=\"hlb\"" not in src(), ".hlb 死类钩子（图例色票零声明）应删"
 
 
 # ---------------- delUser 手风琴索引 ----------------

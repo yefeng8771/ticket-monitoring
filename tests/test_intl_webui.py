@@ -34,9 +34,11 @@ def test_city_panel_intl_section():
 
 def test_set_route_resolves_intl_name_to_code():
     src = webui.PAGE
-    # 名称→码回填走国际字典（城市面板选「东京成田」→ to=NRT 的链路）
-    assert "else if(INTLN[r.from_name])r.from=INTLN[r.from_name];" in src
-    assert "else if(INTLN[r.to_name])r.to=INTLN[r.to_name];" in src
+    # 城市输入双向归一（r355）：中文名或三字码都必须同时回填身份码与展示名。
+    assert "function cfgCityLookup(v)" in src
+    assert "if(a.code){r.from=a.code;r.from_name=a.name}" in src
+    assert "if(b.code){r.to=b.code;r.to_name=b.name}" in src
+    assert "INTLN[n]||''" in src or "INTLN[n]" in src
 
 
 def test_route_head_intl_badge_autodetect():
@@ -56,7 +58,10 @@ def test_cfg_scope_tabs_wired():
     src = webui.PAGE
     assert "cfgScopeSet" in src and "cfgScopeApply" in src
     assert "id=\"cfgScopeBar\"" in src
-    assert "国际=任一端在大陆码集外（自动判定，零配置）" in src
+    # r348：范围/状态收进单行工具条——国际语义改挂在范围 chip 的
+    # title 上，状态改下拉，避免两组「全部」同屏竞争
+    assert 'aria-label="按航线范围筛选"' in src
+    assert 'id="cfgStatusSel"' in src and "cfgStatusSet(this.value)" in src
     # buildForm 重渲尾保持当前 scope 过滤
     assert "cfgScopeApply();   /* scope 分 Tab：重渲后保持当前过滤（R34） */" in src
 

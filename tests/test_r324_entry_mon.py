@@ -167,6 +167,10 @@ def _mtab(page, t):
 
 def _details(page):
     _mtab(page, "details")
+    # Filters are collapsed by default now; open the drawer for filter tests.
+    page.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                  "if(fb&&getComputedStyle(fb).display==='none')togFlt();}")
+    page.wait_for_timeout(200)
 
 
 def _toasts(page):
@@ -996,7 +1000,7 @@ def test_ops01_run_button_arming_then_403(page):
     page.wait_for_timeout(1200)
     assert "❌ 失败: 演示模式只读——下载源码或 zip 即可真跑" in _toasts(page), \
         _toasts(page)
-    assert page.inner_text("#opscard button") == "🔄 立即扫描一轮"
+    assert page.inner_text("#opscard button") == "立即扫描一轮"
     assert page.evaluate(
         "document.querySelector('#opscard button').dataset.arming") is None
 
@@ -1038,7 +1042,7 @@ def test_login_panel_open_and_leave(page):
 
 def test_gl01_theme_three_state_cycle(page):
     """主题三态：真实点击 themeBtn 循环 auto→light→dark：localStorage
-    jptheme + html data-theme + 按钮图标 + aria-label 态名四面同拍。"""
+    jptheme + html data-theme + 按钮 data-mode + aria-label 态名四面同拍。"""
     _goto(page)
     theme0 = page.evaluate("localStorage.getItem('jptheme')")
     assert theme0 in (None, "auto", "light", "dark")
@@ -1047,20 +1051,20 @@ def test_gl01_theme_three_state_cycle(page):
     assert page.evaluate("localStorage.getItem('jptheme')") == "light"
     assert page.evaluate(
         "document.documentElement.dataset.theme") == "light"
-    assert page.inner_text("#themeBtn") == "☀️"
+    assert page.get_attribute("#themeBtn", "data-mode") == "light"
     assert "亮色" in page.get_attribute("#themeBtn", "aria-label")
     page.locator("#themeBtn").click()
     page.wait_for_timeout(250)
     assert page.evaluate("localStorage.getItem('jptheme')") == "dark"
     assert page.evaluate(
         "document.documentElement.dataset.theme") == "dark"
-    assert page.inner_text("#themeBtn") == "🌙"
+    assert page.get_attribute("#themeBtn", "data-mode") == "dark"
     assert "暗色" in page.get_attribute("#themeBtn", "aria-label")
 
 
 def test_gl02_theme_reload_persist(page):
     """主题持久：dark 落 localStorage → 真实重载 → 暗色保持（html
-    data-theme + 按钮 🌙）；auto 档重载后跟随系统（headless=light）。"""
+    data-theme + 按钮 data-mode=dark）；auto 档重载后跟随系统（headless=light）。"""
     _goto(page)
     page.locator("#themeBtn").click()   # →light
     page.locator("#themeBtn").click()   # →dark
@@ -1071,7 +1075,7 @@ def test_gl02_theme_reload_persist(page):
     assert page.evaluate("localStorage.getItem('jptheme')") == "dark"
     assert page.evaluate(
         "document.documentElement.dataset.theme") == "dark"
-    assert page.inner_text("#themeBtn") == "🌙"
+    assert page.get_attribute("#themeBtn", "data-mode") == "dark"
 
 
 def test_gl03_hotkey_views_and_tabs(page):
@@ -1130,6 +1134,11 @@ def test_gl05_esc_cascade_drawer(page):
     _details(page)
     page.set_viewport_size({"width": 390, "height": 800})
     page.wait_for_timeout(400)
+    # _details opened the desktop filter row; close it so this test starts
+    # from the real mobile drawer state before clicking fltBtn.
+    page.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                  "if(fb&&fb.classList.contains('open'))setFltOpen(false);}")
+    page.wait_for_timeout(200)
     assert page.is_visible("#fltBtn")   # ≤760 抽屉唯一入口
     page.locator("#fltBtn").click()
     page.wait_for_timeout(400)

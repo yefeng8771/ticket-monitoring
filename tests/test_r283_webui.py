@@ -21,12 +21,11 @@ _SRC = open(os.path.join(os.path.dirname(os.path.dirname(
 
 
 def test_fltlegend_element_in_drawer():
-    """抽屉内图例元素在场且位于渠道片行之后（首屏可达），词面与宽档
-    常驻图例同语言（四方同语言律）。"""
-    m = re.search(r'id="platchips"></div>\s*'
-                  r'<div class="frow flgrow"><span class="muted" '
+    """抽屉内图例元素在场（r352 移到预设行后，窄屏更早可达），词面与
+    宽档常驻图例同语言（四方同语言律）。"""
+    m = re.search(r'<div class="frow flgrow"><span class="muted" '
                   r'id="fltlegend">([^<]+)</span>', _SRC)
-    assert m, "抽屉图例补位行不在场（或不在渠道片行后）"
+    assert m, "抽屉图例补位行不在场"
     assert "深绿=真达标" in m.group(1) and "描绿=行情破线" in m.group(1) \
         and "琥珀=擦边" in m.group(1), m.group(1)
 

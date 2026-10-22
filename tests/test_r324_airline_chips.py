@@ -148,7 +148,9 @@ _RESTORE = """
 def _to_details(page):
     page.goto(BASE + "/")
     page.wait_for_function("typeof S !== 'undefined' && S && S.users")
-    page.evaluate("showMonTab('details');table();")
+    page.evaluate("showMonTab('details');table();"
+                  "const fb=document.querySelector('.fbar');"
+                  "if(fb&&getComputedStyle(fb).display==='none')togFlt();")
     page.wait_for_timeout(600)
 
 
@@ -254,8 +256,8 @@ def test_attrchips_top_aligned(page):
         out = page.evaluate("""(() => {
           const row = document.getElementById('attrchips');
           const ai = getComputedStyle(row).alignItems;
-          const lab = row.querySelector('.chiplab');
           const wrap = document.getElementById('alchips');
+          const lab = wrap.closest('.agrp').querySelector('.chiplab');
           const chip = wrap.querySelector('.chip');
           const lr = lab.getBoundingClientRect();
           const cr = chip.getBoundingClientRect();
@@ -264,11 +266,11 @@ def test_attrchips_top_aligned(page):
                   chipH: Math.round(cr.height),
                   topDelta: Math.round(Math.abs(lr.top - cr.top))};
         })()""")
-        # r343：属性筛选改单行横滚分组，组内标签/片按中心轴对齐
-        # （topDelta 仍受 ≤2 约束，不会回到多行墙的悬中错位）
-        assert out["ai"] == "center", out
+        # r349：属性筛选改为固定标签轨 + 机场双列，组内标签/片顶对齐；
+        # 高度不再要求相等（标签含 padding），只守首片与标签顶线 ≤2px。
+        assert out["ai"] in ("center", "start"), out
         assert out["topDelta"] <= 2, out
-        assert abs(out["labH"] - out["chipH"]) <= 3, out
+        assert out["labH"] > 0 and out["chipH"] > 0, out
     finally:
         page.evaluate(_RESTORE.replace("%BAK%", "window.__r324bak"))
         page.evaluate("delete window.__r324bak")

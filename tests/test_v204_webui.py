@@ -107,7 +107,8 @@ def test_v204_dirty_state_single_color():
     # savebar dot 衬 card 底维持 --warn——各按衬底取达标令牌，
     # 语义仍是「每处脏态点一个令牌不漂移」
     assert 'id="navDirty" style="display:none;color:var(--warn-deep)' in PAGE
-    assert 'id="cfgDirty" style="display:none;color:var(--warn)' in PAGE
+    assert 'id="cfgDirty" role="status" aria-live="polite"' in PAGE
+    assert ".cfgchrome .cc-chip.warn{color:var(--warn-deep)" in PAGE
     assert (".savebar .dot{width:8px;height:8px;border-radius:50%;"
             "background:var(--warn)") in PAGE
 

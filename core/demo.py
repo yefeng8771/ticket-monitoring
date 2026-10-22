@@ -475,30 +475,50 @@ def demo_health(hours=24, seed=7):
     now = datetime.now().replace(second=0, microsecond=0)
     rounds = []
     n = hours * 4                       # 15min 一轮
+    cal_only = {"ctrip", "fliggy", "tongcheng"}
+
+    def _cell(s, ok, tot, note="", cal=0, detail=0, auth=False):
+        return {"s": s, "ok": ok, "tot": tot, "note": note,
+                "cal": cal, "detail": detail, "need_login": auth}
+
     for i in range(n):
         ts = now - timedelta(minutes=15 * (n - 1 - i))
         plats = {}
         for plat in _PLATS:
             roll = rng.random()
             if plat == "fliggy" and i < n - 14:
-                plats[plat] = {"s": "maint", "ok": 0, "tot": 0,
-                               "note": "渠道维护模式"}
+                plats[plat] = _cell("maint", 0, 0, "渠道维护模式")
             elif plat == "tongcheng" or roll < 0.90:
-                plats[plat] = {"s": "ok", "ok": 3, "tot": 3, "note": ""}
+                if plat in cal_only:
+                    plats[plat] = _cell("ok", 3, 3,
+                                        "日历价 3（无航班明细）", cal=3)
+                else:
+                    plats[plat] = _cell("ok", 3, 3, "", detail=3)
             elif roll < 0.96:
-                plats[plat] = {"s": "part", "ok": 2, "tot": 3,
-                               "note": "部分日期查询失败（2/3 成功）"}
+                if plat in cal_only:
+                    plats[plat] = _cell("part", 2, 3,
+                                        "部分日期查询失败（2/3 成功）",
+                                        cal=2)
+                else:
+                    plats[plat] = _cell("part", 2, 3,
+                                        "部分日期查询失败（2/3 成功）",
+                                        detail=2)
             else:
-                plats[plat] = {"s": "fail", "ok": 0, "tot": 3,
-                               "note": "达到最大重试圈数仍未拿到价格"}
+                plats[plat] = _cell(
+                    "fail", 0, 3, "需登录 · 会话失效" if plat == "qunar"
+                    else "达到最大重试圈数仍未拿到价格",
+                    auth=(plat == "qunar"))
         rounds.append({"ts": ts.strftime("%Y-%m-%d %H:%M"), "plats": plats})
     stats = {}
     for r in rounds:
         for plat, p in r["plats"].items():
             st = stats.setdefault(
                 plat, {"ok": 0, "part": 0, "fail": 0, "maint": 0,
-                       "rate": 0.0})
+                       "rate": 0.0, "cal": 0, "detail": 0, "auth": 0})
             st[p["s"]] += 1
+            st["cal"] += p.get("cal", 0)
+            st["detail"] += p.get("detail", 0)
+            st["auth"] += 1 if p.get("need_login") else 0
     for plat, st in stats.items():
         att = st["ok"] + st["part"] + st["fail"]
         st["rate"] = (st["ok"] / att) if att else 0.0

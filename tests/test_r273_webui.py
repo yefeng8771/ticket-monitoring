@@ -60,8 +60,8 @@ def test_link_underline_base_states():
 
 def test_letter_spacing_tokens():
     assert "--ls05:.5px" in PAGE, "--ls05 半像素档令牌缺席"
-    assert PAGE.count("letter-spacing:var(--ls05)") == 6, \
-        "半像素档消费点应恰 6 处（.seclab .zh/.tag/.pseclab/.rtcode" \
+    assert PAGE.count("letter-spacing:var(--ls05)") == 8, \
+        "半像素档消费点应恰 8 处（r352 关注台/试看条 +2）（.seclab .zh/.tag/.pseclab/.rtcode" \
         "+ r325 .rintl 国际徽标 + R15 .rrt 往返徽标）"
     assert PAGE.count("letter-spacing:var(--ls2)") == 3, \
         "主站两像素档消费点应恰 3 处（.seclab .en/.grouplab .en/15px 展示签）"

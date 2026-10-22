@@ -71,9 +71,10 @@ def main():
     _aborted = False
     prog = open(RESULT, "w", encoding="utf-8")
 
-    def ck(name, cond):
+    def ck(name, cond, detail=""):
         checks.append((name, bool(cond)))
-        prog.write((" ✓ " if cond else " ✗ ") + name + "\n")
+        prog.write((" ✓ " if cond else " ✗ ") + name +
+                   ((" :: " + str(detail)) if (detail and not cond) else "") + "\n")
         prog.flush()
 
     def step(name):
@@ -105,7 +106,7 @@ def main():
             # 环系统性接管 outline 通道（msedge 真实内核复证，主按钮白
             # 字蓝底白环≈隐形），环改走 box-shadow 不受接管、outline 恒关
             _ring = False
-            for _ in range(8):
+            for _ in range(10):   # r340 顶栏新增检索入口（多一枚焦点停）
                 pg.keyboard.press("Tab")
                 if pg.evaluate(
                         "()=>document.activeElement.tagName") == "BUTTON":
@@ -161,9 +162,25 @@ def main():
             ck("航线 chips≥3", len(pg.query_selector_all("#chartRoutes .chip")) >= 3)
 
             # ---- V50 子视图工作台 ----
-            ck("子视图 4 tab",
-               len(pg.query_selector_all("#montabs .mtab")) == 4)
+            ck("子视图 5 tab",
+               len(pg.query_selector_all("#montabs .mtab")) == 5)
+            # 1280 桌面五等分：active 徽标不得撑宽单格；相邻格不得贴线
+            _mt = pg.evaluate("""()=>{
+              const box=document.getElementById('montabs');
+              const ts=[...box.querySelectorAll('.mtab')];
+              const rs=ts.map(x=>x.getBoundingClientRect());
+              const br=box.getBoundingClientRect();
+              return {n:ts.length,
+                eq:Math.max(...rs.map(r=>r.width))-Math.min(...rs.map(r=>r.width))<=1,
+                overlap:rs.slice(0,-1).some((r,i)=>r.right>rs[i+1].left+1),
+                inside:rs.every(r=>r.left>=br.left-1&&r.right<=br.right+1)};}""")
+            ck("1280 五 tab 等宽无贴线",
+               _mt["n"] == 5 and _mt["eq"] and not _mt["overlap"] and _mt["inside"])
             ck("概览默认可见", pg.is_visible("#montab-overview"))
+            ck("r353 总览关注卡容器挂载", pg.evaluate(
+                "()=>!!document.getElementById('monWatchCard')"
+                "&&!!document.getElementById('monWatchList')"
+                "&&!!document.getElementById('monWatchRoutes')"))
             ck("查看明细→明细子视图", pg.evaluate(
                 "()=>{const a=[...document.querySelectorAll('#users a')]"
                 ".find(x=>x.textContent.indexOf('查看明细')>=0);"
@@ -350,6 +367,23 @@ def main():
             # 作用域钉 #hbody：推送通道区(#pushhl)同用 .hrow 类，
             # 全页计数被通道行撑爆（5 渠道+2 通道恒 7）
             ck("健康 5 渠道", len(pg.query_selector_all("#hbody .hrow")) == 5)
+            # r358 来源接入板：PC 停服 → H5 → 登录门；demo 不伪造登录态
+            ck("来源接入板可见", pg.is_visible("#srccap"))
+            ck("来源接入三节点", len(
+                pg.query_selector_all("#srccap .scnode")) == 3)
+            _sc = pg.inner_text("#srccap")
+            ck("来源接入路径词面", all(
+                x in _sc for x in ("PC 网页", "已停服", "H5 机票",
+                                   "登录后可用", "登录态")))
+            ck("来源接入 demo 登录态", "DEMO" in pg.inner_text("#scQState"))
+            ck("来源接入 demo 隐藏登录钮", pg.evaluate(
+                "()=>document.getElementById('scLoginBtn').hidden"))
+            ck("来源接入 H5 落地", pg.evaluate(
+                "()=>{const a=document.querySelector('#srccap a.scbtn');"
+                "return !!a&&a.href==='https://touch.qunar.com/h5/flight/';}"))
+            ck("来源接入板无横向溢出", pg.evaluate(
+                "()=>{const e=document.getElementById('srccap');"
+                "return e.scrollWidth<=e.clientWidth+1;}"))
             cells = pg.query_selector_all(".hc.ok")
             ck("健康格可点", bool(cells))
             # 点击有动作（开日志弹层）必须 pointer 光标
@@ -667,6 +701,10 @@ def main():
 
             # ---- 航班明细子视图 ----
             pg.click('.mtab[data-t="details"]'); pg.wait_for_timeout(400)
+            # 筛选默认折叠：明细交互门先展开抽屉（与生产入口一致）
+            pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                        "if(fb&&getComputedStyle(fb).display==='none')togFlt();}")
+            pg.wait_for_timeout(300)
             n_all = len(pg.query_selector_all("#ftable tbody tr"))
             pg.click('#tabs span[data-f="d"]'); pg.wait_for_timeout(300)
             pg.evaluate("()=>{while(_tblAppend()){}}")   # 切片只渲首 120 行，断言全量先补片
@@ -1021,6 +1059,9 @@ def main():
 
             # ---- CSV 导出 ----
             step("csv download")
+            pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                        "if(fb&&getComputedStyle(fb).display==='none')togFlt();}")
+            pg.wait_for_timeout(250)
             with pg.expect_download() as dl_info:
                 pg.click("text=⬇ 导出CSV")
             ck("CSV 导出", dl_info.value.suggested_filename.endswith(".csv"))
@@ -1049,14 +1090,14 @@ def main():
             pg.click("#themeBtn"); pg.wait_for_timeout(300)
             ck("主题切换", pg.evaluate(
                 "localStorage.getItem('jptheme')||'auto'") != t0)
-            nt0 = pg.inner_text("#ntBtn")
+            nt0 = pg.get_attribute("#ntBtn", "aria-pressed")
             pg.click("#ntBtn"); pg.wait_for_timeout(200)
-            ck("通知开关", pg.inner_text("#ntBtn") != nt0)
+            ck("通知开关", pg.get_attribute("#ntBtn", "aria-pressed") != nt0)
             pg.click("#ntBtn")
 
             # ---- toast / 内联二次确认（v2.0 交互） ----
             step("arming + toast")
-            btn = pg.query_selector("text=🔄 立即扫描一轮")
+            btn = pg.query_selector("text=立即扫描一轮")
             ck("动作按钮存在", btn is not None)
             if btn:
                 btn.click(); pg.wait_for_timeout(300)
@@ -1103,6 +1144,17 @@ def main():
             pg.wait_for_timeout(400)
             ck("390 无横向滚动", pg.evaluate(
                 "document.documentElement.scrollWidth") <= 391)
+            pg.evaluate("showMonTab('health')"); pg.wait_for_timeout(250)
+            ck("390 来源接入板单列无溢出", pg.evaluate(
+                "()=>{const e=document.getElementById('srccap');"
+                "return e.scrollWidth<=e.clientWidth+1;}"))
+            ck("390 来源接入节点不拉高", pg.evaluate(
+                "()=>{const ns=[...document.querySelectorAll('#srccap .scnode')];"
+                "return ns.length===3&&ns.every(n=>n.getBoundingClientRect().height<=90);}"))
+            ck("390 来源接入按钮 32 地板", pg.evaluate(
+                "()=>{const b=document.querySelector('#srccap .scbtn:not([hidden])');"
+                "return !!b&&b.getBoundingClientRect().height>=32;}"))
+            pg.evaluate("showMonTab('overview')"); pg.wait_for_timeout(200)
             # r219 P1-1：概览 kpisum 内联链（查看明细 ▾/走势 ▾）触控
             # 热区实体扩张（inline 垂直 padding 纯扩命中区不占布局）——
             # ::after 外扩不计 bounding box，36 地板以盒高验收；量纲
@@ -1115,6 +1167,9 @@ def main():
             pg.evaluate("showMonTab('details')")
             pg.wait_for_timeout(200)
             ck("筛选抽屉按钮", pg.is_visible("#fltBtn"))
+            pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                        "if(fb&&fb.classList.contains('open'))setFltOpen(false);}")
+            pg.wait_for_timeout(150)
             pg.click("#fltBtn"); pg.wait_for_timeout(300)
             ck("抽屉展开", "open" in (pg.get_attribute(".fbar", "class") or ""))
             # ---- ≤760 图例/柱簇同轴（computed 值不随 display 翻转）
@@ -1154,7 +1209,7 @@ def main():
             # ---- 健康时间线 xhint 判定若发生在隐藏容器
             # （首渲 sw=0 恒 false，「默认加载→点健康」主路径死档）——
             # 清类后经 showMonTab 切回须补拍挂回 ----
-            pg.evaluate("togFlt()")   # 收起抽屉复位
+            pg.evaluate("setFltOpen(false)")   # 收起抽屉复位（显式闭合，防状态翻转）
             pg.evaluate("document.querySelectorAll('.hcells')"
                         ".forEach(x=>x.classList.remove('xhint'));"
                         "showMonTab('overview')")
@@ -1168,6 +1223,13 @@ def main():
             # ---- 健康格触控热区不被 overflow 裁剪（.hcells overflow-x
             # auto 强制 overflow-y auto，::after 纵向外扩落裁剪区外=热区
             # 形同虚设+隐藏纵滚；修法=容器 padding 外衬+事件穿透）----
+            # v1.5.274：健康页激活会自动滚到最新轮，首格可能已在屏外左侧；
+            # 热区判据与滚动位无关，先复位再取首格
+            pg.evaluate("()=>{const x=document.querySelector('.hcells');"
+                        "if(!x)return;x.scrollLeft=0;"
+                        "const c=x.querySelector('.hc');"
+                        "if(c)c.scrollIntoView({block:'center'});}")
+            pg.wait_for_timeout(200)
             ck("健康格热区 37px 可达", pg.evaluate(
                 "()=>{const x=document.querySelector('.hcells');"
                 "if(!x)return false;const c=x.querySelector('.hc');"
@@ -1264,6 +1326,8 @@ def main():
             # transform 位移，钉随真值收紧——容差放宽回 6 会重新
             # 掩护欠校正回归）
             pg.evaluate("window.scrollTo(0,1510)"); pg.wait_for_timeout(300)
+            pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                        "if(fb&&fb.classList.contains('open'))setFltOpen(false);}")
             pg.click("#fltBtn"); pg.wait_for_timeout(400)
             ck("390 深滚开抽屉落点可见", pg.evaluate(
                 "(()=>{const f=document.querySelector('.fbar');"
@@ -1272,7 +1336,16 @@ def main():
                 "return f.getBoundingClientRect().top>="
                 "t.getBoundingClientRect().bottom-2&&"
                 "f.getBoundingClientRect().top<window.innerHeight;})()"))
-            pg.evaluate("togFlt()")   # 收起抽屉复位
+            # CTA 贴底工具条：底缘与视口齐平（不留 12px 缝隙漏内容），
+            # 抽屉尾部让位 ≥60px，最后一行可完整滚到 CTA 上方。
+            ck("390 筛选 CTA 贴底且抽屉末行让位", pg.evaluate(
+                "(()=>{const c=document.querySelector('.fdrawer-cta');"
+                "const f=document.querySelector('.fbar.open');"
+                "if(!c||!f)return false;"
+                "return Math.abs(c.getBoundingClientRect().bottom"
+                "-window.innerHeight)<=1"
+                "&&parseFloat(getComputedStyle(f).paddingBottom)>=60;})()"))
+            pg.evaluate("setFltOpen(false)")   # 收起抽屉复位（显式闭合，防状态翻转）
             # Esc 同拍回收：toast 分支序在展开行之后——toast 驻留期
             # 按 Esc 曾只关 toast（return 早退），展开行要等 toast
             # 自然消散（toast 只读即点即关，不得挡内容态回收）
@@ -1648,10 +1721,14 @@ def main():
                 if(!e||!e.offsetWidth)return null;
                 const r=e.getBoundingClientRect();return [r.left,r.right];};
               return {cv:g('cfgview'), hd:g('hdcard'), nav:g('mainnav')};}""")
-            ck("1920 cfg 内容卡随监控页突破", _cw["cv"] is not None
+            # r349 设计变更：配置工作区与监控页同宽突破，不再额外收口居中；
+            # 侧栏/主视图 nav 与服务端内容左缘同轴，页头 18px 满幅包住。
+            ck("1920 cfg 内容卡随监控页拓宽", _cw["cv"] is not None
+               and _cw["cv"][1] - _cw["cv"][0] > 1400
                and abs(_cw["cv"][0] - _al["chartL"]) < 3)
-            ck("1920 cfg 标题条对齐", _cw["hd"] is not None
-               and abs(_cw["hd"][0] - _cw["cv"][0]) < 3)
+            ck("1920 cfg 标题条包住内容卡", _cw["hd"] is not None
+               and _cw["hd"][0] <= _cw["cv"][0] + 1
+               and _cw["hd"][1] >= _cw["cv"][1] - 1)
             ck("1920 cfg 视图 nav 对齐", _cw["nav"] is not None
                and abs(_cw["nav"][0] - _cw["cv"][0]) < 3)
             pg.evaluate("switchView('mon')")
@@ -1681,6 +1758,28 @@ def main():
             ck("面板互斥：全局隐", not pg.is_visible("#sec-globals-card"))
             ck("渠道登录卡网格", len(
                 pg.query_selector_all("#loginRows .lgcard")) == 5)
+            ck("Qunar 登录卡 H5 标", pg.evaluate(
+                "()=>{const t=document.querySelector('#loginRows .lgtag');"
+                "return !!t&&t.textContent.trim()==='H5';}"))
+            ck("Qunar 必须登录", "必须登录" in pg.inner_text(
+                "#loginRows .lgcard"))
+            ck("Qunar 停服登录说明", "2026-10-10" in pg.inner_text(
+                "#loginRows .lgnote"))
+            _lg = pg.evaluate("""()=>{
+              const g=document.querySelector('#loginRows .lggrid');
+              const cs=g?[...g.querySelectorAll('.lgcard')]:[];
+              if(!g||cs.length!==5)return {ok:false,why:'no-login-grid'};
+              const rows={};cs.forEach(c=>{const r=c.getBoundingClientRect();
+                const k=Math.round(r.top);(rows[k]=rows[k]||[]).push(+r.width.toFixed(1));});
+              const equal=Object.values(rows).every(a=>
+                Math.max(...a)-Math.min(...a)<2);
+              const flat=cs.every(c=>getComputedStyle(c).transform==='none');
+              const bs=cs.map(c=>{const b=c.querySelector('.btn2');
+                return b?+b.getBoundingClientRect().width.toFixed(1):0});
+              return {ok:equal&&flat&&Math.max(...bs)-Math.min(...bs)<1.5,
+                rows:Object.keys(rows).length,equal,flat,btn:bs};}
+            """)
+            ck("r349d 登录卡等宽同顶/无位移/按钮等宽 %s" % _lg, _lg["ok"])
             ck("渠道登录行渲染", len(
                 pg.query_selector_all("#loginRows .btn2")) >= 5)
             cnode0 = pg.evaluate(
@@ -1781,8 +1880,8 @@ def main():
                 "const lbl=c.querySelector('.chhead .muted')"
                 ".textContent==='GitHub 图库';"
                 "return gh&&sm&&fr&&lbl;}"))
-            ck("通道测试按钮", pg.query_selector("text=🔔 发测试弹窗")
-               is not None and pg.query_selector("text=🔔 测试 ntfy")
+            ck("通道测试按钮", pg.query_selector("text=发测试弹窗")
+               is not None and pg.query_selector("text=测试 ntfy")
                is not None)
             # 图床卡「测试上传」两段式——ghimg 夹具无 Token：客户端守卫
             # 早退（结果行不出、不发请求）；填 Token 后再点：demo 只读
@@ -1893,6 +1992,15 @@ def main():
             _gt = pg.inner_text("#sec-globals-card")
             ck("全局配置中心分组", all(t in _gt for t in ("调度", "采集",
                "启动级")) and "🔥" in _gt and "♻" in _gt)
+            pg.evaluate("openRestartCenter&&openRestartCenter()")
+            pg.wait_for_timeout(400)
+            ck("重启中心浮层让位保存条", pg.evaluate("""()=>{
+              const rc=document.getElementById('restartCenter');
+              const sb=document.querySelector('.savebar');
+              return !!rc&&rc.classList.contains('on')
+                &&(!sb||getComputedStyle(sb).visibility==='hidden');}"""))
+            pg.evaluate("closeRestartCenter&&closeRestartCenter()")
+            pg.wait_for_timeout(200)
             # glsec 输出归一 class="subsec"（带 hairline 收尾线，
             # margin 恒定；glsec 类残留 0=归一彻底）
             ck("glsec 归一 subsec", pg.evaluate(
@@ -1928,7 +2036,84 @@ def main():
             pg.keyboard.press("Control+s")
             pg.wait_for_timeout(600)
             ck("Ctrl+S 保存", (pg.inner_text("#cfgmsg") or "").strip() != "")
-            ck("配置分区导航", len(pg.query_selector_all("#cfgnav .cnav")) == 3)
+            ck("配置分区导航", len(pg.query_selector_all("#cfgnav .cnav")) == 4)
+            # r353 样式落地钉：航班监控分区 HTML 在而 CSS 曾被并行清理整段
+            # 删除（无样式的裸表单）。按计算样式钉死工具条/字段网格/表单
+            # 边框与面板内 containment，任何整段丢失即红。
+            pg.click('#cfgnav .cnav[data-p="watch"]'); pg.wait_for_timeout(700)
+            # 关注编排默认取首条航线/日期；前面的配置测试可能改动过状态，
+            # 显式选一个未过期日期再刷新候选，保证航司图标有真实行可挂。
+            pg.evaluate("""()=>{try{loadCfgWatch(true)}catch(e){}}""")
+            pg.wait_for_timeout(900)
+            pg.evaluate("""()=>{const ds=document.getElementById('cwDate');
+              if(ds&&ds.options.length){
+                const o=[...ds.options].find(x=>x.value
+                  &&x.textContent.indexOf('已过期')<0)||ds.options[0];
+                ds.value=o.value;}
+              if(typeof cfgWatchFormRefresh==='function')cfgWatchFormRefresh();}""")
+            pg.wait_for_timeout(900)
+            _cw = pg.evaluate("""()=>{
+              const tool=document.querySelector('#panel-watch .cfgwatch-toolbar');
+              const grid=document.querySelector('#panel-watch .cwf-grid');
+              const form=document.querySelector('#panel-watch .cfgwatch-form');
+              const panel=document.getElementById('panel-watch');
+              if(!tool||!grid||!form)return {ok:false};
+              const tr=tool.getBoundingClientRect(),pr=panel.getBoundingClientRect();
+              return {ok:getComputedStyle(tool).display==='flex'
+                &&getComputedStyle(grid).display==='grid'
+                &&getComputedStyle(form).borderTopWidth!=='0px'
+                &&tr.left>=pr.left-1&&tr.right<=pr.right+1};}""")
+            ck("航班监控分区样式落地", bool(_cw.get("ok")))
+            _cwi = pg.evaluate("""()=>{const im=[...document.querySelectorAll(
+                '#panel-watch img.bic')];
+              return {n:im.length,bad:im.filter(i=>!i.complete||!i.naturalWidth).length,
+                ota:document.querySelectorAll('#panel-watch img.bic-ota').length,
+                air:document.querySelectorAll('#panel-watch img.bic-air').length};}""")
+            try:
+                pg.wait_for_function("""()=>{const im=[...document.querySelectorAll(
+                  '#panel-watch img.bic')];
+                  return im.length>0&&im.every(i=>i.complete&&i.naturalWidth>0);}""",
+                  timeout=8000)
+            except Exception:
+                pass
+            # 打开添加表单：即使演示用户暂时没有关注卡，也能验证 5 个渠道
+            # 官方图标与候选航班的圆形航司图标；有卡时再核对卡内图标。
+            _cards = pg.evaluate(
+                "document.querySelectorAll('#cfgWatchList .cw-item').length")
+            if pg.locator('#panel-watch [data-cwact="add"]').count():
+                pg.locator('#panel-watch [data-cwact="add"]').first.click()
+                pg.wait_for_timeout(1200)
+            _cwi = pg.evaluate("""()=>{const im=[...document.querySelectorAll(
+                '#panel-watch img.bic')];
+              return {n:im.length,bad:im.filter(i=>!i.complete||!i.naturalWidth).length,
+                ota:document.querySelectorAll('#panel-watch img.bic-ota').length,
+                air:document.querySelectorAll('#panel-watch img.bic-air').length,
+                cards:document.querySelectorAll('#cfgWatchList .cw-item').length};}""")
+            ck("r353 配置台渠道/航司图标随行落地",
+               _cwi["ota"] >= 5 and _cwi["bad"] == 0
+               and (_cwi["cards"] == 0 or _cwi["air"] > 0))
+            pg.evaluate("try{cfgWatchReset()}catch(e){}")
+            pg.wait_for_timeout(300)
+            pg.click('#cfgnav .cnav[data-p="globals"]'); pg.wait_for_timeout(300)
+            # 演示模式不得泄露运行机真实路径：runtime/storage/globals 全部
+            # 指向合成目录；该钉同时保护截图与在线静态站。
+            ck("演示模式路径脱敏", pg.evaluate("""()=>{
+              if(typeof RUNTIME==='undefined')return false;
+              const r=RUNTIME.root||'';
+              const a=((GLB_STORE||{}).db||{}).abs||'';
+              const b=((GLB_STORE||{}).bdir||{}).abs||'';
+              return RUNTIME.demo===true
+                && /TicketMonitor|ticket-monitor/.test(r)
+                && /TicketMonitor|ticket-monitor/.test(a)
+                && a.indexOf('idea_project')<0
+                && b.indexOf('idea_project')<0;}"""))
+            _pv = pg.evaluate("""async()=>await (await fetch(
+              '/api/path-check?which=ud&path=user_data_migrated')).json()""")
+            ck("演示模式迁移路径脱敏",
+               str(_pv.get("abs", "")).endswith("user_data_migrated")
+               and "idea_project" not in str(_pv.get("abs", ""))
+               and "idea_project" not in str(
+                   (_pv.get("migration") or {}).get("to", "")))
             ck("浮出保存条", pg.is_visible("#savebar"))
             ck("脏计数显示", "处" in pg.inner_text("#saveTxt"))
             # ---- savebar 泄漏钉：弄脏态切监控视图浮条必须回收
@@ -1991,8 +2176,7 @@ def main():
             ck("无匹配孤儿头隐藏", pg.evaluate(
                 "()=>[...document.querySelectorAll("
                 "'#cfgview .grouplab,#cfgview .uhead2,#cfgview .uhead,"
-                "#cfgview .subsec,#cfgview .addrbtn,"
-                "#cfgview .ucard button.danger')]"
+                "#cfgview .subsec,#cfgview .addrbtn')]"
                 ".every(d=>d.style.display==='none')"))
             # 动作钮收编真命中：搜「添加航线」钮文本精确命中可见
             pg.fill("#cfgSearch", "添加航线"); pg.wait_for_timeout(300)
@@ -2006,11 +2190,11 @@ def main():
             # 回用户面板做导入导出
             pg.click('#cfgnav .cnav[data-p="users"]')
             pg.wait_for_timeout(400)
-            ck("导入导出按钮", pg.query_selector("text=📤 导出配置")
-               is not None and pg.query_selector("text=📥 导入配置")
+            ck("导入导出按钮", pg.query_selector("text=导出配置")
+               is not None and pg.query_selector("text=导入配置")
                is not None)
             with pg.expect_download() as cfgdl:
-                pg.click("text=📤 导出配置")
+                pg.click("text=导出配置")
             ck("配置导出 JSON",
                cfgdl.value.suggested_filename.endswith(".json"))
             try:
@@ -2272,7 +2456,7 @@ def main():
             # EN-2 桌面视图切换器吸顶：深滚切视图不回滚（≤540 同款能力）。
             # 几何行为钉（LESSONS：源码钉只证声明在场，几何钉是唯一真相）
             pg.set_viewport_size({"width": 1440, "height": 900})
-            pg.evaluate("gotoMonTab('details')"); pg.wait_for_timeout(500)
+            pg.evaluate("gotoMonTab('details');setFltOpen(true)"); pg.wait_for_timeout(500)
             pg.evaluate("window.scrollTo(0,1400)"); pg.wait_for_timeout(300)
             ck("EN-2 桌面 montabs 深滚吸顶贴 header", pg.evaluate(
                 "()=>{const m=document.getElementById('montabs')"
@@ -2287,7 +2471,7 @@ def main():
             # 1440 钉只量宽档，该带行为由本钉守护
             pg.set_viewport_size({"width": 800, "height": 900})
             pg.wait_for_timeout(300)
-            pg.evaluate("gotoMonTab('details')"); pg.wait_for_timeout(400)
+            pg.evaluate("gotoMonTab('details');setFltOpen(true)"); pg.wait_for_timeout(400)
             pg.evaluate("window.scrollTo(0,1200)"); pg.wait_for_timeout(300)
             ck("EN-2 800 带吸顶贴折行 header 底", pg.evaluate(
                 "()=>{const m=document.getElementById('montabs')"
@@ -2467,14 +2651,14 @@ def main():
                 "()=>{const mb=document.getElementById('montabs');"
                 "const cr=mb.getBoundingClientRect();"
                 "const ts=[...mb.querySelectorAll('.mtab')];"
-                "const r=ts[3].getBoundingClientRect();"
+                "const r=ts[4].getBoundingClientRect();"
                 "return {h:r.height,inside:r.top>=cr.top-1&&"
                 "r.bottom<=cr.bottom+1,n:ts.length,"
                 "sw:mb.scrollWidth,cw:mb.clientWidth,"
                 "xh:mb.classList.contains('xhint'),"
                 "vis:mb.offsetParent!==null};}")
-            ck("390 档切换器第四格完整在容器", bool(
-                _w1 and _w1.get("n") == 4 and _w1.get("h", 0) >= 30
+            ck("390 档切换器第五格完整在容器", bool(
+                _w1 and _w1.get("n") == 5 and _w1.get("h", 0) >= 30
                 and _w1.get("inside") and _w1.get("vis")))
             # 溢出暗示阈值判定：EN-6 字号归并后 390 档内容溢出收窄至
             # 3px（<4px「可滚才挂」阈值）——暗示不亮是正确行为（3px
@@ -2485,7 +2669,7 @@ def main():
 
             # ---- EN-W4 行为钉：mtab 方向键族移动 + Enter 激活 ----
             pg.evaluate(
-                "document.querySelectorAll('#montabs .mtab')[2].focus()")
+                "document.querySelectorAll('#montabs .mtab')[3].focus()")
             pg.keyboard.press("ArrowRight")
             ck("mtab 方向键族移动", pg.evaluate(
                 "()=>document.activeElement&&"
@@ -2505,7 +2689,7 @@ def main():
             # 倒计时折行下曾盖住切换器 33px）。状态复位：height 清空 ----
             pg.set_viewport_size({"width": 800, "height": 900})
             pg.wait_for_timeout(300)
-            pg.evaluate("gotoMonTab('details')")
+            pg.evaluate("gotoMonTab('details');setFltOpen(true)")
             pg.evaluate(
                 "document.getElementById('hdcard').style.height='120px'")
             pg.wait_for_timeout(400)
@@ -2680,6 +2864,7 @@ def main():
             # ---- EN-6 行为钉：全页字号阶梯无 x.5 半步 ----
             ck("字号阶梯无半步", pg.evaluate(
                 "()=>[...document.querySelectorAll('body *')]"
+                ".filter(e=>e.getClientRects().length>0)"
                 ".every(e=>!/\\.5px$/.test("
                 "getComputedStyle(e).fontSize))"))
 
@@ -2857,7 +3042,7 @@ def main():
             pg.set_viewport_size({"width": 1440, "height": 900})
             ck("chips 重建焦点恢复·渠道", pg.evaluate(
                 """()=>{
-                  showMonTab('details');
+                  showMonTab('details');setFltOpen(true);
                   const el=document.querySelector('#platchips');
                   let chips=[...el.querySelectorAll('.chip')];
                   if(!chips.length)return false;
@@ -2989,15 +3174,15 @@ def main():
             _p22diag = pg.evaluate(
                 "async ()=>{pushLog();"
                 "await new Promise(r=>setTimeout(r,700));"
-                "const it=document.querySelector('#pvMask .plitem');"
-                "if(it)it.click();"
-                "await new Promise(r=>setTimeout(r,80));"
-                "const a=document.querySelector('#pvMask .pvbody a');"
-                "if(!a)return 'no-a items='+(!!it);"
-                "a.focus({focusVisible:true});"
-                "const sh=getComputedStyle(a).boxShadow;"
-                "closePv();"
-                "return 'sh='+sh+' active='+(document.activeElement===a);}")
+                "const its=[...document.querySelectorAll('#pvMask .plitem')];"
+                "for(const it of its){it.click();"
+                " await new Promise(r=>setTimeout(r,80));"
+                " const a=document.querySelector('#pvMask .pvbody a');"
+                " if(a){a.focus({focusVisible:true});"
+                "  const sh=getComputedStyle(a).boxShadow;closePv();"
+                "  return 'sh='+sh+' active='+(document.activeElement===a)"
+                "   +' items='+its.length;}}"
+                "closePv();return 'no-a items='+its.length;}")
             pg.unroute("**/*")
             prog.write("WC-P2-2 诊断: %s\n" % _p22diag)
             ck("WC-P2-2 pvbody 链接焦点环",
@@ -3396,19 +3581,29 @@ def main():
             _vp0 = pg.viewport_size
             pg.set_viewport_size({"width": 390, "height": 844})
             pg.wait_for_timeout(700)   # resize 批次 debounce 200ms 余量
+            # r349 设计变更：390 档从横滚+渐隐改为四列全可见，
+            # 消灭「预览推送」被裁的可发现性缺陷；<=360 再落 2x2。
             _w1a = pg.evaluate(
                 "()=>{const b=document.querySelector('#opscard .opsbtns');"
                 "if(!b)return 'NO_BTN';"
-                "return !!(b.classList.contains('xhint')"
-                "&&b.scrollWidth>b.clientWidth+4);}")
-            ck("r247 W1 窄档opsbtns暗示挂载", _w1a is True)
+                "const cs=getComputedStyle(b);"
+                "const cols=cs.gridTemplateColumns.split(' ').filter(Boolean).length;"
+                "const bs=[...b.querySelectorAll('button')];"
+                "const br=b.getBoundingClientRect();"
+                "const vis=bs.length===4&&bs.every(x=>{const r=x.getBoundingClientRect();"
+                "return r.width>0&&r.right<=br.right+1&&r.left>=br.left-1;});"
+                "return !!(cs.display==='grid'&&cols===4&&vis"
+                "&&b.scrollWidth<=b.clientWidth+4);}")
+            ck("r247 W1 窄档opsbtns四列全可见", _w1a is True)
             _w1b = pg.evaluate(
                 "()=>{const b=document.querySelector('#opscard .opsbtns');"
                 "if(!b)return 'NO_BTN';"
-                "const m=getComputedStyle(b).maskImage"
-                "||getComputedStyle(b).webkitMaskImage||'';"
-                "return m.indexOf('gradient')>=0;}")
-            ck("r247 W1 暗示mask渐隐在位", _w1b is True)
+                "const rs=[...b.querySelectorAll('button')]"
+                ".map(x=>x.getBoundingClientRect());"
+                "return !!(rs.length===4"
+                "&&Math.max(...rs.map(r=>r.height))<=38"
+                "&&Math.min(...rs.map(r=>r.width))>60);}")
+            ck("r247 W1 窄档opsbtns等宽同高", _w1b is True)
             pg.set_viewport_size(_vp0)
             pg.wait_for_timeout(700)
             _w1c = pg.evaluate(
@@ -3436,6 +3631,8 @@ def main():
                 "th.blur();"
                 "return ok;}")
             ck("r249 P1-1 首列表头聚焦双影环", _r9a is True)
+            pg.evaluate("()=>{const fb=document.querySelector('.fbar');"
+                        "if(fb&&getComputedStyle(fb).display==='none')setFltOpen(true);}")
             _r9b = pg.evaluate(
                 "()=>{const el=document.getElementById('fq');"
                 "if(!el)return 'NO_FQ';"
@@ -3524,9 +3721,10 @@ def main():
                 "sw:tw.scrollWidth,cw:tw.clientWidth};}")
             pg.set_viewport_size(_vp0)
             pg.wait_for_timeout(200)
-            ck("r253 P2-2 窄档表内横滚提示点亮",
-               isinstance(_r11b, dict) and _r11b.get("on") is True
-               and _r11b.get("sw", 0) > _r11b.get("cw", 0))
+            # v1.5.274：390 明细改卡片后容器不再横滚，提示应熄灭且不溢出
+            ck("r253 P2-2 窄档卡片化后无横滚提示",
+               isinstance(_r11b, dict) and _r11b.get("on") is False
+               and _r11b.get("sw", 0) <= _r11b.get("cw", 0))
 
             # ---- r261 词面单源钉（放流程末尾：钉内视图切换不污染
             # 下游——本段之后仅剩统计落盘） ----
@@ -3769,7 +3967,7 @@ def main():
                           +' chips='+document.querySelectorAll('#routechips .chip').length
                           +'/'+document.querySelectorAll('#datechips .chip').length
                           +' scrollY='+window.scrollY};}""")
-            ck("375 图例补位行首屏可达（渠道片行后，免滚动）（%s）"
+            ck("375 图例补位行首屏可达（预设行后，免滚动）（%s）"
                % _lgd.get("why"), _lgd["ok"])
             pg.evaluate("(()=>{const fb=document.querySelector('.fbar');"
                         "if(fb&&fb.classList.contains('open'))togFlt();})()")
@@ -3800,24 +3998,18 @@ def main():
             step("吸顶切换器滚轮横滚")
             pg.set_viewport_size({"width": 375, "height": 812})
             pg.evaluate("showMonTab('overview')"); pg.wait_for_timeout(300)
-            ck("375 吸顶切换器 wheel 纵滚转写横滚（滚轮通道不缺位）",
+            ck("375 切换器五格单行全可见（触控高≥36）",
                pg.evaluate(
-                """async ()=>{
+                """()=>{
                   const m=document.getElementById('montabs');
                   if(!m)return false;
-                  const pad=document.createElement('span');
-                  pad.style.cssText='display:inline-block;width:600px;';
-                  m.appendChild(pad);
-                  try{
-                    if(m.scrollWidth<=m.clientWidth+4)return false;
-                    const before=m.scrollLeft;
-                    m.dispatchEvent(new WheelEvent('wheel',
-                      {deltaY:160,bubbles:true,cancelable:true}));
-                    await new Promise(rs=>setTimeout(rs,120));
-                    const moved=m.scrollLeft>before;
-                    m.scrollLeft=0;
-                    return moved;
-                  }finally{ pad.remove(); }
+                  const cr=m.getBoundingClientRect();
+                  const ts=[...m.querySelectorAll('.mtab')];
+                  return ts.length===5
+                    &&m.scrollWidth<=m.clientWidth+1
+                    &&ts.every(t=>{const r=t.getBoundingClientRect();
+                      return r.left>=cr.left-1&&r.right<=cr.right+1
+                        &&r.height>=36;});
                 }"""))
             pg.set_viewport_size(_vp0); pg.wait_for_timeout(200)
             pg.evaluate("switchView('cfg')"); pg.wait_for_timeout(300)
@@ -3864,17 +4056,19 @@ def main():
             step("r291 cfg 城市守卫与保存反馈")
             pg.evaluate("switchView('cfg');showCfgPanel('users')")
             pg.wait_for_timeout(250)
-            # P3-1：users 动作行四钮同排同高——副钮 .btn2 与主钮同
-            # padding/字号，解析高度恒差=上下 border 各 1px（2px），
-            # 容差 3px 锁「视觉齐线」语义、给字号/边框演进留余量
+            # 动作条唯一性（r348）：添加入口只在工具条出现一次；保存
+            # 不在面板内平铺（脏态由全局 savebar 承担）；数据动作同排同高
             _btnrow = pg.evaluate("""()=>{
-              const bs=[...document.querySelectorAll('#sec-users>.row button')];
+              const bs=[...document.querySelectorAll('#sec-users .cfgtoolbar-act button')];
               const hs=bs.map(b=>Math.round(b.getBoundingClientRect().height));
-              return {n:bs.length, spread:hs.length?Math.max(...hs)-Math.min(...hs):-1};
+              return {n:bs.length, spread:hs.length?Math.max(...hs)-Math.min(...hs):-1,
+                      add:document.querySelectorAll('#sec-users button[onclick="addUser()"]').length,
+                      save:document.querySelectorAll('#sec-users button[onclick="saveCfg()"]').length};
             }""")
-            ck("P3-1 动作行四钮高差 ≤3px（实测 spread=%s n=%s）"
-               % (_btnrow["spread"], _btnrow["n"]),
-               _btnrow["n"] >= 4 and _btnrow["spread"] <= 3)
+            ck("P3-1 动作条三钮同高且添加/保存唯一（spread=%s n=%s add=%s save=%s）"
+               % (_btnrow["spread"], _btnrow["n"], _btnrow["add"], _btnrow["save"]),
+               _btnrow["n"] == 3 and _btnrow["spread"] <= 3
+               and _btnrow["add"] == 1 and _btnrow["save"] == 0)
             # P1-1 归一例：「哈尔滨市」剥市后缀命中 HRB（wizard 先例：
             # 剥「市」归一成功是正路，非拦截）——saveCfg 同步校验段
             # 在首个 await 前执行完，快照即校验产物
@@ -4351,24 +4545,28 @@ def main():
                 ck("R6 动作按钮收尾（chgrid 尾件=%s addEm=%s）"
                    % (_r6["tag"], _r6["isAdd"]), _r6["isAdd"] is True)
 
-            # R7 网格与删除用户钮的呼吸缝：暗色下两钮 0px 贴合=边框互切
-            #   的粘叠观感（用户立案「遮挡」），动作件与配置组之间留
-            #   与网格 gap 同律的 10px 呼吸缝；钉面锁 computed margin
-            #   +实测间隙双证（≥8px 容差防字体亚像素抖动假红）
+            # R7 删除用户入口从卡内底部移到卡头：收起态也一眼可达，
+            #   不再要求「展开→滚到最底」；卡内底部不得残留同一动作
             _r7 = pg.evaluate(
-                """(()=>{const g=document.querySelector('#cfgform .chgrid');
-                 const del=document.querySelector('#cfgform button[onclick*="delUser"]');
-                 if(!g||!del)return {err:'缺件'};
-                 const add=g.querySelector('button[onclick*="addEm"]');
-                 const ar=add.getBoundingClientRect(),dr=del.getBoundingClientRect();
-                 return {mt:getComputedStyle(del).marginTop,
-                         gap:Math.round(dr.top-ar.bottom)};})()""")
+                """(()=>{const h=document.querySelector('#cfgform .uhead2');
+                 if(!h)return {err:'缺卡头'};
+                 const was=h.getAttribute('aria-expanded');
+                 if(was==='true')h.click();
+                 const del=h.querySelector('.uact.danger');
+                 const r=del?del.getBoundingClientRect():{width:0,height:0};
+                 const out={visible:!!del&&r.width>12&&r.height>12,
+                            label:del?(del.getAttribute('aria-label')||''):'',
+                            bottom:document.querySelectorAll('#cfgform .ucard > button.danger').length,
+                            collapsed:h.getAttribute('aria-expanded')};
+                 if(was==='true')h.click();
+                 return out;})()""")
             if _r7.get("err"):
-                ck("R7 呼吸缝（%s）" % _r7["err"], False)
+                ck("R7 卡头删除入口（%s）" % _r7["err"], False)
             else:
-                ck("R7 呼吸缝（mt=%s 实测间隙=%spx≥8）"
-                   % (_r7["mt"], _r7["gap"]),
-                   _r7["mt"] == "10px" and _r7["gap"] >= 8)
+                ck("R7 删除用户入口收起态可达（label=%s bottom=%s）"
+                   % (_r7["label"][:14], _r7["bottom"]),
+                   _r7["visible"] and "删除用户" in _r7["label"]
+                   and _r7["bottom"] == 0 and _r7["collapsed"] == "false")
 
             # ---- r312 P3-1 header 出血随 wrap padding 同函数（几何行为
             #   钉，三带巡检）：391-599 带旧 -18px 常量出血 > clamp 地板
@@ -4459,7 +4657,8 @@ def main():
             for _ow in (390, 600, 768):
                 pg.set_viewport_size({"width": _ow, "height": 900})
                 pg.goto(pg.url.split("#")[0] + "#details/u0")
-                pg.wait_for_selector("#ftable tr:not(.erow)",
+                # v1.5.274：≤900 表头也收起，旧选择器首命中 thead 行会判不可见
+                pg.wait_for_selector("#ftable tbody tr[data-k]",
                                      timeout=15000)
                 pg.wait_for_timeout(400)
                 _oh = pg.evaluate(_orphan_js)
@@ -4872,7 +5071,8 @@ def main():
             #   视图/视口段内复位 ----
             step("r326 审计收口")
             pg.evaluate("switchView('mon')")
-            pg.evaluate("showMonTab('details')"); pg.wait_for_timeout(400)
+            pg.evaluate("resetFltUI()"); pg.wait_for_timeout(450)
+            pg.evaluate("showMonTab('details')"); pg.wait_for_timeout(500)
             pg.evaluate("()=>{while(_tblAppend()){}}")
             _a3 = pg.evaluate(
                 """()=>{
@@ -4892,11 +5092,11 @@ def main():
                   const intlF=[...document.querySelectorAll(
                     '#ftable tbody tr[data-k]')]
                     .find(r=>r.querySelector('.tag.t-i')
-                          &&r.querySelector('.pdot.fliggy'));
+                          &&r.querySelector('[data-plat="fliggy"]'));
                   const domF=[...document.querySelectorAll(
                     '#ftable tbody tr[data-k]')]
                     .find(r=>!r.querySelector('.tag.t-i')
-                          &&r.querySelector('.pdot.fliggy'));
+                          &&r.querySelector('[data-plat="fliggy"]'));
                   return {intlNoPretax: intlF
                            ? !intlF.querySelector('.pretax') : null,
                           domHasPretax: domF
@@ -5085,6 +5285,82 @@ def main():
                _f4["v"] == "MU,春秋"
                and (_f4["intlRows"] > 0) == _has_intl
                and (_f4["wl"] > 0) == _has_intl)
+            # r349b 航司常用 chips：8 个快捷片必须全部落在 quick 容器内，
+            # 且每片文字不被 overflow:hidden 裁掉；≥1500 单行 8 列、
+            # 541–1499 两行 4 列（标签独占一行），≤540 两列四行。
+            pg.evaluate("""()=>{
+              try{cfgSearchClear&&cfgSearchClear()}catch(e){}
+              try{cfgScopeSet&&cfgScopeSet('all')}catch(e){}
+              try{cfgStatusSet&&cfgStatusSet('all')}catch(e){}
+              const nav=document.querySelector('#cfgnav .cnav[data-p="users"]');
+              if(nav)nav.click();
+              try{OPEN_USER=0;buildForm()}catch(e){}
+              const u=document.querySelector('#cfgform .uhead2');
+              if(u&&u.getAttribute('aria-expanded')!=='true')toggleUser(u);
+              const sec=document.querySelector('.grouplab[data-sec="C"]');
+              if(sec&&sec.getAttribute('aria-expanded')!=='true')sec.click();
+              const rh=document.querySelector('.rline[data-rk] .rhead');
+              if(rh&&rh.getAttribute('aria-expanded')!=='true')rh.click();
+              const th=document.querySelector('.rline[data-rk] .rthead');
+              if(th&&th.getAttribute('aria-expanded')!=='true')th.click();
+            }""")
+            pg.wait_for_timeout(500)
+            _q = pg.evaluate("""()=>{
+              const q=document.querySelector('.rline[data-rk] .airquick');
+              if(!q)return {ok:false,why:'no-airquick'};
+              const qr=q.getBoundingClientRect();
+              const chips=[...q.querySelectorAll('.chip')];
+              const rs=chips.map(c=>c.getBoundingClientRect());
+              const allIn=chips.every((c,i)=>rs[i].width>0
+                &&rs[i].left>=qr.left-1&&rs[i].right<=qr.right+1);
+              const noClip=chips.every(c=>c.scrollWidth<=c.clientWidth+1);
+              const rows=new Set(rs.map(r=>Math.round(r.top))).size;
+              const expect=innerWidth>=1500?1:(innerWidth>=541?2:4);
+              return {ok:chips.length===8&&allIn&&noClip
+                &&q.scrollWidth<=q.clientWidth+1
+                &&(expect==null||rows===expect),
+                n:chips.length,allIn,noClip,rows,expect,
+                qw:Math.round(qr.width),sw:q.scrollWidth,cw:q.clientWidth};}
+            """)
+            ck("r349 航司常用 chips 全在容器内且不裁字 %s" % _q, _q["ok"])
+            _vp_q = pg.viewport_size
+            pg.set_viewport_size({"width": 390, "height": 844})
+            pg.wait_for_timeout(700)
+            pg.evaluate("""()=>{
+              try{cfgSearchClear&&cfgSearchClear()}catch(e){}
+              try{cfgScopeSet&&cfgScopeSet('all')}catch(e){}
+              try{cfgStatusSet&&cfgStatusSet('all')}catch(e){}
+              const nav=document.querySelector('#cfgnav .cnav[data-p="users"]');
+              if(nav)nav.click();
+              try{OPEN_USER=0;buildForm()}catch(e){}
+              const u=document.querySelector('#cfgform .uhead2');
+              if(u&&u.getAttribute('aria-expanded')!=='true')toggleUser(u);
+              const sec=document.querySelector('.grouplab[data-sec="C"]');
+              if(sec&&sec.getAttribute('aria-expanded')!=='true')sec.click();
+              const rh=document.querySelector('.rline[data-rk] .rhead');
+              if(rh&&rh.getAttribute('aria-expanded')!=='true')rh.click();
+              const th=document.querySelector('.rline[data-rk] .rthead');
+              if(th&&th.getAttribute('aria-expanded')!=='true')th.click();
+            }""")
+            pg.wait_for_timeout(500)
+            _q390 = pg.evaluate("""()=>{
+              const q=document.querySelector('.rline[data-rk] .airquick');
+              if(!q)return {ok:false,why:'no-airquick'};
+              const qr=q.getBoundingClientRect();
+              const chips=[...q.querySelectorAll('.chip')];
+              const rs=chips.map(c=>c.getBoundingClientRect());
+              const allIn=chips.every((c,i)=>rs[i].width>0
+                &&rs[i].left>=qr.left-1&&rs[i].right<=qr.right+1);
+              const noClip=chips.every(c=>c.scrollWidth<=c.clientWidth+1);
+              const rows=new Set(rs.map(r=>Math.round(r.top))).size;
+              return {ok:chips.length===8&&allIn&&noClip
+                &&q.scrollWidth<=q.clientWidth+1&&rows===4
+                &&document.documentElement.scrollWidth<=innerWidth+1,
+                n:chips.length,allIn,noClip,rows,docW:document.documentElement.scrollWidth};}
+            """)
+            ck("r349 390 航司常用 chips 不越界 %s" % _q390, _q390["ok"])
+            pg.set_viewport_size(_vp_q)
+            pg.wait_for_timeout(700)
             # ⑥ 往返多返程日：开→返程行在场→去程起7天→ret_dates 7
             # 且首日=最早出发日（能力与去程一致）。toggleRT/quickRet
             # 各自 buildForm 重建 DOM——每次点击后重新取件（ detachment
@@ -5300,6 +5576,48 @@ def main():
             ck("r342 存储四卡：绝对路径/体积/打开动作齐备",
                _pm342["n"] == 4 and _pm342["glabs"] >= 4
                and _pm342["abs"] >= 4 and _pm342["bdir"])
+            # r349c 配置文件卡：三个路径动作必须在同一顶部动作组，且不得
+            # 与 PID/监听/命令等元信息文本相交；元信息自身不得横向裁字。
+            _po = pg.evaluate("""()=>{
+              const h=document.querySelector('.storehead');
+              if(!h)return {ok:false,why:'no-storehead'};
+              const meta=h.querySelector('.sh-meta');
+              const acts=[...h.querySelectorAll('button,.chip[role=button]')];
+              const mr=meta?meta.getBoundingClientRect():null;
+              const overlap=acts.some(a=>{const r=a.getBoundingClientRect();
+                return mr&&r.left<mr.right-1&&r.right>mr.left+1
+                  &&r.top<mr.bottom-1&&r.bottom>mr.top+1;});
+              const hr=h.getBoundingClientRect();
+              const inHead=acts.every(a=>{const r=a.getBoundingClientRect();
+                return r.left>=hr.left-1&&r.right<=hr.right+1;});
+              return {ok:!!meta&&acts.length===3&&!overlap&&inHead
+                &&meta.scrollWidth<=meta.clientWidth+1,
+                n:acts.length,overlap,inHead,
+                metaClip:!!meta&&meta.scrollWidth>meta.clientWidth+1};}
+            """)
+            ck("r349 配置文件元信息与动作不重叠 %s" % _po, _po["ok"])
+            _vp_p = pg.viewport_size
+            pg.set_viewport_size({"width": 671, "height": 844})
+            pg.wait_for_timeout(700)
+            _p671 = pg.evaluate("""()=>{const h=document.querySelector('.storehead');
+              const m=h&&h.querySelector('.sh-meta');
+              const bs=h?[...h.querySelectorAll('.sh-act')]:[];
+              if(!h||!m||bs.length!==3)return {ok:false,n:bs.length};
+              const rs=bs.map(b=>b.getBoundingClientRect());
+              const mr=m.getBoundingClientRect();
+              const sameRow=new Set(rs.map(r=>Math.round(r.top))).size===1;
+              const equal=Math.max(...rs.map(r=>r.width))-Math.min(...rs.map(r=>r.width))<=2;
+              const noOverlap=rs.every(r=>r.left>=mr.left-1&&r.right<=mr.right+1
+                &&r.bottom<=mr.top+1);
+              const inHead=rs.every(r=>r.left>=h.getBoundingClientRect().left-1
+                &&r.right<=h.getBoundingClientRect().right+1);
+              return {ok:sameRow&&equal&&noOverlap&&inHead
+                &&m.scrollWidth<=m.clientWidth+1,
+                sameRow,equal,noOverlap,inHead};}
+            """)
+            ck("r349 671 配置文件动作三列等宽 %s" % _p671, _p671["ok"])
+            pg.set_viewport_size(_vp_p)
+            pg.wait_for_timeout(700)
             _pc342 = pg.evaluate("""async()=>{
               const r=await fetch('/api/path-check?which=ud&path=user_data_probe');
               const j=await r.json();
@@ -5337,6 +5655,517 @@ def main():
                pg.evaluate("!document.getElementById('fltsum').innerText.trim()"))
             pg.evaluate("showMonTab('overview')"); pg.wait_for_timeout(250)
 
+            # ---- r340 生产实时检索页 ----
+            pg.evaluate("switchView('search')")
+            pg.wait_for_timeout(800)
+            _pr = pg.evaluate("""()=>({
+              f:!!document.getElementById('srxFrom'),t:!!document.getElementById('srxTo'),
+              d:!!document.getElementById('srxDate'),go:!!document.getElementById('srxGo'),
+              chips:document.querySelectorAll('#srxPlatPick input').length})""")
+            ck("r340c 主动探针表单完整", _pr["f"] and _pr["t"] and _pr["d"] and _pr["go"] and _pr["chips"] == 5)
+            _srx = pg.evaluate("""()=>({
+              view:getComputedStyle(document.getElementById('searchview')).display,
+              rows:document.querySelectorAll('#srxRows .srx-row').length,
+              mch:document.querySelectorAll('#srxMirror [data-mch]').length,
+              mrows:document.querySelectorAll('#srxMirror .srx-mrow').length,
+              nav:document.getElementById('navSearch').classList.contains('on')})""")
+            ck("r340b 解析列表+五渠道原页镜像",
+               _srx["view"] == "block" and _srx["rows"] > 0
+               and _srx["mch"] == 5 and _srx["mrows"] > 0 and _srx["nav"])
+            # r353 官方品牌图标层：渠道方形 App 图标 / 航司圆形图标；
+            # 到达 +1 徽标不得改变文本基线。
+            _bic = pg.evaluate("""()=>{
+              const rows=[...document.querySelectorAll('#srxRows .srx-row')];
+              const txtTop=el=>{const r=document.createRange();
+                r.selectNodeContents(el.childNodes[0]);
+                return r.getBoundingClientRect().top;};
+              const offs=rows.map(row=>{
+                const b=row.querySelectorAll('.srx-times b');
+                return b.length<2?0:Math.abs(txtTop(b[0])-txtTop(b[1]));});
+              const imgs=[...document.querySelectorAll(
+                '#srxRows .srx-plat img.bic-ota,#srxRows .srx-airline img.bic-air')];
+              const xd=document.querySelector('#srxRows .xday');
+              return {chan:document.querySelectorAll(
+                        '#srxRows .srx-plat img.bic-ota').length,
+                air:document.querySelectorAll(
+                        '#srxRows .srx-airline img.bic-air').length,
+                bad:imgs.filter(i=>!i.complete||!i.naturalWidth).length,
+                mtab:document.querySelectorAll(
+                        '#srxMirror .srx-mtab img.bic-ota').length,
+                xdays:document.querySelectorAll('#srxRows .xday').length,
+                xinside:xd?!!xd.closest('.arr'):false,
+                maxOff:offs.length?Math.max(...offs):0};}""")
+            ck("r353 渠道方形/航司圆形官方图标",
+               _bic["chan"] > 0 and _bic["air"] > 0
+               and _bic["bad"] == 0 and _bic["mtab"] == 5)
+            ck("r353 起降时刻基线零漂移",
+               _bic["maxOff"] <= 0.6
+               and (_bic["xdays"] == 0 or not _bic["xinside"]))
+            # r349：直接打开首条非日历真实行——全局「解析详情」跟随
+            # 选中行，日历薄行无 raw 时会让字段→raw 高亮用例假红。
+            # 先闭合可能驻留的详情抽屉，并给 raw 拉取留足并发余量。
+            pg.evaluate("""()=>{const d=document.getElementById('srxDetail');
+              const c=d&&d.querySelector('[data-srxclose]');
+              if(c&&d.classList.contains('open'))c.click();}""")
+            pg.wait_for_timeout(250)
+            pg.evaluate("""()=>{const b=document.querySelector(
+              '#srxRows .srx-row:not(.cal) [data-openbtn]');if(b)b.click();}""")
+            pg.wait_for_timeout(1500)
+            _srxd = pg.evaluate("""()=>({
+              open:document.getElementById('srxDetail').classList.contains('open'),
+              fields:document.querySelectorAll('#srxDetail .srx-f').length,
+              raw:document.querySelectorAll('#srxRawBox .rk').length,
+              tabs:document.querySelectorAll('#srxDetail .srx-dtab').length})""")
+            # demo 的 /api/state 行是合成行号，/api/probe/raw 按真实 DB 行
+            # 回放会返回 "row not found"——这是 demo 边界，不是生产缺陷；
+            # 生产 raw 由 docs/search_live_gate.py 对 8765 真库验证。
+            _rawtxt = pg.locator("#srxRawWrap").inner_text() if pg.locator("#srxRawWrap").count() else ""
+            ck("r340b 三重对齐抽屉+原始行",
+               _srxd["open"] and _srxd["fields"] >= 14
+               and _srxd["tabs"] >= 5
+               and (_srxd["raw"] > 0 or "原始行回放失败" in _rawtxt
+                    or "无当轮 raw" in _rawtxt))
+            _bicd = pg.evaluate("""()=>({
+              air:document.querySelectorAll(
+                '#srxDetail .srx-dtitle img.bic-air').length,
+              ota:document.querySelectorAll(
+                '#srxDetail .srx-dtitle img.bic-ota').length,
+              bad:[...document.querySelectorAll('#srxDetail img.bic')]
+                .filter(i=>!i.complete||!i.naturalWidth).length})""")
+            ck("r353 详情头渠道/航司双语义",
+               _bicd["air"] == 1 and _bicd["ota"] == 1
+               and _bicd["bad"] == 0)
+            # 字段聚焦是纯前端行为：demo 合成行注入一条 raw，验证点击
+            # 字段必须高亮被点字段 + 对应 raw 键（生产真 raw 另有 live gate）
+            pg.evaluate("""()=>{const f=srxFindSel();if(!f)return;
+              const k=srxRawKey(f);SRX_RAW[k]={ok:true,raw:{
+                price:f.price,code:f.code,depTime:f.depTime,arrTime:f.arrTime,
+                name:f.name,transCity:f.trans},row:{platform:f.platKey}};
+              srxRenderDetail(true);}""")
+            pg.wait_for_timeout(250)
+            pg.evaluate("""()=>{const f=document.querySelector(
+              '#srxDetail .srx-f[data-rk*="price"]');if(f)f.click();}""")
+            pg.wait_for_timeout(250)
+            try:
+                pg.wait_for_function(
+                    "()=>document.querySelectorAll('#srxRawBox .hit').length===1",
+                    timeout=5000)
+            except Exception:
+                pass
+            ck("r340b 字段聚焦 raw 键高亮",
+               pg.evaluate("document.querySelectorAll('#srxRawBox .hit').length") == 1)
+            pg.evaluate("document.querySelector('#srxDetail [data-srxclose]').click()")
+            pg.wait_for_timeout(200)
+            pg.click('.srx-hero-act button:has-text("五平台校准册")'); pg.wait_for_timeout(400)
+            _srxg = pg.evaluate("""()=>({
+              open:document.getElementById('srxGallery').classList.contains('open'),
+              rails:document.querySelectorAll('#srxGallery [data-galch]').length,
+              views:document.querySelectorAll('#srxGallery [data-galview]').length})""")
+            ck("r340b 五平台校准册四视图", _srxg["open"] and _srxg["rails"] == 5 and _srxg["views"] == 4)
+            pg.evaluate("srxCloseGallery()"); pg.wait_for_timeout(200)
+            pg.evaluate("""()=>{const d=document.querySelectorAll(
+              '#srxDates [data-date]');if(d.length>1)d[1].click();}""")
+            pg.wait_for_timeout(350)
+            ck("r340 日期筛选后仍有真实行",
+               pg.evaluate("document.querySelectorAll('#srxRows .srx-row').length") > 0)
+            pg.evaluate("switchView('mon');showMonTab('overview')")
+            pg.wait_for_timeout(300)
+
+            # ===== r354 UI 质量回归门（按缺陷出现的视口钉死） =====
+            # 1) 分区编号在单页内唯一（旧 04/04、05/05 重复）
+            _dupn = []
+            for _tab in ["overview", "trend", "watch", "details", "health"]:
+                pg.evaluate("showMonTab('%s')" % _tab)
+                pg.wait_for_timeout(250)
+                _nos = pg.evaluate("""()=>[...document.querySelectorAll(
+                  '#monview [role=tabpanel]')].filter(p=>p.offsetParent!==null)
+                  .flatMap(p=>[...p.querySelectorAll('.seclab .no')]
+                  .map(x=>x.textContent.trim()))""")
+                if len(_nos) != len(set(_nos)):
+                    _dupn.append((_tab, _nos))
+            ck("r354 分区编号单页唯一", not _dupn, str(_dupn[:2]))
+            # 2) 关注台无 <10px 文字（旧 8px 标签）
+            pg.evaluate("showMonTab('watch')")
+            pg.wait_for_timeout(400)
+            _tiny = pg.evaluate("""()=>[...document.querySelectorAll(
+              '#montab-watch *')].filter(e=>{const s=getComputedStyle(e);
+              return e.children.length===0&&e.textContent.trim()
+                &&parseFloat(s.fontSize)<10}).length""")
+            ck("r354 关注台无 <10px 文字", _tiny == 0, str(_tiny))
+            # 3) 总览迷你走势不再画 7px SVG 文本（标签下沉 DOM 图例）
+            pg.evaluate("showMonTab('overview')")
+            pg.wait_for_timeout(300)
+            ck("r354 迷你走势无 SVG 文本",
+               pg.evaluate(
+                   "document.querySelectorAll('#monWatchList svg text').length") == 0)
+            # 4) 明细每行都有走势入口（单航线×单日期也不再消失）
+            pg.evaluate("showMonTab('details')")
+            pg.wait_for_timeout(400)
+            ck("r354 明细行行有走势入口",
+               pg.evaluate(
+                   "document.querySelectorAll('#ftable tbody tr .tj').length") > 0)
+            ck("r354 时长统一 X时YY分",
+               pg.evaluate(
+                   "()=>[durTxt('10小时45分钟'),durTxt('11时05分钟'),"
+                   "durTxt('25h40m')].join('|')") ==
+               "10时45分|11时05分|25时40分")
+            # 5) 1280×900 首屏露出解析列表表头（旧 grid 顶到 899px）
+            pg.set_viewport_size({"width": 1280, "height": 900})
+            pg.evaluate("switchView('search')")
+            pg.wait_for_timeout(700)
+            _gt = pg.evaluate("""()=>{const e=document.querySelector(
+              '#srxGrid');return e?e.getBoundingClientRect().top:9999}""")
+            ck("r354 1280×900 首屏见列表", _gt < 880, "%.0f" % _gt)
+            # 6) ≤1100 吸顶概览/筛选条与视图 tab 不重叠
+            pg.set_viewport_size({"width": 1024, "height": 768})
+            pg.evaluate("window.scrollTo(0,900)")
+            pg.wait_for_timeout(500)
+            _ov = pg.evaluate("""()=>{const a=document.querySelector(
+              '#srxMobilebar').getBoundingClientRect(),
+              b=document.querySelector('.srx-mtabs').getBoundingClientRect();
+              return Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)}""")
+            ck("r354 移动吸顶条不重叠", _ov <= 4, "%.1f" % _ov)
+            # 7) 1683×820 短屏桌面不再误入移动模式（价带/五源/KPI 可见）
+            pg.set_viewport_size({"width": 1683, "height": 820})
+            pg.wait_for_timeout(500)
+            ck("r354 短屏桌面保留证据面",
+               pg.evaluate("""()=>getComputedStyle(
+                 document.querySelector('#srxBand')).display!=='none'
+                 &&getComputedStyle(document.querySelector(
+                   '#srxMobilebar')).display==='none'"""))
+            # 8) 390 弹层左右各 12px，页面无横溢
+            pg.set_viewport_size({"width": 390, "height": 844})
+            pg.evaluate("srxOpenHealth()")
+            pg.wait_for_timeout(400)
+            _mr = pg.evaluate("""()=>{const e=document.querySelector(
+              '#srxModal');const r=e.getBoundingClientRect();
+              return {x:r.x,right:r.right,sw:document.documentElement.scrollWidth,
+                cw:document.documentElement.clientWidth}}""")
+            ck("r354 390 弹层贴边 12px 且无横溢",
+               abs(_mr["x"] - 12) <= 1 and abs(_mr["right"] - (_mr["cw"] - 12)) <= 1
+               and _mr["sw"] <= _mr["cw"] + 1, str(_mr))
+            pg.evaluate("srxCloseModal()")
+            # 9) 城市面板底部 >=8px 且锁定背景滚动
+            pg.evaluate("""async()=>{await srxEnsureCityData();
+              document.querySelector('#srxProbe').classList.add('open');
+              srxOpenCityPanel('srxFrom')}""")
+            pg.wait_for_timeout(500)
+            _cp = pg.evaluate("""()=>({gap:window.innerHeight-
+              document.querySelector('#citypanel').getBoundingClientRect().bottom,
+              ov:getComputedStyle(document.body).overflow})""")
+            ck("r354 城市面板底距/滚动锁",
+               _cp["gap"] >= 8 and _cp["ov"] == "hidden", str(_cp))
+            pg.keyboard.press("Escape")
+            pg.wait_for_timeout(200)
+            # 10) 移动筛选 Esc 可收起 + 两面板互斥
+            pg.evaluate("srxToggleMobile('filters')")
+            pg.wait_for_timeout(150)
+            pg.keyboard.press("Escape")
+            pg.wait_for_timeout(200)
+            ck("r354 移动筛选 Esc 收起",
+               pg.evaluate("""()=>!document.querySelector('#searchview')
+                 .classList.contains('show-filters')"""))
+            # 11) 重启中心焦点圈闭 + 关闭归还触发点
+            pg.set_viewport_size({"width": 1512, "height": 950})
+            pg.evaluate("switchView('cfg')")
+            pg.wait_for_timeout(400)
+            pg.evaluate("""()=>{const t=document.querySelector(
+              '#cfgChromeRestart');t.focus();openRestartCenter()}""")
+            pg.wait_for_timeout(300)
+            _trap = True
+            for _ in range(12):
+                pg.keyboard.press("Tab")
+                if not pg.evaluate("""()=>document.querySelector(
+                  '#restartCenter').contains(document.activeElement)"""):
+                    _trap = False
+                    break
+            pg.keyboard.press("Escape")
+            pg.wait_for_timeout(200)
+            _ret = pg.evaluate("""()=>document.activeElement===
+              document.querySelector('#cfgChromeRestart')""")
+            ck("r354 重启中心焦点圈闭/归还", _trap and _ret,
+               "trap=%s ret=%s" % (_trap, _ret))
+            # 12) 航班监控表单有取消且底栏吸底可达
+            pg.evaluate("showCfgPanel('watch')")
+            pg.wait_for_timeout(600)
+            pg.evaluate("cfgWatchAddOpen()")
+            pg.wait_for_timeout(400)
+            _cw = pg.evaluate("""()=>{const c=document.querySelector(
+              '#cwCancel'),f=document.querySelector('.cwf-foot'),
+              s=document.querySelector('.cwf-switches');
+              return {cancel:!!c&&c.offsetParent!==null,
+                sticky:f?getComputedStyle(f).position:'',
+                overlap:!!(f&&s)&&f.getBoundingClientRect().top<s.getBoundingClientRect().bottom-1}}""")
+            # v1.5.274：吸底页脚在长表单滚动中持续盖字段，改为表单尾部
+            # 常驻段；门禁从「sticky」反转为「static 且不压开关行」
+            ck("r354 监控表单取消/页脚不吸底",
+               _cw["cancel"] and _cw["sticky"] == "static"
+               and not _cw["overlap"], str(_cw))
+            pg.evaluate("cfgWatchReset()")
+            pg.wait_for_timeout(200)
+            pg.evaluate("switchView('mon');showMonTab('overview')")
+            pg.wait_for_timeout(300)
+
+            # ===== r355 UI 语义/布局回归门 =====
+            pg.set_viewport_size({"width": 1360, "height": 900})
+            pg.evaluate("switchView('search')")
+            pg.wait_for_timeout(900)
+            pg.evaluate("""()=>{window.scrollTo(0,0);
+              const p=document.querySelector('#srxProbe');
+              if(p)p.classList.remove('open')}""")
+            pg.wait_for_timeout(250)
+            _fs = pg.evaluate("""()=>{const r=document.querySelector(
+              '#srxRows .srx-row');const c=document.querySelector('#srxContext');
+              const f=r?r.getBoundingClientRect():null;
+              return {bottom:f?f.bottom:9999,ih:window.innerHeight,
+                collapsed:c.classList.contains('ctx-collapsed'),
+                chips:document.querySelectorAll('#srxCapbar .capchip').length,
+                cap:document.querySelector('#srxCapbar').innerText,
+                filt:document.querySelector('#srxFilterBtn').innerText}}""")
+            ck("r355 1360 首屏完整列表行", _fs["bottom"] <= _fs["ih"] + 1, str(_fs))
+            ck("r355 筛选默认折叠+入口可见",
+               _fs["collapsed"] and "筛选" in _fs["filt"], str(_fs))
+            ck("r355 国际能力条五渠道语义",
+               _fs["chips"] == 0 or ("国际数据能力" in _fs["cap"]
+               and _fs["chips"] >= 5), str(_fs))
+            pg.click("#srxFilterBtn")
+            pg.wait_for_timeout(250)
+            _exp = pg.evaluate("""()=>!document.querySelector('#srxContext')
+              .classList.contains('ctx-collapsed')""")
+            pg.click("#srxFilterBtn")
+            pg.wait_for_timeout(200)
+            ck("r355 筛选展开/收起", _exp, "")
+            pg.evaluate("""()=>{const p=document.querySelector('#srxProbe');
+              if(p)p.classList.add('open')}""")
+            pg.wait_for_timeout(300)
+            _ic = pg.evaluate("""()=>{const b=document.querySelector(
+              '#searchview .srx-citychev');const s=b&&b.querySelector('svg');
+              if(!b||!s)return {skip:true};
+              const br=b.getBoundingClientRect(),sr=s.getBoundingClientRect();
+              return {bw:br.width,bh:br.height,sw:sr.width,sh:sr.height,
+                      pad:getComputedStyle(b).padding}}""")
+            ck("r355 探针城市箭头可见", _ic.get("skip")
+               or (_ic["sw"] >= 10 and _ic["sh"] >= 10 and _ic["bw"] >= 24),
+               str(_ic))
+            pg.evaluate("""()=>{const p=document.querySelector('#srxProbe');
+              if(p)p.classList.remove('open')}""")
+            pg.wait_for_timeout(200)
+            _lk = pg.evaluate("""()=>{const s=document.querySelector(
+              '.srx-src[data-src]');const a=s&&s.querySelector('a[data-openlink]');
+              if(!a)return {skip:true};window.open=()=>null;
+              const b=s.getAttribute('aria-pressed');a.click();
+              return {b,after:s.getAttribute('aria-pressed')}}""")
+            ck("r355 渠道原页链接不劫持筛选",
+               _lk.get("skip") or _lk["b"] == _lk["after"], str(_lk))
+            pg.set_viewport_size({"width": 1024, "height": 900})
+            pg.wait_for_timeout(300)
+            pg.locator('#srxGrid').scroll_into_view_if_needed()
+            pg.wait_for_timeout(250)
+            _ov = pg.evaluate("""()=>{const a=document.querySelector(
+              '.srx-mtabs').getBoundingClientRect();const b=document.querySelector(
+              '.srx-listhead').getBoundingClientRect();
+              return {overlap:Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top))}}""")
+            ck("r355 1024 吸顶条不遮列表头", _ov["overlap"] <= 0, str(_ov))
+            # 配置航线卡：键盘焦点即可联想，Enter 精确回填码+名
+            pg.set_viewport_size({"width": 1512, "height": 950})
+            pg.evaluate("switchView('cfg')")
+            pg.wait_for_timeout(400)
+            pg.evaluate("showCfgPanel('users')")
+            pg.wait_for_timeout(600)
+            pg.evaluate("""()=>{const i=document.getElementById('rtTo_0_0');
+              if(!i||i.offsetParent===null){const h=document.querySelector(
+                '.rline[data-rk="0:0"] .rhead');if(h)h.click()}}""")
+            pg.wait_for_timeout(300)
+            _rc = pg.evaluate("""()=>{const b=[...document.querySelectorAll(
+              '.rt-citymore')].find(x=>x.offsetParent!==null);
+              if(!b)return {skip:true};const r=b.getBoundingClientRect();
+              return {w:r.width,h:r.height,pad:getComputedStyle(b).padding}}""")
+            ck("r355 配置城市箭头可见", _rc.get("skip")
+               or (_rc["w"] >= 12 and _rc["h"] >= 20), str(_rc))
+            pg.evaluate("""()=>{const i=document.getElementById('rtTo_0_0');
+              if(!i)return;i.value='';i.dispatchEvent(new Event('input',
+                {bubbles:true}));i.focus()}""")
+            pg.keyboard.type("长沙", delay=60)
+            pg.wait_for_timeout(650)
+            _co = pg.evaluate("""()=>({n:document.querySelectorAll(
+              '#rtTo_0_0Drop .cwf-cityopt').length,
+              vis:!document.getElementById('rtTo_0_0Drop').hidden})""")
+            pg.keyboard.press("Enter")
+            pg.wait_for_timeout(300)
+            _cm = pg.evaluate("""()=>({to:CFG[0].routes[0].to,
+              name:CFG[0].routes[0].to_name})""")
+            _res = pg.evaluate("""()=>cfgCityLookup('长沙')""")
+            ck("r355 配置城市联想+码名解析", _co["n"] > 0 and _co["vis"]
+               and _res.get("code") == "CSX", str({"drop": _co, "res": _res}))
+            pg.evaluate("switchView('mon');showMonTab('overview')")
+            pg.wait_for_timeout(200)
+
+            # ---- v1.5.273 检索台诚实性与矩阵身份列 ----
+            pg.set_viewport_size({"width": 1512, "height": 950})
+            pg.evaluate("switchView('search')")
+            pg.wait_for_selector("#searchview .srx-row", timeout=15000)
+            pg.wait_for_timeout(500)
+            _hon = pg.evaluate("""()=>({
+              live:document.getElementById('srxLiveTag').textContent.trim(),
+              mode:document.getElementById('srxModeLabel').textContent.trim(),
+              sub:document.getElementById('srxHeroSub').textContent})""")
+            ck("v15273 演示检索不冒充 LIVE", _hon["live"] == "DEMO"
+               and "演示数据" in _hon["mode"] and "演示库" in _hon["sub"],
+               str(_hon))
+            pg.evaluate("srxToggleView()")
+            pg.wait_for_selector("#searchview .srx-mx", timeout=10000)
+            pg.wait_for_timeout(250)
+            _mx = pg.evaluate("""()=>{
+              const thd=document.querySelector('#searchview .srx-thead');
+              const th=document.querySelector('#searchview .srx-mx th');
+              const td=document.querySelector('#searchview .srx-mx td');
+              const a=getComputedStyle(th),c=getComputedStyle(td);
+              return {thd:getComputedStyle(thd).display,pos:a.position,
+                      top:a.top,tdpos:c.position,left:c.left};}""")
+            ck("v15273 矩阵表头吸附且不压列表头",
+               _mx["thd"] == "none" and _mx["pos"] == "sticky"
+               and _mx["top"] == "0px" and _mx["tdpos"] == "sticky"
+               and _mx["left"] == "0px", str(_mx))
+            pg.evaluate("srxToggleView()")
+            pg.set_viewport_size({"width": 390, "height": 844})
+            pg.wait_for_timeout(400)
+            _mob = pg.evaluate("""()=>{
+              const r=document.querySelector('#searchview .srx-row');
+              const q=document.getElementById('srxQ');
+              const note=document.getElementById('srxBandNote');
+              return {cols:getComputedStyle(r).gridTemplateColumns,
+                      q:getComputedStyle(q).fontSize,
+                      band:getComputedStyle(note,'::after').content,
+                      ow:document.documentElement.scrollWidth-window.innerWidth};}""")
+            ck("v15273 移动端操作列与输入不缩放",
+               _mob["cols"].endswith("118px") and _mob["q"] == "16px"
+               and _mob["ow"] <= 0, str(_mob))
+            ck("v15273 移动价带滑动提示在场",
+               "左右滑动查看更多日期" in _mob["band"], str(_mob))
+            # ---- v1.5.274 平板卡片 / 空态行 / 表单页脚 / 城市全量 ----
+            pg.set_viewport_size({"width": 768, "height": 900})
+            pg.evaluate("switchView('mon');showMonTab('details')")
+            pg.wait_for_timeout(700)
+            _v274 = pg.evaluate("""()=>{const tw=document.querySelector('#tablecard .tw');
+              const tr=document.querySelector('#ftable tbody tr[data-k]');
+              const cs=getComputedStyle(tw);
+              return {sw:tw.scrollWidth,cw:tw.clientWidth,
+                disp:tr?getComputedStyle(tr).display:null,
+                mask:cs.maskImage||cs.webkitMaskImage||'none',
+                th:getComputedStyle(document.querySelector('#ftable thead')).display};}""")
+            ck("v15274 768 明细转卡片零横滚",
+               _v274["sw"] <= _v274["cw"] and _v274["disp"] == "grid"
+               and _v274["th"] == "none" and _v274["mask"] == "none", str(_v274))
+            pg.set_viewport_size({"width": 390, "height": 844})
+            pg.wait_for_timeout(300)
+            pg.click("#fltBtn")
+            pg.fill("#fq", "ZZZZ")
+            pg.wait_for_timeout(450)
+            _er = pg.evaluate("""()=>{const tr=document.querySelector('#ftable tr.erow');
+              if(!tr)return {found:false};
+              const td=tr.querySelector('td'),r=tr.getBoundingClientRect();
+              return {found:true,h:Math.round(r.height),
+                w:Math.round(td.getBoundingClientRect().width),
+                row:Math.round(r.width)};}""")
+            ck("v15274 无结果行不塌陷",
+               _er.get("found") and _er["h"] > 40
+               and abs(_er["w"] - (_er["row"] - 24)) < 6, str(_er))
+            pg.evaluate("resetFltUI();document.querySelector('.fbar')?.classList.remove('open')")
+            pg.evaluate("switchView('cfg');showCfgPanel('watch')")
+            pg.wait_for_timeout(900)
+            pg.evaluate("document.querySelector('[data-cwact=add]')?.click()")
+            pg.wait_for_timeout(450)
+            _cf = pg.evaluate("""()=>{const f=document.querySelector('.cwf-foot'),
+                s=document.querySelector('.cwf-switches');
+              if(!f||!s)return {found:false};
+              const fr=f.getBoundingClientRect(),sr=s.getBoundingClientRect();
+              const bs=[...f.querySelectorAll('.btn2')].map(b=>Math.round(b.getBoundingClientRect().width));
+              return {found:true,pos:getComputedStyle(f).position,
+                overlap:fr.top<sr.bottom-1,bs};}""")
+            ck("v15274 关注页脚不吸底且主次对称",
+               _cf.get("found") and _cf["pos"] == "static" and not _cf["overlap"]
+               and _cf["bs"][0] >= _cf["bs"][1] * 1.8
+               and _cf["bs"][1] == _cf["bs"][2], str(_cf))
+            pg.evaluate("document.querySelector('[data-cwmode=custom]')?.click()")
+            pg.wait_for_timeout(200)
+            pg.fill("#cwFromCity", "")
+            pg.focus("#cwFromCity")
+            pg.wait_for_timeout(500)
+            _city = pg.evaluate("""()=>{const d=document.getElementById('cwFromCityDrop');
+              return {n:d.querySelectorAll('.cwf-cityopt').length,
+                more:!!d.querySelector('[data-cwshowall]'),hidden:d.hidden};}""")
+            ck("v15274 关注城市全量入口在场",
+               not _city["hidden"] and _city["n"] >= 8 and _city["more"], str(_city))
+            pg.evaluate("document.querySelector('#cwFromCityDrop [data-cwshowall]')?.click()")
+            pg.wait_for_timeout(450)
+            _cityall = pg.evaluate("""()=>{const d=document.getElementById('cwFromCityDrop');
+              return {n:d.querySelectorAll('.cwf-cityopt').length,
+                regions:[...d.querySelectorAll('.cwf-citynone')].map(x=>x.textContent).join('|')};}""")
+            ck("v15274 全部城市可浏览", _cityall["n"] > 200
+               and "国内" in _cityall["regions"], str(_cityall))
+            pg.evaluate("cfgWatchReset();switchView('mon');showMonTab('health')")
+            pg.set_viewport_size({"width": 390, "height": 844})
+            pg.wait_for_timeout(800)
+            _h274 = pg.evaluate("""()=>[...document.querySelectorAll('#hbody .hcells')]
+              .map(x=>({sl:Math.round(x.scrollLeft),
+                        max:Math.round(x.scrollWidth-x.clientWidth)}))""")
+            ck("v15274 健康最新轮滚到右端",
+               bool(_h274) and all(x["sl"] >= x["max"] - 2 for x in _h274),
+               str(_h274))
+            pg.set_viewport_size({"width": 1280, "height": 900})
+            pg.evaluate("switchView('mon');showMonTab('overview')")
+            pg.wait_for_timeout(200)
+
+            # ---- r357 配置首屏 / 就地交换起降 / 登录区表面 ----
+            _c357 = b.new_context(viewport={"width": 767, "height": 1000})
+            _p357 = _c357.new_page()
+            _p357.set_default_timeout(10000)
+            _p357.on("console", lambda m: errors.append(m.text)
+                     if m.type == "error" and "403 (Forbidden)" not in m.text
+                     else None)
+            _p357.on("pageerror", lambda e: errors.append(
+                (getattr(e, "stack", None) or str(e))[:500]))
+            _p357.goto(BASE, wait_until="domcontentloaded")
+            _p357.wait_for_timeout(1800)
+            _p357.click("#navCfg")
+            _p357.wait_for_timeout(800)
+            _w357 = _p357.evaluate("""()=>({
+              loaded:CFG_WATCH.loadedOnce,loading:CFG_WATCH.loading,
+              items:document.querySelectorAll('#cfgWatch .cw-item').length,
+              badge:(document.getElementById('navN-watch')||{}).textContent||''})""")
+            ck("r357 配置首屏预热关注航班",
+               _w357["loaded"] and not _w357["loading"]
+               and _w357["items"] >= 1 and "关注" in _w357["badge"],
+               str(_w357))
+            _l357 = _p357.evaluate("""()=>{
+              const R=e=>{const r=e.getBoundingClientRect();return [r.left,r.top,r.right,r.bottom]};
+              const ic=document.querySelector('#cfgview .secicon'),
+                    zh=document.querySelector('#cfgview .seclab .zh'),
+                    hd=document.querySelector('#cfgview .uhead'),
+                    gr=document.querySelector('#cfgview .lggrid');
+              const ir=R(ic),zr=R(zh),hr=R(hd),grr=R(gr);
+              return {overlap:!(ir[2]<=zr[0]||zr[2]<=ir[0]||ir[3]<=zr[1]||zr[3]<=ir[1]),
+                      gap:grr[1]-hr[3],cols:getComputedStyle(gr).gridTemplateColumns.split(' ').length,
+                      overflow:document.documentElement.scrollWidth-window.innerWidth};}""")
+            ck("r357 登录区标题/卡片不挤压",
+               not _l357["overlap"] and _l357["gap"] >= 8
+               and _l357["cols"] == 3 and _l357["overflow"] <= 0, str(_l357))
+            _p357.locator(".cnav").filter(has_text="用户与航线").click()
+            _p357.wait_for_timeout(600)
+            _b357 = _p357.evaluate(
+                "()=>document.querySelector('#cfgview .rhead .rtcode').textContent")
+            _p357.locator("#cfgview .ropbtn").filter(has_text="交换起降").first.click()
+            _p357.wait_for_timeout(1100)
+            _s357 = _p357.evaluate("""()=>({
+              after:document.querySelector('#cfgview .rhead .rtcode').textContent,
+              dirty:cfgIsDirty(),
+              savebar:!!document.querySelector('.savebar.on'),
+              copyTitle:([...document.querySelectorAll('#cfgview .ropbtn')]
+                .find(x=>x.textContent.includes('复制'))||{}).title||''})""")
+            ck("r357 航线就地交换起降",
+               _s357["after"] != _b357 and _s357["dirty"] and _s357["savebar"]
+               and "同方向" in _s357["copyTitle"], str(_s357))
+            _c357.close()
             bad0 = [n for n, v in checks if not v]
             prog.write("JS 错误: %s\n" % (errors[:3] if errors else "无"))
             prog.write("=== %d/%d 通过 ===\n"

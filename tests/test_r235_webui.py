@@ -59,13 +59,18 @@ def test_cal_tier_legend_only_when_th():
 
 
 def test_channel_dot_contrast_light():
-    """P2-2：亮色渠道识别色票加深至非文字 3:1+（飞猪/途牛两枚）。"""
+    """亮色渠道识别色票 ≥3:1 非文字对比（v1.5.274 与 SRX 芯片并轨）。
+
+    旧谱飞猪 #c2661a / 途牛 #a87b16 与检索芯片的 #c47f00 / #2f9e44
+    双轨；现全部引用 --c-* token，飞猪向深橙 #b85c12 收口以与
+    擦边琥珀 #c98500 保持 ≥20 通道差。
+    """
     src = _src()
-    assert "--c-fliggy:#c2661a" in src, "亮色飞猪色票未加深"
-    assert "--c-tuniu:#a87b16" in src, "亮色途牛色票未加深"
+    assert "--c-fliggy:#b85c12" in src, "亮色飞猪色票未加深"
+    assert "--c-tuniu:#2f9e44" in src, "亮色途牛色票未加深"
     # 暗色块本过（7.8+）不动
-    assert "--c-fliggy:#e89a4d" in src
-    assert "--c-tuniu:#e0b04d" in src
+    assert "--c-fliggy:#e8a94a" in src
+    assert "--c-tuniu:#45b95a" in src
 
 
 def test_tgb_cheap_solid_green():

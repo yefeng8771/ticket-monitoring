@@ -165,19 +165,18 @@ def test_transfer_row_layover_src_passthrough():
 
 # ---- P1-1：国际航线出链与爬虫取数路径同源 ----
 def test_build_view_url_intl_same_source():
-    """国际航线出链单源未随 r325 爬虫侧扩面：ctrip 出链恒产
-    from=inner 国内壳（爬虫国际走 URL_TPL_INTL from=outer，国际
-    三字码喂国内壳=页面反查失败）；tuniu 出链恒国内 URL（国际列表
-    页是接口非落地板——回落空串宁缺勿错，消费端真值门剥链接壳）。
-    国内形态零变化锚。"""
+    """国际航线出链与爬虫取数路径同源：ctrip from=outer、qunar
+    touch interlist、fliggy ie/ 国际壳、tuniu m2015 带参落地页；
+    同程国际双端登录墙维持空串（宁缺勿错）。国内形态零变化锚。"""
     from core.models import Route
     from core.alerter import Alerter
     r = Route(from_code="SHA", from_name="上海", to_code="NRT",
               to_name="东京", dates=["2026-10-20"])
-    # ctrip 国际：from=outer+城市级码（R44c 同源随修——日历端点
-    # arriveNewCityCode 城市级键，爬虫入口已机场→城市归并，出链同步）
+    # ctrip 国际（r360）：PC 列表是航班维度真源（H5 只出日历），
+    # 出链与 batchSearch 取数同源；城市级码（NRT→TYO）与爬虫同参
     u = Alerter._build_view_url(None, r, "2026-10-20", "ctrip")
-    assert "from=outer" in u and "dcity=SHA" in u and "acity=TYO" in u, u
+    assert "flights.ctrip.com/online/list/oneway-sha-tyo" in u, u
+    assert "depdate=2026-10-20" in u, u
     # qunar 国际（R48c G1 同源收口）：touch interlist 同参+城市名链
     # （CITY_NAME→city_short_of）；国内 PC 壳零变化锚
     uq = Alerter._build_view_url(None, r, "2026-10-20", "qunar")
@@ -189,12 +188,14 @@ def test_build_view_url_intl_same_source():
                   to_name="乌鲁木齐", dates=["2026-10-20"])
     u2 = Alerter._build_view_url(None, r_dom, "2026-10-20", "ctrip")
     assert "from=inner" in u2, u2
-    # tuniu 国际：回落空串；国内不受影响
-    assert Alerter._build_view_url(None, r, "2026-10-20", "tuniu") == ""
+    # tuniu 国际：m2015 带参落地页（与 INTL_LIST_PG 同参）；国内不受影响
+    ut_intl = Alerter._build_view_url(None, r, "2026-10-20", "tuniu")
+    assert "m.tuniu.com/m2015/intlFlight/flight/list" in ut_intl, ut_intl
+    assert "route=SHA-NRT" in ut_intl and "date=2026-10-20" in ut_intl, ut_intl
     u3 = Alerter._build_view_url(None, r_dom, "2026-10-20", "tuniu")
     assert "m.tuniu.com/flight/domestic" in u3, u3
     uq2 = Alerter._build_view_url(None, r_dom, "2026-10-20", "qunar")
-    assert "flight.qunar.com/site/oneway_list.htm" in uq2, uq2
+    assert "m.flight.qunar.com/ncs/page/flightlist" in uq2, uq2
     # fliggy 国际（r326 A1 收口）：ie/ 国际壳+城市码——渠道日历 url
     # 字段同形实证（depCityCode/arrCityCode+searchBy=1281）；国内壳喂
     # 机场码=isValid=false 静默空数据死形（report_fliggy.md §2/§3）

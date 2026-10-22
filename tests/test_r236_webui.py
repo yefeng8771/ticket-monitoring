@@ -75,7 +75,7 @@ def test_montabs_aria_controls_tabpanel():
     src = _src()
     assert "setAttribute('aria-controls','montab-'" not in src, \
         "tab↔tabpanel 引用关联复活"
-    assert src.count('role="tabpanel"') == 6, \
-        "tabpanel 数量=%d 应为 6（原 4 + r345 日期区间/指定日双面板）" % src.count('role="tabpanel"')
+    assert src.count('role="tabpanel"') == 8, \
+        "tabpanel 数量=%d 应为 8（原 4 + r345 双面板 + r352 关注航班 + r357 详情页签）" % src.count('role="tabpanel"')
     assert "PNAME" in src and "montab-'" in src, \
         "面板 aria-label 回写缺席"

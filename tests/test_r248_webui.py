@@ -186,10 +186,11 @@ def test_empty_state_copy_mobile_branch():
     src = _page_src()
     m = src.index("没有符合条件的航班")
     seg = src[m:m + 400]
-    assert "innerWidth<=760" in seg, (
-        "明细空态指路未按视口分档：≤760 的「重置筛选」按钮在默认收起"
-        "的筛选抽屉内，宽屏词面给移动用户指了一个看不见的按钮")
-    assert "展开" in seg, "≤760 分支缺抽屉语境词面（先展开再重置）"
+    # v1.5.274：筛选抽屉全档默认收起，旧「上方/右上」方向词必然有一档
+    # 说谎；空态统一以控件名指路，并按抽屉真实开合态给下一步
+    assert "点「筛选」展开抽屉放宽条件" in seg, seg
+    i = src.index("const _fOpen=")
+    assert 0 < m - i < 700, "空态未消费抽屉开合态"
 
 
 # ---------- W6: .logpre 断词改 overflow-wrap:anywhere（审计 P2-4） ----------

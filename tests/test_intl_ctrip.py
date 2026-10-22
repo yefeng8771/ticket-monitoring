@@ -174,3 +174,201 @@ def test_intl_calendar_epoch_anchored_plus8():
              "transportPrice": 339.0}]
     out = CtripCrawler._extract_intl_calendar(_cal_body(rows), "2026-10-18")
     assert len(out) == 1, out
+
+
+# ---- r360 PC 国际列表（batchSearch 真报文形态）----
+
+def _leg(fno="IJ004", dep="2026-11-16 17:30:00",
+         arr="2026-11-16 21:30:00", dap="PVG", aap="NRT",
+         dcity="SHA", acity="TYO", acn="东京", airline="IJ",
+         transfer=0, duration=180):
+    return {"flightNo": fno, "marketAirlineCode": airline,
+            "marketAirlineName": "春秋航空日本",
+            "departureCityCode": dcity, "departureCityName": "上海",
+            "departureAirportCode": dap, "departureAirportName": "浦东国际机场",
+            "departureAirportShortName": "浦东", "departureTerminal": "T2",
+            "departureDateTime": dep,
+            "arrivalCityCode": acity, "arrivalCityName": acn,
+            "arrivalAirportCode": aap, "arrivalAirportName": "成田国际机场",
+            "arrivalAirportShortName": "成田", "arrivalTerminal": "T3",
+            "arrivalDateTime": arr, "aircraftName": "波音737(中)",
+            "aircraftSize": "M", "stopCount": 0,
+            "transferDuration": transfer, "duration": duration}
+
+
+def _policy(adult=1000.0, tax=200.0, qty=3, cabin="Y", seat="N",
+            bag="每人1件,每件23公斤", visa=None):
+    pu = {"flightSeatList": [{"segmentNo": 1, "sequenceNo": 1,
+                              "seatClass": seat, "cabinClass": cabin}]}
+    p = {"adultPrice": adult, "adultTax": tax, "cabin": cabin,
+         "priceUnitList": [pu],
+         "baggage": {"dataList": [{"adultBaggage": {"checkedBaggage": {
+             "baggageContent": bag}}}]}}
+    if qty is not None:
+        p["ticketCount"] = qty
+    if visa:
+        p["luggageVisaKey"] = json.dumps({"criteria": {
+            "FlightInfoList": visa}}, ensure_ascii=False)
+    return p
+
+
+def _it(legs, prices, seg_duration=None):
+    return {"flightSegments": [{
+        "duration": seg_duration or sum(
+            int(l.get("duration") or 0) + int(l.get("transferDuration") or 0)
+            for l in legs),
+        "flightList": legs}], "priceList": prices}
+
+
+def _list_body(items, need_login=False):
+    return json.dumps({"status": 0, "data": {
+        "needUserLogin": need_login,
+        "flightItineraryList": items}}, ensure_ascii=False)
+
+
+def test_intl_list_direct_price_is_adult_plus_tax():
+    """PC 列表含税总价=adultPrice+adultTax（页面头条￥972 实证），
+    舱位/余票/行李随最低价政策配对；ticketCount 缺省=渠道未下发，
+    不是无票（实测 363/489 行缺省且页面照常展示）。"""
+    body = _list_body([_it([_leg()], [_policy(adult=418, tax=554, qty=9)])])
+    rows, need = CtripCrawler._extract_intl_list(body, "2026-11-16")
+    assert need is False
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["price"] == 972 and r["tax"] == 554
+    assert r["code"] == "IJ004" and r["name"] == "IJ004"
+    assert r["depTime"] == "17:30" and r["arrTime"] == "21:30"
+    assert r["totalDuration"] == "3时0分"   # 结构化 duration，非朴素 4h
+    assert r["cabin"] == "经济舱" and r["cabinCode"] == "N"
+    assert r["depAirport"] == "浦东" and r["arrAirport"] == "成田"
+    assert r["depAirportCode"] == "PVG" and r["arrAirportCode"] == "NRT"
+    assert r["leftTickets"] == 9 and r["baggage"] == "每人1件,每件23公斤"
+    assert r["intl"] == 1
+    assert r["tz_dep"] == 480 and r["tz_arr"] == 540
+    # 缺省余票照收（P C 渠道缺省=未下发，不是 H5 quantity=null 无票）
+    body2 = _list_body([_it([_leg()], [_policy(qty=None)])])
+    rows2, _ = CtripCrawler._extract_intl_list(body2, "2026-11-16")
+    assert len(rows2) == 1 and "leftTickets" not in rows2[0]
+
+
+def test_intl_list_soldout_and_banded_policies_are_excluded():
+    """显式余票<=0/价带外政策不得胜出；最低价只能来自可售政策。"""
+    body = _list_body([_it([_leg()], [
+        _policy(adult=100, tax=0, qty=0),     # 显式无票诱饵
+        _policy(adult=99, tax=0, qty=5),      # 价带下界外
+        _policy(adult=800, tax=100, qty=2),   # 唯一合法
+    ])])
+    rows, _ = CtripCrawler._extract_intl_list(body, "2026-11-16")
+    assert len(rows) == 1 and rows[0]["price"] == 900
+    assert rows[0]["leftTickets"] == 2
+
+
+def test_intl_list_transfer_cabin_share_and_layover():
+    """中转：two-leg 共享承运（营运航班≠票面）落 shareCarrier；
+    混合经济/超经不能误标超级经济；衔接取结构化 transferDuration。"""
+    legs = [_leg("BR721", dep="2026-11-16 20:10:00",
+                 arr="2026-11-16 22:10:00", acity="TPE", acn="中国台北",
+                 aap="TPE", duration=120, transfer=640),
+            _leg("BR198", dep="2026-11-17 08:50:00",
+                 arr="2026-11-17 12:55:00", dcity="TPE",
+                 aap="NRT", duration=185)]
+    prices = [_policy(adult=1200, tax=350,
+                      visa=[{"MarketingFlightNo": "BR721",
+                             "OperatingFlightNo": "BR722"},
+                            {"MarketingFlightNo": "BR198",
+                             "OperatingFlightNo": "BR199"}])]
+    rows, _ = CtripCrawler._extract_intl_list(
+        _list_body([_it(legs, prices)]), "2026-11-16")
+    r = rows[0]
+    assert r["code"] == "BR721/BR198" and r["name"] == "BR721"
+    assert r["transCity"] == "中国台北"
+    assert r["layover"] == 640 and r["layoverSrc"] == "ct"
+    assert r["lay2dep"] == "08:50" and r["transGoDate"] == "2026-11-17"
+    assert r["crossDayDesc"] == "+1天"
+    assert r["shareCarrier"] == "BR722" and r["shareCarrier2"] == "BR199"
+    assert r["plane2"] == "波音737(中)" and r["planeSize2"] == "中型机"
+    # 混合舱位（Y+S，itineraryCabin=Y-@S 形态）不是超级经济整程
+    mixed = _policy(cabin="Y", seat="N")
+    mixed["priceUnitList"] = [
+        {"flightSeatList": [{"cabinClass": "Y", "seatClass": "N"}]},
+        {"flightSeatList": [{"cabinClass": "S", "seatClass": "G"}]}]
+    body = json.dumps({"data": {"flightItineraryList": [{
+        "flightSegments": [{"duration": 200, "flightList": [
+            dict(legs[0], transferDuration=0), legs[1]]}],
+        "priceList": [mixed]}]}})
+    rows2, _ = CtripCrawler._extract_intl_list(body, "2026-11-16")
+    assert rows2[0]["cabin"] == "经济舱/超经"
+    assert rows2[0]["cabinCode"] == "N/G"
+
+
+def test_intl_list_super_economy_and_wrong_date_and_login():
+    rows, need = CtripCrawler._extract_intl_list(
+        _list_body([_it([_leg()], [_policy(cabin="S", seat="G")])]),
+        "2026-11-16")
+    assert rows[0]["cabin"] == "超级经济舱"
+    # 非目标日行一律不混窗
+    assert CtripCrawler._extract_intl_list(
+        _list_body([_it([_leg()], [_policy()])]), "2026-11-17") == ([], False)
+    # needUserLogin 透传（fetch 层据此置 login_suspect）
+    assert CtripCrawler._extract_intl_list(
+        _list_body([], need_login=True), "2026-11-16") == ([], True)
+    assert CtripCrawler._extract_intl_list("not-json", "2026-11-16") == ([], False)
+    # 空 flightItineraryList / 垃圾价格不造行
+    assert CtripCrawler._extract_intl_list(
+        json.dumps({"data": {"flightItineraryList": [{"flightSegments": []}]}}),
+        "2026-11-16") == ([], False)
+
+
+def test_fetch_intl_prefers_pc_list_and_backfills_calendar(monkeypatch):
+    """日历只补 PC 列表缺日；列表覆盖全窗时不再请求日历。"""
+    from core.models import FlightPrice
+    c = CtripCrawler({}, _LOG)
+    calls = {}
+
+    def fake_list(*args):
+        calls["list"] = list(args[-1])
+        return [FlightPrice(platform="ctrip", from_city="SHA",
+                            to_city="TYO", depart_date="2026-11-16",
+                            price=972, flight_no="IJ004",
+                            depart_time="17:30", arrive_time="21:30",
+                            extra="[]")]
+
+    def fake_cal(*args):
+        calls["cal"] = list(args[-1])
+        return [FlightPrice(platform="ctrip", from_city="SHA",
+                            to_city="TYO", depart_date="2026-11-17",
+                            price=1100, flight_no="", depart_time="",
+                            arrive_time="", extra="[]")]
+
+    monkeypatch.setattr(c, "_fetch_intl_list", fake_list)
+    monkeypatch.setattr(c, "_fetch_intl_calendar", fake_cal)
+    out = c._fetch_intl("SHA", "TYO", ["2026-11-16", "2026-11-17"])
+    assert calls["list"] == ["2026-11-16", "2026-11-17"]
+    assert calls["cal"] == ["2026-11-17"]
+    assert [r.depart_date for r in out] == ["2026-11-16", "2026-11-17"]
+
+    calls.clear()
+    out2 = c._fetch_intl("SHA", "TYO", ["2026-11-16"])
+    assert "cal" not in calls and len(out2) == 1
+
+    calls.clear()
+
+    def fake_empty(*args):
+        calls["list"] = list(args[-1])
+        return []
+
+    monkeypatch.setattr(c, "_fetch_intl_list", fake_empty)
+    out3 = c._fetch_intl("SHA", "TYO", ["2026-11-16", "2026-11-17"])
+    assert calls["cal"] == ["2026-11-16", "2026-11-17"]
+    assert len(out3) == 1
+
+
+def test_intl_list_url_is_pc_source():
+    assert CtripCrawler.URL_LIST_INTL.startswith(
+        "https://flights.ctrip.com/online/list/oneway-")
+    assert "batchSearch" in " ".join(CtripCrawler.XHR_KEYS_INTL_LIST)
+    # 探针行必须透传 tax：否则三重对齐把「渠道已给税费」误标未采
+    src = open(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "webui.py"), encoding="utf-8").read()
+    assert '"tax": g.get("tax") if g.get("tax") is not None else None,' in src

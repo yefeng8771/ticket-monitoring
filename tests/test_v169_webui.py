@@ -148,7 +148,7 @@ class TestWebuiV169Pins:
     def test_kpisum_trend_shortcut(self):
         """：概览 kpisum 补「走势 ▾」直达（jumpRowTrend('') 空路由
         =当前视图，与「查看明细 ▾」对称）。"""
-        assert "pickUser(${i});jumpRowTrend('')" in self._src()
+        assert "pickUser(${i});jumpUserBest(${i}," in self._src()
 
     def test_ok_strong_dead_token_removed(self):
         """：--ok-strong 死令牌删除（var 消费 0 + 定义 0，词面仅存

@@ -173,7 +173,8 @@ def test_trend_payload_shape_and_clamp(tmp_path, monkeypatch):
     assert ok["days"] == 180
     assert len(ok["direct"]) == 1, ok
     p = ok["direct"][0]
-    assert p[0] == "10-10" and p[1] == 1500.0 and p[2] == 2, p
+    # 1.5.275：航线级日桶含日历价，flag 恒 0，不冒充航班级真达标
+    assert p[0] == "10-10" and p[1] == 1500.0 and p[2] == 0, p
     assert ok["transfer"] == [], ok
     # days 越界钳到最近合法档（白名单 {30,90,180}）
     cl = webui._trend_payload(

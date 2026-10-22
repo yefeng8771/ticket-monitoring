@@ -207,7 +207,9 @@ def test_erow_zero_hit_inline_reset(pg):
     """行为钉：真实输入管线制造零命中（#fq 填垃圾词）→ erow 指引词面
     内含可执行重置钮 → 点击后结果集恢复（erow 退场）。修前纯词面
     actionable=false，点击无处落（红）。"""
-    pg.evaluate("switchView('mon');showMonTab('details');")
+    pg.evaluate("switchView('mon');showMonTab('details');"
+                "const fb=document.querySelector('.fbar');"
+                "if(fb&&getComputedStyle(fb).display==='none')togFlt();")
     pg.fill("#fq", "ZZZZNOMATCH")
     try:
         pg.wait_for_selector("#ftable .erow", timeout=8000)
@@ -232,7 +234,9 @@ def test_tw_scrolled_header_shadow(pg):
     含滚动投影（rgba(20,31,43,.25) 家族值），回顶后回落为缝影原形；
     首列 th 滚动态须缝影+投影双影共存。焦点环特异性 (0,4,1) 恒压本条
     (0,3,2)，深滚聚焦时环胜——顺带锁首列聚焦环不被滚动影吃掉。"""
-    pg.evaluate("switchView('mon');showMonTab('details');")
+    pg.evaluate("switchView('mon');showMonTab('details');"
+                "const fb=document.querySelector('.fbar');"
+                "if(fb&&getComputedStyle(fb).display==='none')togFlt();")
     pg.fill("#fq", "")   # 前序钉段残留防御（共享页状态复位律）
     pg.wait_for_selector("#ftable tbody tr[data-k]")
     pg.evaluate(
@@ -270,7 +274,9 @@ def test_tw_scrolled_middle_column_focus_ring(pg):
     融合在场——scrolled 规则 (0,2,2) 恒压通用环 th.srt:focus-visible
     (0,2,1) 且该环自带 outline:none，无融合行时焦点指示全灭（P2-1
     在 .cnav 修掉的同族病于表头复发，先滚后 Tab 即触发）。"""
-    pg.evaluate("switchView('mon');showMonTab('details');")
+    pg.evaluate("switchView('mon');showMonTab('details');"
+                "const fb=document.querySelector('.fbar');"
+                "if(fb&&getComputedStyle(fb).display==='none')togFlt();")
     pg.fill("#fq", "")
     pg.wait_for_selector("#ftable tbody tr[data-k]")
     pg.evaluate(

@@ -29,4 +29,4 @@ def test_host_hint_startup_badge():
     """审计 P3-2：「监听地址」重启生效项在 🔥 段头下须挂 ♻ 启动级
     视觉家族（与 ♻ 只读三件同族），段头「保存即热生效」不再与
     hint「重启生效」无标冲突。"""
-    assert '· ♻ 重启生效' in PAGE
+    assert '· 重启生效' in PAGE

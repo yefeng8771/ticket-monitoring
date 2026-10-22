@@ -71,7 +71,7 @@ class TestWebuiV182Pins:
         assert seg.count("${rv}") >= 2, "zero/普通两分支未都引用 rv"
         # 健康格族：data-rv+首格锚该渠道首个可交互格（非轮位 0——
         # 首轮缺扫时 .hc none 无 tabindex，按轮位锚=该族零停靠点）
-        i1 = src.index('class="hc ${c.s}"')
+        i1 = src.index('class="hc ${calOnlyCell?')
         seg1 = src[max(0, i1 - 300):i1 + 400]
         assert "data-rv" in seg1 and 'tabindex="${ri===firstIdx?0:-1}"' in seg1, \
             "健康格未挂 roving 标记/动态 tabindex"

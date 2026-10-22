@@ -84,7 +84,7 @@ class TestXrowWrapMobile:
         m = re.search(
             r"#ftable tr\.xrow:not\(\.tgrow\) td\{white-space:normal", src)
         assert m, "xrow ≤760 折行规则缺失"
-        base = src.index("th,td{padding:9px 10px;text-align:left;white-space:nowrap")
+        base = src.index("th,td{padding:7px 10px;text-align:left;white-space:nowrap")
         assert base < m.start(), "折行规则须在 nowrap 基础规则之后"
 
     def test_conclusion_nowrap(self):
@@ -93,7 +93,7 @@ class TestXrowWrapMobile:
         src = _src()
         assert '<span style="white-space:nowrap">（换最低渠道可省 ￥${save}）</span>' in src
         assert 'white-space:nowrap">（本行较最低高 ￥${save}' in src
-        assert '<span style="white-space:nowrap">（仅一渠道报价）</span>' in src
+        assert '<span style="white-space:nowrap">（仅一渠道本轮有价）</span>' in src
         assert '（本行已是同班最低）' in src
 
     def test_conclusion_before_chain(self):
@@ -138,5 +138,9 @@ class TestMicroTypography:
 
     def test_cfg_title_count_nowrap(self):
         src = _src()
-        assert '<span style="white-space:nowrap">（\'+CFG.length+\' 个用户）</span>' in src, \
-            "配置标题计数括号须整体 nowrap"
+        # r348：重复的「用户与航线配置（N 个用户）」标题条已撤，计数改由
+        # 概览卡/用户胶囊承担；工具条动作标签仍须整体 nowrap，不得逐字折行
+        assert 'class="rline cfgtoolbar"' in src, "配置工具条缺失"
+        i = src.index(".cfgtoolbar-act .btn2{")
+        assert "white-space:nowrap" in src[i:i + 220], \
+            "配置动作标签须整体 nowrap"

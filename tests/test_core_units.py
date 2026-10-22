@@ -1036,6 +1036,17 @@ def test_daily_report_desp_structure(monkeypatch, tmp_path):
     assert sent["title"].startswith("📈 价格走势与明细")
 
 
+def test_qunar_h5_first_and_no_dead_pc_entry():
+    """2026-10-10 PC 断供：爬虫 H5 先行、PC 仅复活探测；
+    m.flight H5 为唯一入口，PC 单程页不得回归。"""
+    import inspect
+    from crawlers.qunar import QunarCrawler as QC
+    assert "m.flight.qunar.com/ncs/page/flightlist" in QC.URL_TPL
+    assert "flight.qunar.com/site/oneway_list.htm" not in QC.URL_TPL
+    src = inspect.getsource(QC._fetch_one)
+    assert src.index("_fetch_via_browser") < src.index("_fetch_via_pc")
+
+
 def test_view_url_matches_crawler_proven_path():
     """链接必须与爬虫已验证取数路径同源：qunar→PC 单程列表页
     （PC_URL_TPL 同参；爬虫主路径已迁 PC wbdflightlist，H5 列表页
@@ -1049,11 +1060,11 @@ def test_view_url_matches_crawler_proven_path():
     r = Route(from_code="SHA", from_name="上海", to_code="URC",
               to_name="乌鲁木齐", dates=["2026-09-25"])
     u = a._build_view_url(r, "2026-09-25", "qunar")
-    assert "flight.qunar.com/site/oneway_list.htm" in u, u
-    assert "touch.qunar.com/ncs/page/flightlist" not in u, u
+    assert "m.flight.qunar.com/ncs/page/flightlist" in u, u
+    assert "flight.qunar.com/site/oneway_list.htm" not in u, u
     assert quote("上海") in u, u
-    assert "searchDepartureTime=2026-09-25" in u, u
-    assert "fromCode=SHA" in u and "startSearch=true" in u, u
+    assert "goDate=2026-09-25" in u, u
+    assert "from=touch_index_search" in u, u
     f = a._build_view_url(r, "2026-09-25", "fliggy")
     assert "sjipiao.fliggy.com/flight_search_result.htm" in f, f
     assert "outfliggys.m.taobao.com" not in f, f

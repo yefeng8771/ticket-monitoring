@@ -15,7 +15,7 @@ def _src():
 
 def test_same_flight_fingerprint_includes_identity():
     s = _src()
-    assert "const fp=f=>((f.cal?'cal':'')+'|'+(f.date||'')+'|'+(f.route||'')+'|'+(f.flightNo||f.name||'')" in s
+    assert "const fp=f=>((f.cal?'cal':'')+'|'+(f.date||'')+'|'+(f.route||'')+'|'+(f.code||f.flightNo||f.name||'')" in s
     assert "（本行已是同班最低）" in s
     assert "xrowHtml(u,k,EXP===k,fp(f),f.price)" in s
 

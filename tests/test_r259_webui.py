@@ -79,8 +79,8 @@ def test_control_boundary_uses_dedicated_token():
     # 即同屏边界深浅双档
     assert "box-shadow:inset 0 0 0 1px var(--ctlbd)" in _block(
         src, "button.warn{"), "button.warn 描边仍借 --line2（与 .btn2 同屏双档）"
-    assert "border:1px solid var(--ctlbd)" in _block(src, ".ropbtn{"), (
-        ".ropbtn 边框仍借 --line2（与 .btn2 同屏双档）")
+    assert "border:1px solid var(--ctlbd)" in _block(src, ".rhead .ractions{"), (
+        "航线动作组边框仍借 --line2（与 .btn2 同屏双档）")
 
 
 def test_control_boundary_contrast_computed(srv):

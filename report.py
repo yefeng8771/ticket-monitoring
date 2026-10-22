@@ -268,6 +268,13 @@ def _rounds(db_path, from_city, to_city, date, arrival_max, hours=48,
         for f in obj:
             if not isinstance(f, dict) or "price" not in f:
                 continue
+            # 日历薄行（起降时刻双空）不是可出手机票：曲线/日历若把渠道
+            # 日历最低价当直飞真达标，会与检索台结论相反。只按“时刻双空”
+            # 判定——保留“有起降时刻但无航班号”的真实/历史行（测试夹具与
+            # 部分渠道本态即有此类行）。
+            if not (str(f.get("depTime") or "").strip()
+                    or str(f.get("arrTime") or "").strip()):
+                continue
             try:
                 if not price_band_ok(round(float(f["price"])), el=f):
                     continue
@@ -283,6 +290,13 @@ def _rounds(db_path, from_city, to_city, date, arrival_max, hours=48,
         b[3].append((round(float(r["price"] or 0)), r["platform"]))
         for f in obj:
             if not isinstance(f, dict) or "price" not in f:
+                continue
+            # 日历薄行（起降时刻双空）不是可出手机票：曲线/日历若把渠道
+            # 日历最低价当直飞真达标，会与检索台结论相反。只按“时刻双空”
+            # 判定——保留“有起降时刻但无航班号”的真实/历史行（测试夹具与
+            # 部分渠道本态即有此类行）。
+            if not (str(f.get("depTime") or "").strip()
+                    or str(f.get("arrTime") or "").strip()):
                 continue
             try:
                 p = round(float(f["price"]))
@@ -2185,6 +2199,13 @@ def recent_platform_flights(db_path, from_city, to_city, date, hours=6):
         except Exception:
             continue
         if isinstance(obj, list) and obj:
+            # 补位行必须保留该次成功采集的真实时刻：旧实现只回 age，
+            # 下游写不出 fetchedAt，<0.5h 的补位还会被四舍五入成 0h
+            # 冒充本轮。这里把 DB 的 fetched_at 随行挂回，展示/导出
+            # 均按“补位 N.Nh”如实标注。
+            for _it in obj:
+                if isinstance(_it, dict):
+                    _it["_fetched_at"] = r["fetched_at"]
             out[p] = (age, obj)
     return out
 

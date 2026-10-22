@@ -1,7 +1,8 @@
 """SQLite 价格存储"""
+import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import contextmanager
 from typing import List, Optional
 
@@ -64,6 +65,24 @@ CREATE TABLE IF NOT EXISTS price_daily (
     fetched_max TEXT NOT NULL,
     PRIMARY KEY (from_city, to_city, depart_date, day, kind)
 );
+CREATE TABLE IF NOT EXISTS flight_daily (
+    from_city TEXT NOT NULL,
+    to_city TEXT NOT NULL,
+    depart_date TEXT NOT NULL,
+    flight_key TEXT NOT NULL,
+    cabin TEXT NOT NULL DEFAULT '',
+    day TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    lo REAL NOT NULL,
+    hi REAL NOT NULL,
+    open REAL NOT NULL,
+    close REAL NOT NULL,
+    fetched_max TEXT NOT NULL,
+    PRIMARY KEY (from_city, to_city, depart_date, flight_key, cabin, day, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_flight_daily_key
+    ON flight_daily (from_city, to_city, depart_date, flight_key, cabin, day);
 """
 
 
@@ -182,6 +201,109 @@ class PriceStorage:
                      prices[0], prices[-1],
                      round(sum(prices) / len(prices), 2),
                      max(ts for _, ts in g)))
+
+    def refresh_flight_daily(self, from_city: str, to_city: str,
+                             depart_date: str, day: str = "") -> None:
+        """把某 (航线, 出发日期, 聚合日) 的全量采集行展开为航班日桶。
+
+        航线采集天然包含全部航班；此表不依赖关注配置，所有被采到的
+        航班都落一份日 OHLC（按平台/舱位/航班身份），raw 明细 purged
+        后长窗仍可回放。重扫同日先删后建，幂等修正。
+        """
+        from .flighthist import key_from_raw
+        day = day or datetime.now().strftime("%Y-%m-%d")
+        try:
+            nxt = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)
+                   ).strftime("%Y-%m-%d")
+        except ValueError:
+            raise ValueError("day 必须为 YYYY-MM-DD")
+        buckets = {}
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT platform, extra, fetched_at FROM flight_prices
+                   WHERE from_city=? AND to_city=? AND depart_date=?
+                     AND extra!='' AND fetched_at>=? AND fetched_at<?
+                   ORDER BY fetched_at, id""",
+                (from_city, to_city, depart_date,
+                 day + " 00:00:00", nxt + " 00:00:00")).fetchall()
+            if not rows:
+                return
+            for r in rows:
+                try:
+                    obj = json.loads(r["extra"] or "[]")
+                except ValueError:
+                    continue
+                items = obj if isinstance(obj, list) else (
+                    [obj] if isinstance(obj, dict) else [])
+                for raw in items:
+                    got = key_from_raw(from_city, to_city, depart_date,
+                                       raw, r["platform"])
+                    if not got:
+                        continue
+                    _g, key, cabin, price = got
+                    b = buckets.setdefault((key, cabin, r["platform"]),
+                                           {"p": [], "at": []})
+                    b["p"].append(price)
+                    b["at"].append(str(r["fetched_at"] or ""))
+            c.execute(
+                "DELETE FROM flight_daily WHERE from_city=? AND to_city=? "
+                "AND depart_date=? AND day=?",
+                (from_city, to_city, depart_date, day))
+            for (key, cabin, platform), b in buckets.items():
+                prices = b["p"]
+                if not prices:
+                    continue
+                c.execute(
+                    """INSERT OR REPLACE INTO flight_daily
+                    (from_city,to_city,depart_date,flight_key,cabin,day,
+                     platform,n,lo,hi,open,close,fetched_max)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (from_city, to_city, depart_date, key, cabin, day,
+                     platform, len(prices), min(prices), max(prices),
+                     prices[0], prices[-1], max(b["at"])))
+            # 航班日桶长期留存（400 天），避免只增不减
+            c.execute("DELETE FROM flight_daily WHERE day < "
+                      "date('now','localtime','-400 days')")
+
+    def flight_history(self, from_city: str, to_city: str, depart_date: str,
+                       flight_key: str, cabin: str, channels: list,
+                       days: int) -> list:
+        """航班日桶（升序）：[{day,platform,n,lo,hi,open,close,fetched_max}]。"""
+        chans = [str(x) for x in (channels or []) if str(x)]
+        if not chans:
+            return []
+        marks = ",".join("?" for _ in chans)
+        sql = ("SELECT day,platform,n,lo,hi,open,close,fetched_max "
+               "FROM flight_daily WHERE from_city=? AND to_city=? "
+               "AND depart_date=? AND flight_key=? AND day>=date('now','localtime',?) "
+               "AND platform IN (%s)" % marks)
+        args = [from_city, to_city, depart_date, flight_key,
+                "-%d days" % max(1, int(days))] + chans
+        if cabin:
+            sql += " AND cabin=?"
+            args.append(cabin)
+        sql += " ORDER BY day, platform"
+        with self._conn() as c:
+            c.execute("DELETE FROM flight_daily WHERE day < "
+                      "date('now','localtime','-400 days')")
+            return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+    def backfill_flight_daily(self, days: int = 14) -> int:
+        """从现存 raw 明细回填航班日桶（一次性迁移/补历史）。"""
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT DISTINCT from_city,to_city,depart_date,
+                          substr(fetched_at,1,10) AS day
+                   FROM flight_prices WHERE extra!='' AND fetched_at>=
+                   datetime('now','localtime',?)""",
+                ("-%d days" % max(1, int(days)),)).fetchall()
+        for r in rows:
+            try:
+                self.refresh_flight_daily(r["from_city"], r["to_city"],
+                                          r["depart_date"], r["day"])
+            except Exception:
+                continue
+        return len(rows)
 
     def daily_series(self, from_city: str, to_city: str,
                      depart_date: str, days: int, th_d: float = 0.0,

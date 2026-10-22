@@ -97,9 +97,9 @@ class TestWebuiV180Pins:
         i0 = src.index(".uhead2{")
         assert "flex-wrap:wrap" in src[i0:i0 + 200], \
             "uhead2 缺 flex-wrap（胶囊挤压标题不换行）"
-        i1 = src.index('class="rline" style="display:flex')
+        i1 = src.index('class="rline cfgtoolbar" style="display:flex')
         assert "flex-wrap:wrap" in src[i1:i1 + 120], \
-            "rline 工具条缺 flex-wrap（添加用户/保存钮挤压标题）"
+            "rline 工具条缺 flex-wrap（筛选/动作钮挤压标题）"
 
     def test_p2_notify_oktxt_contrast(self):
         """P2-2：NOTIFY_PAGE 孪生页 --ok-txt 令牌同步（主控台 P2-3 已

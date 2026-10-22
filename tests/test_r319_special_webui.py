@@ -127,12 +127,12 @@ def test_specials_section_renders(page):
         '#panel-users .ucard .switch');
       return {d: lab ? lab.textContent : null,
               e: e ? e.textContent : null,
-              pill: (document.body.textContent.match(/🎯特价[开关]/) || [''])[0]};
+              pill: (document.body.textContent.match(/特价\s*[开关]/) || [''])[0]};
     }""")
     assert "特价监控" in (d["d"] or ""), d
     assert "通知渠道" in (d["e"] or ""), d
     # 演示用户自带展示态订阅（r319 呈现面）：徽标应显「开」
-    assert d["pill"] == "🎯特价开", d
+    assert d["pill"] == "特价 开", d
 
 
 def test_specials_cfg_survives_save_and_normalizes(page):
@@ -156,8 +156,8 @@ def test_specials_cfg_survives_save_and_normalizes(page):
     # r339j 价位门：enabled+出发地而价位空=pill 恒「关」（如实断言），
     # 价位经 UI 填入后再等「开」——保存链语义不变
     page.wait_for_function(
-        "() => (document.body.textContent.match(/🎯特价[开关]/)||[''])[0]"
-        " === '🎯特价关'")
+        "() => (document.body.textContent.match(/特价\s*[开关]/)||[''])[0]"
+        " === '特价 关'")
     captured = {}
 
     def _cap(route):
@@ -174,9 +174,10 @@ def test_specials_cfg_survives_save_and_normalizes(page):
     page.fill('#panel-users .ucard [data-sp="max_price"]', "400")
     page.keyboard.press("Tab")   # fill 只派 input；change 在失焦才发（探针实证 model 停留 ''）
     page.wait_for_function(
-        "() => (document.body.textContent.match(/🎯特价[开关]/)||[''])[0]"
-        " === '🎯特价开'")   # 价位入模（setSp→头徽重渲）
-    page.click("text=💾 保存全部并生效")
+        "() => (document.body.textContent.match(/特价\s*[开关]/)||[''])[0]"
+        " === '特价 开'")   # 价位入模（setSp→头徽重渲）
+    page.wait_for_selector("#savebar.on")
+    page.click('#savebar button[onclick="saveCfg()"]')
     page.wait_for_timeout(600)
     assert captured.get("body"), "保存请求未被发出"
     import json
@@ -227,7 +228,9 @@ def test_overview_specials_card_and_drawer_filters(page):
     # 当前数据有区分度时现身——demo 合成库无经停/共享行、机型值不足
     # 两档，nostop/noshare/ps 三维整组隐藏是设计内；wait_for_selector
     # 默认等 visible，对自适应显隐控件必须查 DOM 在场而非可见性）
-    page.evaluate("showMonTab('details');table();")
+    page.evaluate("showMonTab('details');table();"
+                  "const fb=document.querySelector('.fbar');"
+                  "if(fb&&getComputedStyle(fb).display==='none')togFlt();")
     for i in ('ffew', 'fnostop', 'fnoshare', 'fsafe', 'flaymin',
               'flaymax', 'alchips', 'pschips'):
         page.wait_for_function(

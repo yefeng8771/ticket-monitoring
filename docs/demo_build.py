@@ -46,6 +46,18 @@ window.__BAKED__=%s;
    return Promise.resolve(J((B.trend||{})[k]
     ||{ok:false,demo:true,err:'该航线此档无烘焙趋势数据'}));
   }
+  if(u.indexOf('/api/srx/watch/trend')===0){
+   const q=new URLSearchParams(u.split('?')[1]||'');
+   const k=q.get('user')+'|'+q.get('id')+'|'+q.get('days');
+   return Promise.resolve(J((B.watchTrends||{})[k]
+    ||{ok:false,demo:true,err:'该关注航班此档无烘焙历史'}));
+  }
+  if(u.indexOf('/api/srx/watch')===0){
+   if(o&&String(o.method||'GET').toUpperCase()==='POST')
+    return Promise.resolve(J({ok:false,demo:true,
+     err:'在线演示为静态站：添加/调整关注请在本机控制台使用'}));
+   return Promise.resolve(J(B.watch||{ok:true,demo:true,watches:[]}));
+  }
   return Promise.resolve(J({ok:false,demo:true,
    err:'在线演示为静态烘焙页——此操作在真实控制台（本地运行）可用'}));
  };})();
@@ -74,6 +86,16 @@ def build():
     webui._State.version = "demo"   # 页脚魔法值:静态演示态不外显版本（恒 V1.0 呈现面零内部 build 号）
     state = webui._latest_state()
     state["demo"] = True
+    webui._demo_seed_watches(db, state)
+    watch = webui._watch_list("演示用户")
+    watch_trends = {}
+    for _w in watch.get("watches", []):
+        for _days in (2, 7, 30, 90, 180):
+            try:
+                watch_trends["演示用户|%s|%d" % (_w["id"], _days)] = \
+                    webui._watch_trend("演示用户", _w["id"], _days)
+            except Exception:
+                pass
     # 半年走势三档烘焙（r323 P1-1 姊妹面）：loadTrend 的 query 键
     # from|to|date|days 与 shim 解析侧同构；_trend_payload 走
     # _State.cfg（指向烘焙合成库）取数，flag 档位随 th 烘死
@@ -89,6 +111,8 @@ def build():
     baked = {
         "state": state,
         "trend": trend,
+        "watch": watch,
+        "watchTrends": watch_trends,
         "health": demo_health(),
         "preview": webui._preview_payload(0),
         "logtail": {"ok": True, "demo": True, "lines": [

@@ -90,7 +90,7 @@ class TestWebuiV181Pins:
         i0 = src.index(".price .fire{")
         seg = src[i0:i0 + 140]
         assert "width:19px" in seg, "fire 占位未定宽"
-        assert "(f.qual?'🔥':'')" in src, "fire span 未条件承载 🔥"
+        assert "<span class=\"fire\">'+(f.qual?'" in src, "fire span 未条件承载达标图标"
 
     def test_p2_kpi_bar_hit_full_and_title(self):
         """KPI 进度条达标态满条（读的人先问能不能出手）+ title 解码。"""

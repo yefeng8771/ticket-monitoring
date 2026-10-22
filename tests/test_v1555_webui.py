@@ -60,8 +60,22 @@ class TestWebuiV1555Pins:
         # 五件 + 明细属性筛选 5 个 agrp = 518/518；r344 日期编排合并
         # 共享快捷行（每行 -1 对，去/返程两行） = 516/516；r345 双卡
         # 编辑器收为单编辑器模式条（每行再 -6 对，去/返程两行）= 504/504；
-        # r346 移动端筛选结果 CTA +1 对 = 505/505
-        assert (o, c, o - c) == (505, 505, 0)
+        # r346 移动端筛选结果 CTA +1 对 = 505/505；
+        # r340 生产检索页静态骨架 + JS 渲染模板 +78 对 = 583/583；
+        # r340b 原页镜像 + 三重对齐抽屉 + 校准册 +69 对 = 652/652；
+        # r340c 主动探针表单 +8 对 = 660/660；r348 证据工作台/探针城市联想 +91 对 = 751/751；
+        # r351 配置中心独立航班监控（路由/筛选/表单/列表/走势模板）+74 对 = 825/825；
+        # r352 关注航班台/名册/轨迹/K线/试看/独立编排 +116 对 = 941/941；
+        # r353 品牌层：总览关注卡代码行 monwatch-code +1 对、详情来源承运航司行 +1 对 = 943/943；
+        # 总览关注卡容器（card/uhead/routes/list/empty）+5 对 = 948/948；
+        # r354 价带 PEND 骨架 +1 静态 div = 949/949
+        # r355 国际能力条（srx-capbar 容器）+1、配置航线城市联想双浮层
+        # （rtFromDrop/rtToDrop）+2、健康/搜索语义容器 +2 = 954/954；
+        # r357 矩阵完整分组提示（srx-cmpnote）+1 = 955/955
+        # r357 关注数据预热的 cfgwatch-skel 骨架 +1 开/闭
+        # r358 来源接入卡（srccap/uhead/scpath/3 scnode/scfoot）+7 对、
+        # 登录卡停服说明 lgnote +1 对 = 964/964
+        assert (o, c, o - c) == (964, 964, 0)
 
     def test_dingtalk_card_closed_before_ntfy(self):
         """钉钉卡闭合补钉字面在位，且位于 ntfy 卡开标签之前（顺序钉死）。"""
@@ -205,8 +219,10 @@ class TestWebuiV1555Pins:
         # r329 起 title 前缀机型细名（plane 三端收口：条件前缀，
         # 无机型行 title 原样）；r339 起二段机型/体量同段并入
         # （title 二段注记 + 词面「·二段X」并列，中转行全程机型判断）
-        assert ('f.planeSize?\'<span class="nw" title="\'+(f.plane?\'机型\'+he(f.plane)+(f.plane2?\'｜二段机型\'+he(f.plane2):\'\')+\'｜\':\'\')+\'数据源：渠道连廊率/机龄">\'+he(f.planeSize)+(f.planeSize2?\'·二段\'+he(f.planeSize2):\'\')'
-                in page)
+        assert ("(f.plane||f.planeSize)?'<span class=\"nw nw-keep\"" in page
+                or "f.planeSize?'<span class=\"nw nw-keep\"" in page)
+        assert ("srxPlaneIcon(f.plane||f.planeSize)+he(f.plane||f.planeSize)" in page
+                or "srxPlaneIcon(f.plane||f.planeSize)+he(f.planeSize)" in page)
         assert "'·机龄'+he(String(f.planeAge))+'年'" in page
         # 主行 tag 槽：lcc 廉航徽标（与经停/直挂同位，空值不占位）
         assert '<span class="stoptag" title="廉价航空：中转常需重新值机、行李托运受限">廉航</span>' in page

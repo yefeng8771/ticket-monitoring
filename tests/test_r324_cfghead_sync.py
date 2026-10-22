@@ -156,7 +156,7 @@ def test_c1_rename_updates_head(page):
           return {model: CFG[0].name,
                   headName: head.querySelector('b').textContent,
                   uava: head.querySelector('.uava').textContent,
-                  delBtn: del.textContent.trim()};
+                  delBtn: (del.getAttribute('aria-label')||'').trim()};
         })()""")
         assert out["model"] == "审计改名AB", out
         assert out["headName"] == "审计改名AB", out
@@ -182,7 +182,7 @@ def test_c2_win_toast_pill_follows(page):
                   aHead};
         })()""")
         assert out["model"] is False, out
-        assert out["pill"] == "🔔弹窗关", out
+        assert out["pill"] == "弹窗 关", out
         assert "弹窗关" in out["aHead"], out
     finally:
         _restore(page, snap)
@@ -254,10 +254,10 @@ def test_c5_specials_pill_composite_truth(page):
                   model: CFG[0].specials[0].enabled,
                   off: pillAt(), dOff: dHead()};
         })()""")
-        assert out["on"]["t"] == "🎯特价开" and out["on"]["ok"], out
+        assert out["on"]["t"] == "特价 开" and out["on"]["ok"], out
         assert out["dOn"] == "已启用", out
         assert out["model"] is False, out
-        assert out["off"]["t"] == "🎯特价关" and not out["off"]["ok"], out
+        assert out["off"]["t"] == "特价 关" and not out["off"]["ok"], out
         assert out["dOff"] == "未启用", out
         # r339j 价位门反例：enabled+出发地齐但价位 0=未完形→恒「关」
         out2 = page.evaluate("""(() => {
@@ -268,7 +268,7 @@ def test_c5_specials_pill_composite_truth(page):
             '#cfgform .ucard .uhead2 .upill')[1];
           return {t: p.textContent.trim(),
                   ok: p.classList.contains('ok')};})()""")
-        assert out2["t"] == "🎯特价关" and not out2["ok"], out2
+        assert out2["t"] == "特价 关" and not out2["ok"], out2
     finally:
         _restore(page, snap)
 

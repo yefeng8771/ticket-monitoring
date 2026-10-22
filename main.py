@@ -14,7 +14,7 @@
 import argparse
 import json
 
-__version__ = "1.5.264"
+__version__ = "1.5.280"
 import os
 import subprocess
 import sys
@@ -1884,6 +1884,14 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                 except Exception:
                     logger.exception("[日桶] %s→%s %s 刷新失败",
                                      fc, tc, d)
+                try:
+                    _fd_days = {_dt.date.today().isoformat(),
+                                (_dt.date.today() - _dt.timedelta(days=1)).isoformat()}
+                    for _fd_day in _fd_days:
+                        storage.refresh_flight_daily(fc, tc, d, _fd_day)
+                except Exception:
+                    logger.exception("[航班日桶] %s→%s %s 刷新失败",
+                                     fc, tc, d)
             _field_sentinel(all_prices, logger)
             # 走势图按用户各自生成（多租户同 OD 时各用户阈值/衔接
             # 下限画自己的图——「全部用户 seen 首遇配置胜出」的内容
@@ -1921,6 +1929,18 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                                    alerters[ui].notifier, user=u["name"])
             except Exception as e:
                 logger.warning("[%s] 每日走势报告异常: %s", u["name"], e)
+        # 指定航班关注目标提醒（r352）：轮尾按真实落库行核对，
+        # 去抖状态存 alert_state；通知失败下轮重试，不阻断扫描。
+        try:
+            from webui import _watch_alert_round
+            for _ui, _u in enumerate(users):
+                if _ui >= len(alerters):
+                    continue
+                _watch_alert_round(
+                    _u["name"], alerters[_ui].notifier, storage, logger,
+                    base_url=getattr(alerters[_ui], "base_url", ""))
+        except Exception as e:
+            logger.warning("[关注] 轮次提醒异常: %s", e)
         # 特价监控（r319）：轮尾跑（与主采集错峰；内部全自吞不炸轮）
         try:
             _specials_round()

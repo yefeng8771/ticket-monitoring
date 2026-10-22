@@ -2,18 +2,18 @@
 
 > 自托管的多渠道机票价格监控：五平台明细采集 → 钉钉图文推送 → 达标四层强提醒。
 > 国内航线与国际航线（五洲目的地）同一套采集-判定-推送链路。
-> 给想自己跑一份价格监控的常旅客与小团队：价格库/配置留在本机，解压即用；外发只限你配置的推送与图床。
 > 数据留在本机，配置全在网页，开源免费。
 
 [![在线演示](https://img.shields.io/badge/🎪_在线演示-点开即玩-brightgreen)](https://dengmeiluan.github.io/ticket-monitoring/site/)
-[![Release](https://img.shields.io/github/v/release/dengmeiluan/ticket-monitoring)](https://github.com/dengmeiluan/ticket-monitoring/releases)
-[![Version](https://img.shields.io/badge/version-1.5.264-1f6feb)](https://github.com/dengmeiluan/ticket-monitoring/releases)
+[![Release](https://img.shields.io/github/v/release/dengmeiluan/ticket-monitoring?display_name=release)](https://github.com/dengmeiluan/ticket-monitoring/releases)
 [![CI](https://github.com/dengmeiluan/ticket-monitoring/actions/workflows/ci.yml/badge.svg)](https://github.com/dengmeiluan/ticket-monitoring/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/Platform-Windows_%7C_Linux_%7C_macOS-0078D6)](https://github.com/dengmeiluan/ticket-monitoring/releases)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 **[🎪 点开即玩的在线演示](https://dengmeiluan.github.io/ticket-monitoring/site/)** · [English README](README_EN.md) · [下载发行包（Windows / Linux / macOS）](https://github.com/dengmeiluan/ticket-monitoring/releases)
+
+> 窄屏提示：下方推送样例是等宽代码块，手机端可在块内左右滑动查看完整行。
 
 ```
 ❌ 全部未达标｜最近 上→乌 09/25 直飞差￥120
@@ -37,17 +37,39 @@
 > 群里 @你的手机号、风暴连推、（可选）ntfy 手机弹窗+铃声穿透免打扰、
 > （可选）阿里云电话/短信。
 
+## 功能一览
+
+- **采集**：去哪儿/飞猪/携程/同程/途牛五渠道航班明细（价格、航班号、时刻、中转、时长、航站楼、舱位、机型、准点、行李），各走最稳路径；每次全航线采集同时把每个航班写入 `flight_daily`，不依赖是否关注。
+- **去哪儿网页版停服适配（2026-10）**：去哪儿的 PC 机票查询/预订页已于 2026-10-10 停服，采集与用户深链统一改走 H5（`m.flight`；PC 仅保留默认关闭的复活探测）；渠道登录改走统一登录页（手机号验证码/扫码），Cookie 与 H5 共用、需保持登录态。App 专属价与自动下单不在采集范围，其余四渠道不受影响。
+- **监控**：多用户、多航线、多日期（区间/指定日）、直飞/中转独立心理线、航司白名单、行李/时段/衔接/直挂/跨天/价格上限/最长时长等门禁；每条航线可暂停而不删除；关注航班台可对任意真实航班单独编排渠道、目标、提醒与备注。
+- **推送**：每轮聚合一条钉钉图文，达标置顶、语义分档、7 天趋势与操作建议；达标可叠加钉钉 @、Windows 弹窗、ntfy、Bark、阿里云电话/短信；支持免打扰时段、预览与发送历史。
+- **观测与配置**：真实检索台（价带/五源/筛选/矩阵/镜像/三重对齐/探针/CSV）、走势与 K 线、价格日历、渠道健康与运行脉冲；配置页独立完成全部设置，热加载与启动级差量提示，网页登录，演示模式与静态在线演示。
+
 ## 控制台一览
 
 飞行签派风格的控制台设计语言：数字即主角（mono 等宽）、分区编号标签、hairline 分区。
-主页是**子视图工作台**（概览 / 走势·日历 / 航班明细 / 渠道健康，一屏一会话），
+主页是**子视图工作台**（概览 / 走势·日历 / 关注航班 / 航班明细 / 渠道健康，一屏一会话），
 配置页是**面板式设置台**（左侧分区切换，同屏只显一个分区，没有长滚动）。
+
+**关注航班台**新增第五个监控 tab：航线轨选择关注航班，全宽折线/K线只回放真实采集点
+（48h/7天/30天/90天/半年），聚焦条显示目标差、渠道覆盖与来源新鲜度。同一航线轨驱动
+可筛选航班名册（状态/目标/航司/直飞中转/出发时段/舱位/渠道/价格）。每次常规航线扫描都会
+把看到的航班写入航班维度日 OHLC，任何检索行都能试看真实历史，无需先关注；目标达标由
+扫描链路推送并去重。全部关注设置（城市联想、日期、实时候选航班、渠道、目标、提醒开关、
+备注）在「配置 → 航班监控」独立编排。
 
 ![概览工作台（亮色）](docs/screenshots/console-light.png)
 
 ![走势与日历（暗色）](docs/screenshots/console-dark.png)
 
+![关注航班台（真实数据）：真实采集点、目标线与渠道覆盖同屏](docs/screenshots/console-watch-studio.png)
+
+<details>
+<summary>更多截图：配置台 / 航班监控配置 / 日期模式 / 全局配置 / 重启迁移 / 航班明细 / K线 / 关注台K线 / 推送预览 / 移动端</summary>
+
 ![配置台：日期模式条、渠道就绪态与保存条同屏。](docs/screenshots/console-config.png)
+
+![配置台「航班监控」：独立添加/编辑关注，渠道、目标、提醒与备注同屏。](docs/screenshots/console-config-watch.png)
 
 ![日期模式条：按区间与按指定日切换，双草稿保留。](docs/screenshots/console-date-modes.png)
 
@@ -55,29 +77,93 @@
 
 ![重启与迁移中心](docs/screenshots/console-restart.png)
 
-<details>
-<summary>更多截图：航班明细 / K线 / 推送预览 / 移动端</summary>
-
 ![航班明细](docs/screenshots/console-details.png)
 
 ![K线走势](docs/screenshots/console-kline.png)
+
+![关注台K线：真实采集点、目标线与渠道覆盖同屏。](docs/screenshots/console-watch-kline.png)
 
 ![推送预览](docs/screenshots/console-preview.png)
 
 <img src="docs/screenshots/console-mobile.png" width="380" alt="移动端航班明细">
 <img src="docs/screenshots/console-mobile-filter.png" width="380" alt="移动筛选与查看结果 CTA">
+<img src="docs/screenshots/console-watch-mobile.png" width="380" alt="移动端关注航班台">
 
 </details>
+
+### 实时检索（真实采集数据）
+
+顶部「🔎 检索」是独立的真实数据工作台，不读 mock 数据：直接消费 `/api/state` 的真实采集行，
+并把「价带 → 五源现势 → 筛选 → 列表/矩阵 → 原页镜像 → 三重对齐详情 → 签核/导出」收成一条链。
+
+![实时检索：解析列表 ⇄ 五渠道原页镜像（真实采集数据）](docs/screenshots/console-probe.png)
+
+<details><summary>实时检索移动端：解析列表 / 原页镜像 / 三重对齐</summary>
+
+<img src="docs/screenshots/console-probe-mobile.png" width="300" alt="实时检索移动端解析列表">
+<img src="docs/screenshots/console-probe-mobile-mirror.png" width="300" alt="实时检索移动端原页镜像">
+<img src="docs/screenshots/console-probe-mobile-detail.png" width="300" alt="实时检索移动端三重对齐">
+
+</details>
+
+![主动探针：出发/到达城市联想、五渠道选择与实时探针（不入库、不推送）](docs/screenshots/console-probe-probe.png)
+
+![探针城市联想：中文 / 拼音 / 三字码，方向键选择，右侧箭头打开完整国内/国际城市面板](docs/screenshots/console-probe-city.png)
+
+<details><summary>生产工作台实拍：总览 / 工作台 / 渠道健康 / 探针总览</summary>
+
+<img src="docs/screenshots/console-probe-overview.png" width="300" alt="生产控制台总览">
+<img src="docs/screenshots/console-probe-monitor.png" width="300" alt="生产监控视图">
+<img src="docs/screenshots/console-probe-workbench.png" width="300" alt="生产检索工作台">
+<img src="docs/screenshots/console-probe-health.png" width="300" alt="渠道健康与字段可得率">
+<img src="docs/screenshots/console-probe-probe-overview.png" width="300" alt="主动探针总览">
+<img src="docs/screenshots/console-probe-probe-workbench.png" width="300" alt="主动探针工作台">
+
+</details>
+
+- **14 日出发价带 + 五源现势**：出发日轴只在 DB 有真实 `depart_date` 行时出点，缺失保持
+  「未采」；采集日轴单独标注，不把采集日当出发日。五源卡显示实时/日历/补位/未供、原页与
+  raw 可得数。没有数据的渠道保持「未供」，不补样例。
+- **快筛 + 更多筛选 + 已选条**：直飞/中转、舱位、航司、起降时段、价格带、行李/餐食/廉航/
+  共享/跨天/经停、有原页/有 raw/隐藏日历价/仅缺失/字段齐全/仅风险；筛选持久化，空态可一键放宽。
+- **解析列表 ⇄ 航班×渠道矩阵**：13 格字段刻度、风险徽标（限龄/政策/值机/诱饵/黑卡/退改）、
+  行内快览、同班聚合、加载更多；矩阵行=真实同班、列=5 渠道，缺失格=未供，点击格直达详情。
+- **原页镜像**：5 渠道 tab、列表/详情/四源；镜像值从**同一条 raw** 投影，缺键显示未供；
+  页面明示「结构重绘、非原站截图/iframe」，原站以「打开原页」新窗口为准。
+- **三重对齐详情**：解析 ⇄ 镜像(raw) ⇄ RAW 路径，四态 `一致/未供/未采/不一致`；价格/机场/
+  舱位等派生字段标「口径差」；字段点击定位 raw 键；另含 30 天走势、双轴日历、同班 5 格价梯、
+  结论/备注/复核、上一处/下一处（J/K）、证据 JSON 与快照。
+
+![三重对齐 + 同班价梯 + 字段证据](docs/screenshots/console-probe-detail.png)
+
+![航班 × 渠道矩阵：真实同班最低价与缺口](docs/screenshots/console-probe-matrix.png)
+
+![五平台校准册：5 渠道 × 4 视图 + 四源同屏](docs/screenshots/console-probe-gallery.png)
+
+- **五平台校准册**：5 渠道 × 列表/详情/日历/对照 + 四源同屏；空态不补教学样例。
+- **主动探针**：出发/到达支持中文 / 拼音 / 三字码联想与配置页同款国内/国际城市面板；任意 OD/日期并发真实五渠道采集，结果**不入库、不推送**；逐渠道回执行数/本态未供/失败，会话本机留存；未配置心理线时明确标「探针未评估」。在线演示为静态站，探针入口禁用并说明原因；本机运行可真跑。
+- **证据导出**：CSV（解析价/raw 原页价/时刻/舱位/机型/行李/餐食/准点/余票/税费/退改/对齐/
+  采集/原始行/证据指纹/落地页/结论/备注，BOM+RFC4180）、证据 JSON（raw + provenance）、
+  单行证据 JSON 复制；状态串 `probe://srx` 可复制/粘贴还原，快照最多 12 条。
+- **真实边界**：各渠道能力随登录态与风控实时变化——去哪儿网页版停服后仅 H5，匿名不出价、需登录；同程可能返回
+  444 会话门、携程国际走 PC 航班列表（登录态失效才回退日历并标「需登录」）、途牛国际可能未供。页面按本轮真实结果标注
+  「航班级 / 日历 / 补位 / 未供 / 需登录」，不把某一轮快照写成固定覆盖；日历薄行无
+  航班号/时刻，**永不判达标、不参与同班价梯**；14 日价带只画真实出发日，其余「未采」。
+  宁缺勿错，不用日因子/样例补价。
 
 ### 键盘快捷键
 
 | 键 | 作用 |
 |---|---|
 | `1` / `2` | 监控台 / 配置台 切换 |
-| `3` / `4` / `5` / `6` | 直达 概览 / 走势 / 明细 / 健康 子视图 |
+| `S` | 切到实时检索台（真实数据视图） |
+| `M`（检索台） | 列表 / 航班×渠道矩阵切换 |
+| `J` / `K`（检索详情） | 下一处 / 上一处差异或未采 |
+| `↑` / `↓`（检索列表） | 逐行移动并同步右侧解析/原始行证据 |
+| `3` / `4` / `5` / `6` / `7` | 直达 概览 / 走势 / 关注 / 明细 / 健康 子视图 |
 | `Ctrl/⌘ + S` | 配置页保存并热生效 |
 | `R` | 立即扫描一轮（3 秒内再按一次确认，防手滑） |
-| `/` | 聚焦明细搜索框 |
+| `/` | 聚焦检索台或明细搜索框 |
 | `Esc` | 关闭弹层 / 收起同班比价展开行 |
 
 ## 特性矩阵
@@ -89,7 +175,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **五渠道明细** | 去哪儿/飞猪/携程/同程/途牛统一 schema（价格/航班号/时刻/中转/跨天/时长）；按渠道形态走最优路径（去哪儿 PC 优先/H5 兜底，携程/同程 H5，飞猪 SSR，途牛 HTTP，会话型渠道按需浏览器）；限购资格价/高风险政策价/诱饵价 ⚠ 徽标透明化 |
+| **五渠道明细** | 去哪儿/飞猪/携程/同程/途牛统一 schema（价格/航班号/时刻/中转/跨天/时长）；按渠道形态走最优路径（去哪儿 H5、登录后出全量；PC 网页版 2026-10-10 停服，携程/同程 H5，飞猪 SSR，途牛 HTTP，会话型渠道按需浏览器）；限购资格价/高风险政策价/诱饵价 ⚠ 徽标透明化 |
 | **多日期监控** | 一条航线盯多个出发日期：日期采用**「按区间 / 按指定日」模式条**——一次只展开一种编辑器，切换保留两份草稿；未来 7/30 天、起止区间（含首尾）或单日加入后自动**合并去重**，一键清空；各日期独立采集、独立推送小节、独立走势；**航线快速复制**一键克隆全部配置 |
 | **往返多返程日** | 「🔁 往返」开关一键切往返：可配**多个返程日期**（去程起 7/8 天快速选锚定最早出发日，或区间/逐日添加），采集按返程日逐对跑，价格=往返总价含税 |
 | **航线启停** | 每条航线一个启用/停用开关：停用保留全部配置、调度/推送/明细全链路豁免——**暂停监控不再靠删除** |
@@ -120,13 +206,16 @@
 | 能力 | 说明 |
 |---|---|
 | **走势图** | 折线+渐变面积/**K 线双模**（涨红跌绿、OHLC 悬停）；48h/7 天/30 天/90 天/半年回看；最低点「哪天几点」标注 |
+| **关注航班台** | 按航线切换指定航班；全宽真实走势（折线/K线 × 48h/7/30/90/半年）、目标跑道、渠道覆盖、状态/目标/航司/直飞中转/时段筛选；总览同步挂关注卡（7 天迷你走势、覆盖、30 天跳转）；配置页独立编排（城市联想、实时候选、渠道/目标/提醒/备注）；任意航班可从检索列表试看历史，无需先关注 |
+| **官方品牌语义层** | 5 渠道与 87 家航司使用本地内嵌官方 App/官网图标：渠道为方形 App tile、航司为圆形承运人头像，覆盖检索/镜像/详情/矩阵/关注台/配置候选与渠道开关；未收录/无可靠官方图标的承运人（W1、LT）退回 IATA 圆形码，零运行时外链 |
+| **航班维度历史** | 每次航线全量采集都把**每个被采到的航班**写入 `flight_daily` 日桶（平台/舱位 × 日 OHLC），不依赖关注配置；raw 明细清理后长窗仍可回放；`/api/srx/flight/trend` 任意航班可查 |
 | **达标点四档环** | ●深绿真达标/○细绿破线/○琥珀擦边/▼红回落——与推送文案、明细 🔥、日历色面四方同语言 |
 | **页内跳转图谱** | 点击数据点直达该轮明细（自动锁定航线与日期）；明细行 📈 与日历格点击双向闭环 |
-| **价格日历** | 近 14 天逐日最低热力卡（最低日绿框「▼ 最低」，其余日 +￥差价）+**近 7 天洞察** |
+| **价格日历** | 近 14 天逐日最低热力卡（最低日绿框「★ 最低」，其余日 +￥差价）+**近 7 天洞察** |
 | **明细表** | 筛选 20+ 维+行属性族（航司/舱位多选、余票紧张、排除经停共享廉航、托运 ≥N kg、仅大型机、准点率/机龄、中转时长区间、隐藏限购高风险价）/CSV 导出/每行直达下单页；行尾 📈 一键跳该航线走势 |
 | **渠道健康** | 近 24h 逐轮成功/降级/失败条纹+成功率，点格子看该轮日志；推送通道同区呈现（各通道成功率/连败/最近成功） |
 | **运行脉冲** | 每轮每渠道行数/耗时环形缓冲（**落盘持久化**）：4 格 mono 大数字+近 40 轮堆叠脉冲柱 |
-| **子视图工作台** | 主页四子视图一屏一会话，记忆上次所在视图；切换零 DOM 插拔（翻译/比价扩展免疫） |
+| **子视图工作台** | 主页五子视图一屏一会话，记忆上次所在视图；切换零 DOM 插拔（翻译/比价扩展免疫） |
 | **可视化对齐** | 网页走势与推送图同一信息密度；推送图浮动标签**矩形级相互避让**；推送总表圆角白卡+比价两行式行卡（整链零截断） |
 | **浏览器通知** | 🔔 达标桌面通知+提示音（按价去重） |
 
@@ -134,7 +223,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **面板式配置台** | 左侧分区切换（渠道登录/用户与航线/全局参数）同屏一区**告别长滚动**；航线卡**高频区前置**（日期快速选/只要直飞/心理价大输入）、低频约束收进「中转与时段约束」折叠默认即用；设置行「说明居左控件居右」范式+分区头实时摘要 |
+| **面板式配置台** | 左侧分区切换（渠道登录/用户与航线/航班监控/全局参数）同屏一区**告别长滚动**；航线卡**高频区前置**（日期快速选/只要直飞/心理价大输入）、低频约束收进「中转与时段约束」折叠默认即用；设置行「说明居左控件居右」范式+分区头实时摘要 |
 | **全局配置中心** | 调度/采集参数**全量热载**；启动级路径（数据库/日志/登录态/浏览器内核目录）**可编辑+📂 打开所在文件夹**，改路径后旧库/登录态**自动搬迁**；非法路径/四路径同址/不可写/非法监听地址在保存前拦截；每通道一个「测试」按钮实测 |
 | **配置全热加载** | 航线/阈值/推送/周期/**端口原地切换**/无头/超时/错峰/日报时刻/图床——保存即生效；数据库/日志/登录态/内核目录/监听地址/启动即扫为启动级，保存后显示**旧→新差量**并提示重启 |
 | **配置搜索与导入导出** | 🔍 字段级搜索；📤 导出/📥 导入 JSON（凭据本机自管）；保存前**脏改动计数**+校验；`Ctrl/⌘+S` 保存 |
@@ -145,7 +234,7 @@
 
 ## 快速开始（免装 Python）
 
-1. 到 [Releases](https://github.com/dengmeiluan/ticket-monitoring/releases) 下载对应平台包（约 60–92MB）：Windows `…-win64.zip` / Linux `…-linux-x64.zip` / Apple Silicon `…-macos-arm64.zip` / Intel 芯片 Mac `…-macos-x64.zip`
+1. 到 [Releases](https://github.com/dengmeiluan/ticket-monitoring/releases) 下载对应平台包（约 58–88MB）：Windows `…-win64.zip` / Linux `…-linux-x64.zip` / Apple Silicon `…-macos-arm64.zip` / Intel 芯片 Mac `…-macos-x64.zip`
 2. 解压到任意目录并运行：Windows `TicketMonitor.exe`；
    Linux/macOS `chmod +x TicketMonitor && ./TicketMonitor`
 3. 浏览器打开 `http://127.0.0.1:8765` → ⚙️ 配置：
@@ -154,7 +243,7 @@
    - 钉钉机器人 Webhook + 加签密钥（[创建方法](#钉钉机器人配置)），点「🔔 测试推送」即验
 4. 保存即热重载生效，监控开始
 
-> 携程渠道需要登录态：控制台「⚙️ 配置 → 🔐 渠道登录」一键弹窗登录保存（或启动命令加 `--login ctrip`）；其余四渠道开箱即用。
+> 携程、去哪儿必须登录：控制台「⚙️ 配置 → 🔐 渠道登录」一键弹窗登录保存（或启动命令分别加 `--login ctrip` / `--login qunar`）；去哪儿网页版 2026-10-10 停服，登录窗落统一登录页（手机号验证码/扫码），H5 才出全量明细；同程/途牛建议登录后采集更稳，飞猪可不登录。
 
 ### Docker / NAS 部署
 
@@ -237,7 +326,7 @@ python main.py            # 无 config.yaml 时生成空骨架并引导网页配
 
 ```
 main.py            编排：航线去重 → 渠道线程池并发采集 → 多用户聚合分发 → 四层强提醒
-crawlers/          五渠道：qunar(PC接口主路径+H5/DOM兜底) / ctrip / tongcheng(XHR拦截)
+crawlers/          五渠道：qunar(H5主路径+PC复活探测默认关闭) / ctrip / tongcheng(XHR拦截)
                    / fliggy(PC SSR直读) / tuniu(httpx逆向)
 core/alerter.py    一轮一消息聚合推送；_digest_payload 纯构建器（控制台预览复用）
 core/intl.py       国际城市字典/IANA 时区偏移/航线 scope 判定（大陆码集单源）
@@ -287,13 +376,13 @@ pyinstaller TicketMonitor.spec --noconfirm
 Silicon/Intel 芯片 Mac 在各自平台上执行同一条命令即得本机包（CI 矩阵
 release-build.yml 即此四岗；chromium 不入包，应用首启自装内核；
 Windows 右下角弹窗通道在非 Windows 自动停用，其余通道全平台可用）。
-发行包三平台资产挂同一 Release，`.sha256` 校验文件随构建存档。
+发行包三平台资产挂同一 Release，`SHA256SUMS.txt` 聚合校验文件随构建存档。
 
 ## 开发
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # 全量 3164 项：五渠道解析单测（含占位守卫/透传透镜/聚合守卫等防呆钉）+ 推送链路演练 + 链接同源门禁 + 曲线-列表一致性 + 版本门禁
-python docs/uitest.py             # 全功能 UI 自检（516 断言，自动拉起演示控制台，零 JS 错硬门禁）
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # 全量 3292 项：五渠道解析单测（含占位守卫/透传透镜/聚合守卫等防呆钉）+ 推送链路演练 + 链接同源门禁 + 曲线-列表一致性 + 版本门禁
+python docs/uitest.py             # 全功能 UI 自检（586 断言，自动拉起演示控制台，零 JS 错硬门禁）
 python docs/screenshot.py         # README 截图再生成（先起演示服：python webui.py --demo --port 8799）
 python docs/demo_build.py         # 重烘在线演示站（docs/site）
 ```

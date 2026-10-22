@@ -26,8 +26,17 @@ _SENT = re.compile(
     r"^\[解析哨兵\](?:\[[^\]]+\])?\s*(qunar|fliggy|ctrip|tongcheng|tuniu)\s*(.*)$")
 _DATE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
 
-_OK_MARK = "最低价 ￥"
-_FAIL_DATED = ("达到最大重试圈数", "未解析到价格", "未拿到真实价格")
+# 真实出价三族同权：国内列表「最低价」、国际明细「最低含税价」、
+# 国际日历「日历最低含税价」。旧单串只认国内列表，国际四渠道即使
+# 每轮出价也被记 fail（r355 实锤：ctrip/fliggy/tuniu 连续 91 轮红）。
+_OK_PRICE = re.compile(
+    r"(?:日历最低含税价|最低含税价|最低价)\s*[￥¥]\s*([\d,]+)")
+_FAIL_DATED = ("达到最大重试圈数", "未解析到价格", "未拿到真实价格",
+               "未拿到日历价")
+# 登录失效/会话门拒都是「可执行状态」而非普通抓取失败：健康页需给出
+# 重登入口。同程 444「非法链接」也是会话层门拒（r355 实测）。
+_AUTH_MARKS = ("未登录硬拒", "需登录", "登录失效", "会话失效",
+               "会话门拒", "非法链接")
 _EXC_MARK = "请求异常"
 _RETRY_MARKS = ("命中风控", "疑似限流", "后第")
 _MAINT_MARK = "进入维护模式"
@@ -42,9 +51,11 @@ def parse_health(log_text, now=None, hours=24):
 
     round: {"ts": "YYYY-MM-DD HH:MM",
             "plats": {plat: {"s": ok|part|fail|maint, "ok": n, "tot": n,
+                             "cal": n, "detail": n, "need_login": bool,
                              "note": "失败原因/备注"}}}
     stats: {plat: {"ok": n, "part": n, "fail": n, "maint": n,
-                   "rate": ok/(ok+part+fail)}}
+                   "cal": n, "detail": n, "auth": n,
+                   "rate": ok/(ok+part+fail)}}}
     """
     if isinstance(now, str):
         now = datetime.strptime(now, _TS_FMT)
@@ -66,6 +77,9 @@ def parse_health(log_text, now=None, hours=24):
         for plat, ev in cur["events"].items():
             ok_n, fail_n = len(ev["ok"]), len(ev["fail"])
             tot = ok_n + fail_n + ev["generic_fail"]
+            cal_n = sum(1 for k in ev["kinds"].values() if k == "cal")
+            detail_n = ok_n - cal_n
+            need_login = bool(ev["auth"])
             note = ev["note"]
             if plat in maint and not ok_n:
                 s, note = "maint", "渠道维护模式"
@@ -77,14 +91,23 @@ def parse_health(log_text, now=None, hours=24):
                 s, note = "part", note or "限流后重试成功"
             elif ok_n:
                 s = "ok"
+                if cal_n and not detail_n:
+                    note = note or "日历价 %d（无航班明细）" % cal_n
+                elif cal_n and detail_n:
+                    note = note or "航班级 %d · 日历 %d" % (detail_n, cal_n)
             else:
                 s = "fail"
-                note = note or "抓取失败"
-            plats[plat] = {"s": s, "ok": ok_n, "tot": tot, "note": note}
+                note = note or ("需登录 · 会话失效" if need_login
+                                else "抓取失败")
+            plats[plat] = {"s": s, "ok": ok_n, "tot": tot, "note": note,
+                           "cal": cal_n, "detail": detail_n,
+                           "cal_only": bool(cal_n and not detail_n),
+                           "need_login": need_login}
         for plat in maint:
             if plat not in plats:
                 plats[plat] = {"s": "maint", "ok": 0, "tot": 0,
-                               "note": "渠道维护模式"}
+                               "note": "渠道维护模式", "cal": 0, "detail": 0,
+                               "need_login": False}
         if cur["ts"] >= cutoff:
             rounds.append({"ts": cur["ts"].strftime("%Y-%m-%d %H:%M"),
                            "plats": plats})
@@ -118,7 +141,8 @@ def parse_health(log_text, now=None, hours=24):
                     cur = _new_round(ts)
                 ev = cur["events"].setdefault(plat, {
                     "ok": set(), "fail": set(), "retry": 0,
-                    "generic_fail": 0, "note": ""})
+                    "generic_fail": 0, "note": "", "kinds": {},
+                    "auth": False})
                 if not ev["note"]:
                     ev["note"] = ("哨兵: " + sm.group(2))[:60]
             continue
@@ -127,15 +151,32 @@ def parse_health(log_text, now=None, hours=24):
             cur = _new_round(ts)
         ev = cur["events"].setdefault(plat, {
             "ok": set(), "fail": set(), "retry": 0,
-            "generic_fail": 0, "note": ""})
+            "generic_fail": 0, "note": "", "kinds": {},
+            "auth": False})
         dm = _DATE.search(rest)
         d = dm.group(1) if dm else None
+        okm = _OK_PRICE.search(msg)
         if _MAINT_MARK in msg:
             maint.add(plat)
             ev["note"] = "渠道维护模式"
-        elif _OK_MARK in msg and d:
+        elif okm and d:
             ev["ok"].add(d)
+            # 同日先后出现日历与明细时以明细为准（明细信息量更高），
+            # 不重复计数——kinds 按日期唯一归档。
+            kind = ("cal" if "日历" in msg
+                    else "detail")
+            if ev["kinds"].get(d) != "detail":
+                ev["kinds"][d] = kind
             maint.discard(plat)
+        elif any(k in msg for k in _AUTH_MARKS):
+            if d:
+                ev["fail"].add(d)
+            else:
+                ev["generic_fail"] += 1
+            ev["auth"] = True
+            _gate = ("会话门拒" in msg or "非法链接" in msg)
+            ev["note"] = ("会话门拒 · 请重登" if _gate
+                          else "需登录 · 会话失效")
         elif any(k in msg for k in _FAIL_DATED):
             if d:
                 ev["fail"].add(d)
@@ -159,9 +200,23 @@ def parse_health(log_text, now=None, hours=24):
         for plat, p in r["plats"].items():
             st = stats.setdefault(
                 plat, {"ok": 0, "part": 0, "fail": 0, "maint": 0,
-                       "rate": 0.0})
+                       "rate": 0.0, "detail_rate": 0.0,
+                       "detail_ok": 0, "cal_only": 0,
+                       "cal": 0, "detail": 0, "auth": 0})
             st[p["s"]] += 1
+            st["cal"] += p.get("cal", 0)
+            st["detail"] += p.get("detail", 0)
+            if p.get("detail", 0) > 0:
+                st["detail_ok"] += 1
+            if p.get("cal_only"):
+                st["cal_only"] += 1
+            if p.get("need_login"):
+                st["auth"] += 1
     for plat, st in stats.items():
         att = st["ok"] + st["part"] + st["fail"]
         st["rate"] = (st["ok"] / att) if att else 0.0
+        # 明细成功率只在「有机会出航班明细」的轮次里算：仅日历轮
+        # 永远不可能有航班级明细，放进分母会把 16/18 压成 16/96
+        det_att = att - st["cal_only"]
+        st["detail_rate"] = (st["detail_ok"] / det_att) if det_att else 0.0
     return {"rounds": rounds, "stats": stats}

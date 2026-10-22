@@ -113,6 +113,8 @@ def test_input_focus_ring_zero_transition_computed(srv):
     pw, page = srv
     got = page.evaluate("""() => {
       showMonTab('details');
+      const fb=document.querySelector('.fbar');
+      if(fb&&getComputedStyle(fb).display==='none')togFlt();
       const el=document.getElementById('fq');
       if(!el)return 'NO_FQ';
       el.focus();

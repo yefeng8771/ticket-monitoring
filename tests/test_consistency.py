@@ -40,9 +40,9 @@ def test_view_url_equals_crawler_template():
     换模板时本测试必须同步，防挂羊头死链回归。"""
     a, r = _a(), _route()
     cases = {
-        "qunar": QunarCrawler.PC_URL_TPL.format(
+        "qunar": QunarCrawler.URL_TPL.format(
             from_name=quote("上海"), to_name=quote("乌鲁木齐"),
-            date="2026-10-05", fcode="SHA", tcode="URC"),
+            date="2026-10-05"),
         "fliggy": FliggyCrawler.URL_TPL.format(
             fn=quote("上海"), tn=quote("乌鲁木齐"),
             fc="SHA", tc="URC", d="2026-10-05"),

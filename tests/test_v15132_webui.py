@@ -51,20 +51,19 @@ def _contrast(fg, bg):
     return (l1 + 0.05) / (l2 + 0.05)
 
 
-def test_brk_zebra_stroke_contrast():
-    """brk 描边斑马行提档 --ok-txt：提档后对斑马底 (--rowalt) 必须
-    ≥4.5（AA 正文）且留有余量（旧 --green 4.526 余量 0.026 擦线）。"""
+def test_brk_zebra_solid_contrast():
+    """brk 第四档改实心 --ok-txt + 点线下划：DPR1 下不再空心发糊。
+    对斑马底 (--rowalt) 必须 ≥4.5（AA 正文）且留有余量。"""
     m = re.search(
-        r"\.price\.brk\{color:transparent;\s*"
-        r"-webkit-text-stroke:1\.1px var\(--green\)\}", src())
-    assert m, "brk 描边规则形态变化（提档钉随之更新）"
-    z = re.search(
-        r"\.zebra:not\(:hover\) \.price\.brk\{[^}]*--ok-txt[^}]*\}", src())
-    assert z, "斑马域 brk 描边未提档 --ok-txt"
+        r"\.price\.brk\{color:var\(--ok-txt\);text-decoration:underline dotted",
+        src())
+    assert m, "brk 实心+点线规则缺失（空心描边曾发糊）"
+    assert "-webkit-text-stroke:1.1px var(--green)" not in src(), \
+        "空心描边旧规则残留"
     # 变量值算术复算：亮色 --ok-txt #0b6e39 对斑马 --rowalt #f5f8fb
     c = _contrast("0b6e39", "f5f8fb")
     assert c >= 4.5, f"--ok-txt 对斑马底 {c:.3f} 欠 AA"
-    assert c >= 5.0, f"--ok-txt 对斑马底 {c:.3f} 余量不足（提档无效）"
+    assert c >= 5.0, f"--ok-txt 对斑马底 {c:.3f} 余量不足"
 
 
 def test_switch_focus_visible_ring():
