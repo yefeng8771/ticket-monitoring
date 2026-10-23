@@ -103,7 +103,7 @@ def test_probe_form_source_contract():
     src = webui.PAGE
     for needle in ('id="srxFrom"', 'id="srxTo"', 'id="srxDate"',
                    'id="srxPlatPick"', 'id="srxGo"', '主动探针',
-                   '/api/probe/search', '不入库、不推送'):
+                   '/api/probe/start', '/api/probe/task', '不入库、不推送'):
         assert needle in src, needle
     assert "function srxProbeRun()" in src
     assert "SRX.probe" in src

@@ -37,7 +37,8 @@ def test_health_maintenance_never_green_100():
 
 def test_demo_probe_mode_and_matrix_orphan_close():
     s = _src()
-    assert "const pm=$('srxProbeMode');if(pm)pm.textContent=demo?'DEMO · 合成'" in s
+    assert "const pm=$('srxProbeMode');if(pm)pm.textContent=SRX.probe?" in s
+    assert "(demo?'DEMO · 合成':'监控数据')" in s
     fn = s[s.index("function srxRenderRows(){"):s.index("function srxMatrixHTML()")]
     assert "if(SRX.sel&&!rows.some(f=>srxKey(f)===SRX.sel))" in fn
     assert "srxUnlockBody()" in fn

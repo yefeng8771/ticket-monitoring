@@ -126,7 +126,7 @@ def test_chart_domain_follows_observed_span(page):
 
 
 def test_source_contracts():
-    assert "let x0=Math.max(win,first-_obs*.05)" in SRC
+    assert "let x0=Math.max(win,first), x1=Math.min(now,last+_obs*.02)" in SRC
     assert "grid-template-areas:\"price price price\" \"flight flight flight\" \"dep arr arr\"" in SRC
     assert "#tablecard .tw{overflow:visible" in SRC
     # ≤1100 的横滚渐隐同特异性后置，必须显式 !important 收口

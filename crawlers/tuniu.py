@@ -147,9 +147,15 @@ def _ladder(streak: int, attempts: int, polls: int) -> tuple:
 class TuniuCrawler(BaseCrawler):
     name = "tuniu"
     use_mobile = True
+    # 国内 listFlight 710114 登录墙证据（webui /api/login-state 消费）；
+    # 国际通道独立，不受该标记影响
+    login_suspect = False
 
     RATE_MAX = 3
     RATE_WINDOW = 600.0
+
+    PC_URL_TPL = ("https://flight.tuniu.com/domestic/list/"
+                  "{fc}_{tc}_ST_1_0_0/?start={date}")
 
     @classmethod
     def list_url(cls, fc: str, tc: str, date: str) -> str:
@@ -175,6 +181,9 @@ class TuniuCrawler(BaseCrawler):
         # 与国际通道（systemId 63/错误族 710000）完全独立——共桶会让
         # 国内连败拖累国际健康的降载节奏
         self._fail_streak_intl: int = 0
+        self._login_wall: bool = False
+        self._saved_cookies: dict = {}
+        self._saved_cookies_at: float = 0.0
 
     def login_url(self) -> str:
         return "https://www.tuniu.com/"
@@ -264,6 +273,172 @@ class TuniuCrawler(BaseCrawler):
         n = len(data.get("fareList") or [])
         return obj, n, (n == 0 and cls._has_price(data))
 
+    def _saved_session_cookies(self) -> dict:
+        """从持久化浏览器档案取途牛 cookie（登录态只存在 user_data）。
+
+        国内 listFlight 2026-10 起对匿名返回 710114「请登录」；此前
+        爬虫每圈新建 httpx 匿名会话，用户在「渠道登录」保存的会话
+        从未被使用。缓存 5 分钟，避免每个日期都拉起浏览器。
+        """
+        now = time.time()
+        if self._saved_cookies and now - self._saved_cookies_at < 300:
+            return self._saved_cookies
+        out = {}
+        try:
+            with self.browser(headless=True) as ctx:
+                page = self.new_page(ctx)
+                page.goto("https://m.tuniu.com/flight/",
+                          wait_until="domcontentloaded", timeout=20000)
+                page.wait_for_timeout(800)
+                for c in ctx.cookies():
+                    if "tuniu.com" in str(c.get("domain") or ""):
+                        out[str(c.get("name"))] = (str(c.get("value") or ""),
+                                                   str(c.get("domain") or ""))
+        except Exception as ex:
+            self.logger.warning("[tuniu] 读取已保存会话失败: %s", ex)
+        self._saved_cookies = out
+        self._saved_cookies_at = now
+        return out
+
+    PC_ITEMS_JS = r"""() => [...document.querySelectorAll('.J-flightlist')].map(r => {
+      const txt = s => { const e = r.querySelector(s); return e ? e.innerText.trim() : ''; };
+      const arrEl = r.querySelector('.fl-arriveInf .hours');
+      const arrLines = arrEl ? arrEl.innerText.split(String.fromCharCode(10)) : [];
+      const tipEl = r.querySelector('.fl-arriveInf .hours [data-tip]');
+      return {
+        airline: txt('.aircom'), fn: txt('.flihtnumber'),
+        dep: txt('.fl-departInf .hours'),
+        depAir: txt('.fl-departInf .airport'),
+        arr: (arrLines[0] || '').trim(),
+        arrAir: txt('.fl-arriveInf .airport'),
+        dur: txt('.durationTime'),
+        rate: txt('.fl-rate'),
+        price: txt('.price'),
+        cross: arrLines.join(' '),
+        arrTip: tipEl ? tipEl.getAttribute('data-tip') : '',
+        rowText: r.innerText
+      };
+    })"""
+
+    @classmethod
+    def _parse_pc_items(cls, items, date: str) -> list:
+        out = []
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            fn = " ".join(str(it.get("fn") or "").split())
+            m = re.match(r"^([A-Z0-9]{2}\d{3,4})\s*(.*)$", fn)
+            if not m:
+                continue
+            code, plane = m.group(1), m.group(2).strip()
+            dep = str(it.get("dep") or "").strip()
+            arr = str(it.get("arr") or "").strip()
+            if not (re.match(r"^\d{2}:\d{2}$", dep)
+                    and re.match(r"^\d{2}:\d{2}$", arr)):
+                continue
+            pm = re.search(r"[￥¥]\s*([0-9]+(?:\.[0-9]+)?)",
+                           str(it.get("price") or ""))
+            if not pm:
+                continue
+            price = float(pm.group(1))
+            if not price_band_ok(price):
+                continue
+            cabin = ""
+            cm = re.search(r"(超级经济舱|经济舱|公务舱|头等舱)",
+                           str(it.get("price") or ""))
+            if cm:
+                cabin = cm.group(1)
+            rate = ""
+            rm = re.search(r"(\d{1,3})%", str(it.get("rate") or ""))
+            if rm:
+                rate = int(rm.group(1))
+            cross = ""
+            ct = str(it.get("cross") or "")
+            if "+1" in ct or "+2" in ct:
+                cross = "+" + ct.split("+", 1)[1][:1] + "天"
+            elif it.get("arrTip"):
+                try:
+                    from datetime import date as _d
+                    ad = _d.fromisoformat(str(it["arrTip"]).split(" ")[0])
+                    n = (ad - _d.fromisoformat(date)).days
+                    if n > 0:
+                        cross = "+%d天" % n
+                except Exception:
+                    cross = ""
+            out.append({
+                "price": price, "code": code,
+                "name": str(it.get("airline") or "").strip(),
+                "depTime": dep, "arrTime": arr, "depDate": date,
+                "totalDuration": str(it.get("dur") or ""),
+                "depAirport": str(it.get("depAir") or "").strip(),
+                "arrAirport": str(it.get("arrAir") or "").strip(),
+                "plane": plane, "prate": rate,
+                **({"cabin": cabin} if cabin else {}),
+                **({"crossDayDesc": cross} if cross else {}),
+                "source": "tuniu_pc",
+                "transfer": bool(re.search(r"中转|经停", str(it.get("rowText") or ""))),
+            })
+        uniq = {}
+        for r in out:
+            k = (r["code"], r["depTime"], r["arrTime"], r["price"])
+            uniq.setdefault(k, r)
+        return list(uniq.values())
+
+    def _fetch_pc_dom(self, fc: str, tc: str, dates: List[str],
+                      headless=None, path_label: str = "PC") -> dict:
+        """途牛 PC 国内列表；headless 失败时由调用方复用可见会话重试。"""
+        out = {}
+        bak = self.use_mobile
+        self.use_mobile = False
+        try:
+            with self.browser(headless=headless) as ctx:
+                page = self.new_page(ctx)
+                for date in dates:
+                    url = self.PC_URL_TPL.format(fc=fc, tc=tc, date=date)
+                    t0 = time.time()
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                        page.wait_for_selector(".J-flightlist", state="attached", timeout=18000)
+                        page.wait_for_timeout(1200)
+                        items = page.evaluate(self.PC_ITEMS_JS) or []
+                        out[date] = self._parse_pc_items(items, date)
+                        self._debug_snapshot(page, f"tuniu_pc_{fc}{tc}_{date}",
+                                             extra_text=page.inner_text("body"))
+                        self.path_note(path_label, "ok" if out[date] else "empty",
+                                       rows=len(out[date]), date=date,
+                                       ms=int((time.time() - t0) * 1000),
+                                       detail="flight.tuniu.com 国内列表")
+                    except Exception as e:
+                        self.logger.warning("[tuniu] %s PC 列表加载失败: %s", date, e)
+                        out[date] = []
+                        try:
+                            _body = page.inner_text("body")[:1200]
+                        except Exception:
+                            _body = ""
+                        _blocked = bool(re.search(
+                            r"验证码|人机验证|滑动验证|拖动|安全验证|拼图", _body))
+                        if not _blocked:
+                            try:
+                                _blocked = bool(page.evaluate(
+                                    "() => !!document.querySelector("
+                                    "'[class*=captcha],[class*=verify],"
+                                    "[id*=captcha],[class*=slide],[class*=drag]')"))
+                            except Exception:
+                                pass
+                        self.path_note(
+                            path_label, "blocked" if _blocked else "error",
+                            date=date,
+                            detail=("人机验证页（滑块），需在渠道登录窗口完成验证"
+                                    if _blocked else str(e)[:120]),
+                            ms=int((time.time() - t0) * 1000))
+                        if _blocked:
+                            # 同一 profile 连续请求只会加重风控，遇到滑块即停。
+                            break
+                    self._sleep()
+        finally:
+            self.use_mobile = bak
+        return out
+
     def _one_attempt(self, depart_code, arrive_code, depart_date, polls=None):
         client = httpx.Client(
             headers={
@@ -279,6 +454,11 @@ class TuniuCrawler(BaseCrawler):
             client.get(FLIGHT_HOME)
             client.get(self.list_url(depart_code, arrive_code, depart_date))
 
+            for _ck, (_cv, _cd) in self._saved_session_cookies().items():
+                try:
+                    client.cookies.set(_ck, _cv, domain=_cd, path="/")
+                except Exception:
+                    pass
             self._install_tac_cookies(client)
             mtoken = client.cookies.get("mtoken", "") or ""
 
@@ -302,6 +482,13 @@ class TuniuCrawler(BaseCrawler):
                 d["pollTag"] = poll
                 r = client.get(LIST_API, params={"d": json.dumps(d, ensure_ascii=False)}, headers=api_hdrs)
                 last = r.text
+                if "710114" in last or "请登录" in last:
+                    type(self).login_suspect = True
+                    self._login_wall = True
+                    self.logger.warning(
+                        "[tuniu] %s 国内接口 710114 请登录——需在渠道登录保存途牛会话",
+                        depart_date)
+                    return False, None, True
                 if "179991" in last:
                     blocked = True
                 obj, n, legacy_price = self._poll_sample(last)
@@ -351,6 +538,7 @@ class TuniuCrawler(BaseCrawler):
                 self._rate_acquire()
             ok, raw, blocked = self._one_attempt(fc, tc, date, polls=eff_p)
             if ok:
+                type(self).login_suspect = False
                 if self._fail_streak >= _LADDER_STRIKE:
                     self.logger.info(
                         "[tuniu] 降载档恢复：连续全败 %d 个查询后拿到价格"
@@ -360,6 +548,11 @@ class TuniuCrawler(BaseCrawler):
                     self._rate_record()
                 self.logger.info("[tuniu] %s 第 %d 圈拿到真实价格", date, attempt)
                 return raw
+            if self._login_wall:
+                # 710114 是账号态门，不是风控频率；重试只会空转
+                self._fail_streak += 1
+                self._login_wall = False
+                return None
             if eff_a and attempt >= eff_a:
                 # 连败计数按「查询」落账（收尾一次），不按「圈」
                 self._fail_streak += 1
@@ -697,16 +890,25 @@ class TuniuCrawler(BaseCrawler):
         fc = airport_city_code(from_city.upper())
         tc = airport_city_code(to_city.upper())
         for date in dates:
+            t_h5 = time.time()
             raw = self._hoop_intl(fc, tc, date)
             self._dump_raw(raw, f"tuniu_intl_{date}")
             if raw is None:
                 self.logger.warning("[tuniu][intl] %s 未拿到真实价格", date)
+                self.path_note(
+                    "H5/API",
+                    "login" if type(self).login_suspect else "empty",
+                    date=date, detail="国际接口未返回价格",
+                    ms=int((time.time() - t_h5) * 1000))
                 self._sleep()
                 continue
             flights = self._parse_offers_intl(raw)
             self._stamp_intl(flights, fc, tc)
             best = min(flights, key=lambda f: f["price"]) if flights else None
             if best is not None:
+                self.path_note("H5/API", "ok", rows=len(flights), date=date,
+                               detail="国际列表接口",
+                               ms=int((time.time() - t_h5) * 1000))
                 results.append(FlightPrice(
                     platform=self.name,
                     from_city=from_city, to_city=to_city,
@@ -725,21 +927,71 @@ class TuniuCrawler(BaseCrawler):
                     len(flights), n_d, len(flights) - n_d)
             else:
                 self.logger.warning("[tuniu][intl] %s 未解析到价格", date)
+                self.path_note("H5/API", "empty", date=date,
+                               detail="国际接口有响应但未解析出价格",
+                               ms=int((time.time() - t_h5) * 1000))
             self._sleep()
         return results
 
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        self.path_reset()
         if is_intl_route(from_city, to_city):
             return self._fetch_intl(from_city, to_city, dates,
                                     ret_date=ret_date)
         results: List[FlightPrice] = []
-        fc, tc = from_city.upper(), to_city.upper()
+        # 途牛国内列表/接口使用城市码（北京=BJS），机场码 PEK 会落空；
+        # 与飞猪/携程国内同律先归并城市码，FlightPrice 仍保留原航线。
+        fc, tc = airport_city_code(from_city.upper()), airport_city_code(to_city.upper())
+        pc_map = {}
+        if not ret_date:
+            try:
+                pc_map = self._fetch_pc_dom(fc, tc, dates)
+            except Exception as e:
+                self.logger.warning("[tuniu] PC 列表异常，回退 H5/API: %s", e)
+                pc_map = {}
+            # 无痕 profile 会触发滑块；复用已保存的可信会话开可见窗口
+            # 再取一次（不破解验证码；仍被挑战则如实落 blocked）。
+            missing = [d for d in dates if not (pc_map.get(d) or [])]
+            # 可见窗口只在用户主动探针时兜底；定时监控不弹窗。
+            if missing and getattr(self, "probe_mode", False):
+                try:
+                    self.logger.info("[tuniu] PC 无明细，复用已保存会话可见窗口重试 %d 日", len(missing))
+                    headed = self._fetch_pc_dom(fc, tc, missing, headless=False,
+                                                path_label="PC可见")
+                    for d in missing:
+                        if headed.get(d):
+                            pc_map[d] = headed[d]
+                except Exception as e:
+                    self.logger.warning("[tuniu] PC 可见窗口重试失败: %s", e)
         for date in dates:
+            pc_rows = pc_map.get(date) or []
+            if pc_rows:
+                best = min(pc_rows, key=lambda f: f["price"])
+                results.append(FlightPrice(
+                    platform=self.name,
+                    from_city=from_city, to_city=to_city,
+                    depart_date=date, price=float(best["price"]),
+                    airline=best.get("name", "")[:20],
+                    flight_no=best.get("code", ""),
+                    depart_time=best.get("depTime", ""),
+                    arrive_time=best.get("arrTime", ""),
+                    extra=json.dumps(pc_rows, ensure_ascii=False)))
+                self.last_path = "PC列表"
+                self.logger.info(
+                    "[tuniu] %s PC 明细 %d 条 · 最低 ￥%.0f",
+                    date, len(pc_rows), float(best["price"]))
+                continue
+            t_h5 = time.time()
             raw = self._hoop(fc, tc, date)
             self._dump_raw(raw, f"tuniu_raw_{date}")
             if raw is None:
                 self.logger.warning("[tuniu] %s 未拿到真实价格", date)
+                self.path_note(
+                    "H5/API",
+                    "login" if type(self).login_suspect else "empty",
+                    date=date, detail="m.tuniu.com 接口未返回价格",
+                    ms=int((time.time() - t_h5) * 1000))
                 self._sleep()
                 continue
 
@@ -747,6 +999,9 @@ class TuniuCrawler(BaseCrawler):
             best = self._lowest_offer(offers)
             flights = self._offers_to_flights(offers)
             if best is not None and best.get("price"):
+                self.path_note("H5/API", "ok", rows=len(flights), date=date,
+                               detail="m.tuniu.com 列表接口",
+                               ms=int((time.time() - t_h5) * 1000))
                 results.append(FlightPrice(
                     platform=self.name,
                     from_city=from_city, to_city=to_city,
@@ -764,6 +1019,9 @@ class TuniuCrawler(BaseCrawler):
                                  len(flights), n_d, len(flights) - n_d)
             else:
                 self.logger.warning("[tuniu] %s 未解析到价格", date)
+                self.path_note("H5/API", "empty", date=date,
+                               detail="接口有响应但未解析出价格",
+                               ms=int((time.time() - t_h5) * 1000))
             self._sleep()
         return results
 

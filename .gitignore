@@ -232,7 +232,7 @@ dist/
 build/
 *.zip
 *.spec.bak
-RELEASE-*.md
+/RELEASE-*.md
 dist_package/
 # PyInstaller onedir 本地试打包产物（正式发版走 _rel worktree 干净树）
 /_build/

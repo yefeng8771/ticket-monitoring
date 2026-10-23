@@ -2,7 +2,7 @@
 """r314 登录完成页状态自动跟进（TDD 先行，用户实报缺陷复现钉）：
 
 现象：弹窗登录完成点「✅ 我已登录完成」后，登录卡停在「登录中…」，
-要手动点「🔄 刷新状态」才更新为「已保存登录，下轮采集验证中…」。
+要手动点「🔄 刷新状态」才更新为「已保存，等待采集验证…」。
 
 根因（Phase 1 定谳）：/api/login-finish 置 Event 即返回，会话保存是
 登录线程的异步尾部（Playwright 持久化上下文关闭需数秒）——
@@ -103,7 +103,7 @@ def _plats(qunar):
 
 # finish 前态：qunar 登录窗开着（active）→ 卡片渲染「我已登录完成」钮
 PLATS_A = _plats({"saved": False, "active": True})
-# 翻落态：会话已保存、验证窗内（stale+pending）→「已保存登录，下轮采集验证中…」
+# 翻落态：会话已保存、验证窗内（stale+pending）→「已保存，等待采集验证…」
 PLATS_B = _plats({"saved": True, "active": False, "stale": True, "pending": True})
 
 
@@ -127,7 +127,7 @@ def test_login_finish_watch_source_pin():
 
 def test_login_finish_status_follows(pg):
     """行为钉：finish 后服务端翻落（模拟保存耗时 2.5s）须在 9s 内自动
-    呈现为「已保存登录，下轮采集验证中…」，零手动刷新。旧实现唯一
+    呈现为「已保存，等待采集验证…」，零手动刷新。旧实现唯一
     追上点是 30s 轻轮询，本钉必红。附带零 pageerror 门：loadLogin 的
     return 值引用若逃出 try 块作用域（r314 P1-3 实锤），凡成功渲染
     路径必抛 ReferenceError——卡片内容断言抓不到它，零错窗钉补位。"""
@@ -154,7 +154,7 @@ def test_login_finish_status_follows(pg):
         pg.click(".lgcard.active button")
         pg.wait_for_function(
             "document.querySelector('#loginRows').innerHTML"
-            ".indexOf('已保存登录，下轮采集验证中')>=0",
+            ".indexOf('已保存，等待采集验证')>=0",
             timeout=9000)
     finally:
         pg.evaluate("lgWatchStop()")   # 停 30s 轮询再关浏览器（teardown 在途 fetch 噪音）

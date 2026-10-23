@@ -220,6 +220,9 @@ class TestRecentPlatformFlightsTimeFilter:
         age, fl = out["qunar"]
         assert 1.5 < age < 2.5, age
         assert fl and fl[0]["price"] == 1888
+        # 补位行必须带 DB id + extra 下标，详情/CSV 才能回放 raw
+        assert fl[0]["_row_id"] > 0 and fl[0]["_raw_idx"] == 0
+        assert fl[0]["_fetched_at"]
 
 
 class TestDailyMinimaReusesNothingBroken:

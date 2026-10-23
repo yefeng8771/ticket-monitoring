@@ -72,7 +72,7 @@ def test_login_rejection_is_actionable():
     assert out["stats"]["qunar"]["auth"] == 1
 
 
-def test_session_gate_444_is_actionable_not_generic_failure():
+def test_invalid_link_444_is_risk_evidence_not_login_rejection():
     from core.health import parse_health
     log = _round([
         _hl("2026-10-21 22:00:10", "WARNING", "t",
@@ -82,9 +82,9 @@ def test_session_gate_444_is_actionable_not_generic_failure():
     out = parse_health(log, now="2026-10-21 23:00:00")
     p = out["rounds"][0]["plats"]["tongcheng"]
     assert p["s"] == "fail"
-    assert p["need_login"] is True
-    assert "会话门拒" in p["note"]
-    assert out["stats"]["tongcheng"]["auth"] == 1
+    assert p["need_login"] is False
+    assert p["note"] and "重登" not in p["note"] and "需登录" not in p["note"]
+    assert out["stats"]["tongcheng"]["auth"] == 0
 
 
 def test_calendar_plus_failure_is_partial_and_counts_calendar():
@@ -128,27 +128,39 @@ def test_search_kpi_separates_fallback_from_anomaly():
     start = src.index("function srxRenderKpis(){")
     end = src.index("function srxRenderChips(){", start)
     block = src[start:end]
-    assert "补位行" in block
-    # 补位行不再被当作「异常」主数字；异常只保留孤低价/离群。
+    # 补位/异常降为 KPI 次级行，不再各占一张零值主卡。
+    assert "补位 " in block and "fallback" in block and "bad" in block
     assert "k('异常'" not in block
-    assert "fallback" in block and "bad" in block
-    assert "上轮有效 · 含日历" in block
+    assert "srx-kpi-sub" in block and "本次明细" in block
 
 
-def test_international_capability_strip_is_actionable():
-    src = open("webui.py", encoding="utf-8").read()
-    assert "function srxRenderCapbar()" in src
-    assert "渠道登录" in src
-    assert "会话待重登" in src
-    assert "国际数据能力" in src
-    assert "日历价" in src
+def test_read_log_tail_keeps_oldest_line_beyond_2mb_tail(tmp_path, monkeypatch):
+    """5MiB 轮转文件必须整读：旧的 2MiB 尾读会静默丢掉窗口最早轮次。"""
+    import webui
+    log = tmp_path / "monitor.log"
+    old = "2026-10-22 09:00:00 [INFO] t: ===== 开始一轮扫描 =====\n"
+    (tmp_path / "monitor.log.1").write_text(
+        old + "x" * 2_300_000 + "\n", encoding="utf-8")
+    log.write_text("2026-10-22 10:00:00 [INFO] t: latest\n", encoding="utf-8")
+    monkeypatch.setattr(webui._State, "cfg",
+                        {"output": {"log_path": str(log)}})
+    text = webui._read_log_tail(max_age_h=48)
+    assert old.strip() in text
+    assert "latest" in text
 
 
-def test_health_login_failure_has_direct_action():
-    src = open("webui.py", encoding="utf-8").read()
-    assert 'id="hauthact"' in src
-    start = src.index("function renderHealth(j){")
-    end = src.index("const CH_CN=", start)
-    block = src[start:end]
-    assert "需登录 " in block and "去登录" in block
-    assert "auth" in block
+def test_read_log_tail_never_glues_rotated_boundary_lines(tmp_path, monkeypatch):
+    import webui
+    log = tmp_path / "monitor.log"
+    (tmp_path / "monitor.log.1").write_text(
+        "2026-10-22 09:00:00 [INFO] t: 旧文件末行", encoding="utf-8")
+    log.write_text("2026-10-22 10:00:00 [INFO] t: 新文件首行\n",
+                   encoding="utf-8")
+    monkeypatch.setattr(webui._State, "cfg",
+                        {"output": {"log_path": str(log)}})
+    text = webui._read_log_tail(max_age_h=48)
+    assert "旧文件末行\n2026-10-22 10:00:00" in text
+
+
+# 当前认证按钮和国际能力条由 test_channel_ui_status 的真实脚本行为
+# 覆盖：历史失败不可生成当前登录动作，明确新拒绝才跨页面显示同一动作。

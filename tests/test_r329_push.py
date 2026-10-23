@@ -90,17 +90,18 @@ def test_p23_cabin_bracket_intl_gate():
 
 # ---- P2-1：日历价行空时刻跳过 seg 段（生产 13 条推送裸「> →」根治）----
 
-def test_p21_calendar_row_no_empty_seg():
+def test_calendar_row_never_enters_push_hits():
     a = Alerter(_LOG, notifier=_FakeN(), storage=None, digest=True,
                 storm_repeat=1, user="演练")
     r = Route(from_code="PVG", to_code="NRT", from_name="上海",
               to_name="东京", dates=["2026-11-16"],
               alert_direct=3000, alert_transfer=0)
-    # 日历最低价行：crawlers 域 name=「日历最低价」、时刻诚实留空；
-    # 伴一条正常时刻行——聚合走 hits 区组装路径（单命中走简化 desp
-    # 不经 hit_rows 循环，生产实证 13 条均为多航线聚合形态）
+    # 日历最低价行：name=「日历最低价」、时刻双空。它不是可出手机票，
+    # 不得进入推送分类池/命中，也不得产出「日历最低价 →」空段。
     p = _ps([_fp(2580, "日历最低价", "", "", plat="ctrip")],
             "PVG", "NRT", "2026-11-16")
+    assert a._build_sections(r, p) == []
+    # 同一轮里的正常航班仍必须命中（守卫不误杀真实低价）
     r2 = Route(from_code="NRT", to_code="PVG", from_name="东京",
                to_name="上海", dates=["2026-11-16"],
                alert_direct=3000, alert_transfer=0)
@@ -111,13 +112,9 @@ def test_p21_calendar_row_no_empty_seg():
     desp = pv["desp"]
     # 裸「> →」零信息段绝迹（含「> →(+1天)」变体）
     assert "> →" not in desp, desp
-    # KPI 行2 姊妹同病（推送审校 P3-1）：时刻双空行2 退化为
-    # 「日历最低价 →」悬垂箭头（不带 > 前缀，上面的钉抓不到）
     assert "日历最低价 →" not in desp, desp
-    # head 价格判据 + tail 航线/渠道/价 承载完整（跳段不丢决策信息；
-    # route_short 取城市名首字）
-    assert "🔥" in desp and "上→东" in desp, desp[-400:]
-    # 对照：正常时刻行 seg 骨架仍在（守卫不误杀）
+    # 正常航班命中且 seg 完整；日历航线不冒充命中
+    assert "🔥" in desp and "东→上" in desp, desp[-400:]
     assert "15:10→18:25" in desp
 
 

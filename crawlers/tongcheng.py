@@ -9,16 +9,20 @@ debug/tongcheng_xhr_<date>.txt，据此再精确化字段解析。
 import os
 import re
 import json
+import time
 import urllib.parse
+from datetime import datetime, timedelta
 from typing import List
 
 from core.models import PRICE_MAX, PRICE_MIN, FlightPrice
 from core.citydata import CODE_NAME as _CODE_NAME
-from core.intl import airport_city_code, is_intl_route
+from core.intl import airport_city_code, city_short_of, is_intl_route
 from .base import BaseCrawler, iata2, iata3
 
 
 class TongchengCrawler(BaseCrawler):
+    # 国际日历 444/非法链接=会话门证据（不是无票）；成功取价即清
+    login_suspect = False
     name = "tongcheng"
     use_mobile = True
 
@@ -142,6 +146,205 @@ class TongchengCrawler(BaseCrawler):
             return price, tax, transfer, str(pt.get("RD") or "")
         return price, tax, transfer
 
+    # 国际真实明细（2026-10-23 实测）：桌面 book1 会跳到 H5
+    # m.ly.com/tiflight/book1，原站服务端直出航班卡片（SHA→OSA 52 条，
+    # 含航班号/起降时刻/机场/机型/余票/含税总价）。桌面 ts/list 在
+    # 无会话时 444 门拒，故明细主路径取 H5 DOM；无痕上下文会跳
+    # passport，必须复用已保存会话的可见窗口（仅用户主动探针）。
+    INTL_H5_BOOK = "https://m.ly.com/tiflight/book1.html"
+
+    @classmethod
+    def _intl_h5_url(cls, fc: str, tc: str, date: str,
+                     from_name: str, to_name: str) -> str:
+        q = [
+            ("tt", "0"), ("dc", fc), ("dcn", from_name),
+            ("ac", tc), ("acn", to_name), ("dt", date),
+            ("rt", "1900-01-01"), ("cabin", "Y|S|C|F"),
+            ("an", "1"), ("cn", "0"), ("baby", "0"),
+            ("departureCity", from_name),
+            ("arrivalCity", to_name), ("refid", ""),
+        ]
+        return cls.INTL_H5_BOOK + "?" + urllib.parse.urlencode(
+            q, safe="|")
+
+    # 单条航班 = 一个 .flight-list 根节点（时刻/价格与航司信息在根内
+    # 三个并列 .flight-main 中，不能按 .flight-main.mb-12 取，否则
+    # 只拿到时刻价格、航司/航班号恒空）。
+    _INTL_CARDS_JS = r"""() => [...document.querySelectorAll(
+        '#flightBoxId .flight-list')].map(card => {
+      const ta = [...card.querySelectorAll('.flight .time-airport')];
+      const txt = s => s ? s.textContent.trim() : '';
+      const spans = [...card.querySelectorAll('.airplane-box > span')].map(txt);
+      const ft = spans[0] || '';
+      const codes = ft.match(/[A-Z0-9]{2}\s?\d{2,4}/g) || [];
+      const m = codes.length ? codes[0].match(/([A-Z0-9]{2}\s?\d{2,4})/) : null;
+      const body = (card.innerText || '');
+      const tags = [...card.querySelectorAll(
+          '.flight-tag, [class*=transfer], [class*=stop]')].map(txt).join(' ');
+      // 中转卡片在 flight-info 内用 trans-style-* 显示中转城市与停留
+      // 时长（如「中国澳门 12时30分」）；直飞卡片没有该节点。
+      const transEl = card.querySelector('[class*=trans-style]');
+      const via = transEl
+          ? ((transEl.querySelector('span') || {}).textContent || '').trim()
+          : '';
+      return {
+        dep: txt(ta[0] && ta[0].querySelector('.font-tc-currency')),
+        arr: txt(ta[1] && ta[1].querySelector('.font-tc-currency')),
+        depAp: txt(ta[0] && ta[0].querySelector('.airport')),
+        arrAp: txt(ta[1] && ta[1].querySelector('.airport')),
+        dur: txt(card.querySelector('.flTime')),
+        price: txt(card.querySelector('.total-price')).replace(/[^\d.]/g, ''),
+        tickets: txt(card.querySelector('.tickets-num')),
+        airline: m ? ft.replace(m[1], '').trim() : ft,
+        code: m ? m[1].replace(/\s/g, '') : '',
+        aircraft: spans[1] || '',
+        transfer: !!transEl || /中转/.test(body) || /中转|经停/.test(tags)
+                  || codes.length > 1,
+        via: via || (body.match(/经[停过]([^\s,，]{2,8})/) || [])[1] || '',
+        share: /共享/.test(body)
+      };
+    })"""
+
+    @staticmethod
+    def _parse_intl_cards(cards, date: str):
+        """H5 航班卡片 → 明细行。只认卡片可见的航班号/时刻/含税价，
+        不补造税费或舱位。跨天到达按飞行时长/时刻推回程日。"""
+        flights = []
+        for c in cards or []:
+            if not isinstance(c, dict):
+                continue
+            try:
+                price = float(str(c.get("price") or "").replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+            if price < PRICE_MIN or price > PRICE_MAX:
+                continue
+            code = str(c.get("code") or "").strip().upper()
+            dep = str(c.get("dep") or "").strip()
+            if not code or not re.match(r"^\d{1,2}:\d{2}$", dep):
+                continue
+            arr = str(c.get("arr") or "").strip()
+            _dur = str(c.get("dur") or "")
+            dm = re.search(r"(\d+)\s*时\s*(\d+)", _dur)
+            duration = (int(dm.group(1)) * 60 + int(dm.group(2))
+                        if dm else 0)
+            arr_date = str(date)
+            try:
+                _dep_dt = datetime.strptime(
+                    f"{date} {dep}", "%Y-%m-%d %H:%M")
+                if duration:
+                    arr_date = (_dep_dt + timedelta(
+                        minutes=duration)).strftime("%Y-%m-%d")
+                elif arr and arr < dep:
+                    arr_date = (_dep_dt + timedelta(
+                        days=1)).strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                pass
+            _tk = str(c.get("tickets") or "")
+            _left = re.search(r"余\s*(\d+)\s*张", _tk)
+            item = {
+                "price": price,
+                "name": str(c.get("airline") or ""),
+                "code": code,
+                "depTime": dep,
+                "arrTime": arr,
+                "depDate": str(date),
+                "arrDate": arr_date,
+                "depAirport": str(c.get("depAp") or ""),
+                "arrAirport": str(c.get("arrAp") or ""),
+                "duration": duration,
+                "cabin": str(c.get("cabin") or ""),
+                "aircraft": str(c.get("aircraft") or ""),
+                "currency": "CNY",
+                "intl": 1,
+                "source": "ts_h5",
+            }
+            if _left:
+                item["seats"] = _left.group(1)
+            if c.get("transfer"):
+                item["transfer"] = 1
+                item["transCity"] = str(c.get("via") or "中转")
+            if c.get("share"):
+                item["share"] = 1
+            flights.append(item)
+        dedup = {}
+        for f in flights:
+            k = (f["code"], f["depTime"])
+            if k not in dedup or f["price"] < dedup[k]["price"]:
+                dedup[k] = f
+        return list(dedup.values())
+
+    def _fetch_intl_list_day(self, page, fc: str, tc: str, date: str,
+                             from_name: str, to_name: str):
+        """单日国际 H5 明细：原站列表页直出卡片，滚动补量后取 DOM。
+        返回 (flights, need_login, blocked, body_head)。"""
+        url = self._intl_h5_url(fc, tc, date, from_name, to_name)
+        flights, need_login, blocked = [], False, False
+        body_head = ""
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        except Exception as e:
+            self.logger.warning("[tongcheng][intl] %s H5 列表导航异常: %s",
+                                date, e)
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline:
+            try:
+                cards = page.evaluate(self._INTL_CARDS_JS)
+            except Exception as e:
+                self.logger.warning(
+                    "[tongcheng][intl] %s H5 卡片读取异常: %s", date, e)
+                cards = []
+            if cards:
+                self.logger.info(
+                    "[tongcheng][intl] %s H5 首屏卡片 %d 张", date, len(cards))
+                # 首屏后滚到底触发懒加载，取更多真实行程
+                for _ in range(3):
+                    try:
+                        page.evaluate(
+                            "() => window.scrollTo(0, "
+                            "document.body.scrollHeight)")
+                        page.wait_for_timeout(700)
+                    except Exception:
+                        break
+                try:
+                    cards = page.evaluate(self._INTL_CARDS_JS)
+                except Exception:
+                    pass
+                flights = self._parse_intl_cards(cards, date)
+                if flights:
+                    break
+                self.logger.info(
+                    "[tongcheng][intl] %s H5 卡片 %d 张未解析出明细 · "
+                    "sample=%s", date, len(cards),
+                    json.dumps(cards[0] if cards else {},
+                               ensure_ascii=False)[:360])
+            try:
+                body_head = page.inner_text("body")[:1200]
+            except Exception:
+                body_head = ""
+            blocked = bool(re.search(
+                r"验证码|安全验证|访问验证|滑动|拖动|人机", body_head))
+            _url = page.url or ""
+            if blocked or "passport" in _url:
+                need_login = "passport" in _url
+                break
+            page.wait_for_timeout(800)
+        if not flights and not body_head:
+            try:
+                body_head = page.inner_text("body")[:1200]
+            except Exception:
+                body_head = ""
+        if not flights:
+            _url = page.url or ""
+            if "passport" in _url or ("登录" in body_head
+                                      and "退出" not in body_head):
+                need_login = True
+            _empty = bool(re.search(r"没有找到|无航班|暂无航班", body_head))
+            self.logger.info(
+                "[tongcheng][intl] %s H5 未出卡片 · url=%s · 无结果页=%s · "
+                "body=%dB", date, _url, _empty, len(body_head))
+        return flights, need_login, blocked, body_head
+
     def _fetch_intl(self, from_city: str, to_city: str,
                     dates: List[str], ret_date: str = "") -> List[FlightPrice]:
         """国际采集主路径（r325）：机场码→城市码归并，逐日期页内取
@@ -166,7 +369,9 @@ class TongchengCrawler(BaseCrawler):
                           dates: List[str], fc: str, tc: str,
                           ret_date: str = "") -> List[FlightPrice]:
         results: List[FlightPrice] = []
-        with self.browser() as ctx:
+        # 列表接口依赖已保存会话：仅用户主动探针开可见窗口复用可信
+        # 会话；定时监控保持配置的无头档，不弹窗也不假装有明细。
+        with self.browser(headless=(False if self.probe_mode else None)) as ctx:
             page = self.new_page(ctx)
             # 入口页养会话（as-sdk 初始化 + cookie 下发；缺这步=444）
             try:
@@ -176,6 +381,67 @@ class TongchengCrawler(BaseCrawler):
                 self.logger.warning(
                     "[tongcheng][intl] 会话预热失败（后续请求可能 444）: %s", e)
             for date in dates:
+                # 探针优先真实列表（同程国际前四渠道验收所需明细）；
+                # 列表被门拒/无结果时仍走日历兜底并如实分层标注。
+                if self.probe_mode and not ret_date:
+                    t_list = time.time()
+                    # 国际搜索参数收中文城市短名（大阪，不是 OSA）；
+                    # 城市码本身无中文名时回退展示名/裸码。
+                    _fn = self.CITY_NAME.get(fc) or city_short_of(fc)
+                    _tn = self.CITY_NAME.get(tc) or city_short_of(tc)
+                    flights, need_login, blocked, body_head = (
+                        self._fetch_intl_list_day(
+                            page, fc, tc, date, _fn, _tn))
+                    if flights:
+                        best = min(flights, key=lambda f: f["price"])
+                        type(self).login_suspect = False
+                        self.path_note(
+                            "H5列表", "ok", rows=len(flights), date=date,
+                            detail="同程国际 H5 列表明细",
+                            ms=int((time.time() - t_list) * 1000))
+                        results.append(FlightPrice(
+                            platform=self.name,
+                            from_city=from_city, to_city=to_city,
+                            depart_date=date, price=float(best["price"]),
+                            airline=str(best.get("name") or ""),
+                            flight_no=str(best.get("code") or ""),
+                            depart_time=best.get("depTime", ""),
+                            arrive_time=best.get("arrTime", ""),
+                            extra=json.dumps(flights, ensure_ascii=False),
+                        ))
+                        n_d = sum(1 for f in flights
+                                  if f.get("transfer"))
+                        self.logger.info(
+                            "[tongcheng][intl] %s H5 明细 %d 条 · 最低"
+                            " ￥%.0f（中转 %d / 未标中转 %d）", date,
+                            len(flights), best["price"], n_d,
+                            len(flights) - n_d)
+                        self._sleep()
+                        continue
+                    if blocked or need_login:
+                        type(self).login_suspect = need_login
+                        self.path_note(
+                            "H5列表",
+                            "blocked" if blocked else "login",
+                            date=date,
+                            detail=("同程国际 H5 人机验证" if blocked
+                                    else "同程国际 H5 需登录"),
+                            ms=int((time.time() - t_list) * 1000))
+                    else:
+                        self.path_note(
+                            "H5列表", "empty", date=date,
+                            detail="同程国际 H5 未解析到航班",
+                            ms=int((time.time() - t_list) * 1000))
+                    # 列表失败后页面停在 m.ly.com，日历页内 fetch 跨域
+                    # 会失败；回到国际入口再走既有日历兜底。
+                    try:
+                        page.goto(self.INTL_HOME, wait_until="domcontentloaded",
+                                  timeout=20000)
+                        page.wait_for_timeout(1500)
+                    except Exception as e:
+                        self.logger.warning(
+                            "[tongcheng][intl] %s 日历兜底前回入口失败: %s",
+                            date, e)
                 url = self._calendar_url(fc, tc, date,
                                          ret_date=ret_date or "")
                 body = ""
@@ -229,16 +495,23 @@ class TongchengCrawler(BaseCrawler):
                     if _code == "444" or "非法链接" in (body or ""):
                         # 会话层门拒（不是无航班）：给健康页/用户可执行的
                         # 重登提示，禁止混同为「日历无价」。
+                        type(self).login_suspect = True
+                        self.path_note("日历", "login", date=date,
+                                       detail="国际日历会话门拒 code=%s" % _code)
                         self.logger.warning(
                             "[tongcheng][intl] %s 会话门拒（code=%s %s，"
                             "body %dB）——请在配置页「渠道登录」重登 tongcheng",
                             date, _code, _msg, len(body))
                     else:
+                        self.path_note("日历", "empty", date=date,
+                                       detail="国际日历未拿到该日报价")
                         self.logger.warning(
                             "[tongcheng][intl] %s 未拿到日历价（body %dB）",
                             date, len(body))
                     self._sleep()
                     continue
+                self.path_note("日历", "calendar", rows=1, date=date,
+                               detail="仅日历最低价，无航班明细")
                 price, tax, transfer = row[0], row[1], row[2]
                 back = row[3] if len(row) > 3 else ""
                 element = {
@@ -267,6 +540,7 @@ class TongchengCrawler(BaseCrawler):
                     depart_time="", arrive_time="",
                     extra=json.dumps([element], ensure_ascii=False),
                 ))
+                type(self).login_suspect = False
                 self.logger.info(
                     "[tongcheng][intl] %s 日历最低含税价 ￥%.0f"
                     "（票面 %.0f+税 %.0f）", date, price, price - tax, tax)
@@ -289,6 +563,7 @@ class TongchengCrawler(BaseCrawler):
 
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        self.path_reset()
         # 国际分流（r325，report_tongcheng.md）：A- 级日历通道
         if is_intl_route(from_city, to_city):
             return self._fetch_intl(from_city, to_city, dates,
@@ -297,6 +572,7 @@ class TongchengCrawler(BaseCrawler):
         with self.browser() as ctx:
             page = self.new_page(ctx)
             for date in dates:
+                t_h5 = time.time()
                 fc, tc = from_city.upper(), to_city.upper()
                 url = self.URL_TPL.format(
                     from_city=fc,
@@ -379,11 +655,34 @@ class TongchengCrawler(BaseCrawler):
                         self.logger.info(
                             "[tongcheng] %s 最低价 ￥%.0f（明细 %d 条：直飞 %d / 中转 %d）",
                             date, price, len(flights), n_d, len(flights) - n_d)
+                        self.path_note(
+                            "H5", "ok", rows=len(flights), date=date,
+                            detail="www.ly.com H5 列表",
+                            ms=int((time.time() - t_h5) * 1000))
                     else:
                         self.logger.warning("[tongcheng] %s 未解析到价格", date)
+                        try:
+                            _body = page.inner_text("body")[:1000]
+                        except Exception:
+                            _body = ""
+                        _blocked = bool(re.search(
+                            r"验证码|人机验证|滑动验证|拖动|安全验证|拼图", _body))
+                        _login = bool(re.search(r"登录|扫码|账号密码", _body))
+                        self.path_note(
+                            "H5", "blocked" if _blocked
+                            else ("login" if _login else "empty"),
+                            date=date,
+                            detail=("人机验证页，需在渠道登录窗口完成验证"
+                                    if _blocked else
+                                    ("页面要求登录" if _login
+                                     else "H5 列表未解析到价格")),
+                            ms=int((time.time() - t_h5) * 1000))
                         self._debug_snapshot(page, f"nopx_{date}")
                 except Exception as e:
                     self.logger.exception("[tongcheng] %s 抓取异常: %s", date, e)
+                    self.path_note("H5", "error", date=date,
+                                   detail=str(e)[:120],
+                                   ms=int((time.time() - t_h5) * 1000))
                 self._sleep()
         return results
 

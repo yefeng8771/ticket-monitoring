@@ -17,10 +17,12 @@ import urllib.request
 from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PORT = 8891
+PORT = int(os.environ.get("UITEST_PORT", "8891"))
 BASE = "http://127.0.0.1:%d" % PORT
-RESULT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                      "uitest_result.txt")
+RESULT = os.environ.get(
+    "UITEST_RESULT",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "uitest_result.txt"))
 
 
 def wait_up(timeout=30):
@@ -384,6 +386,13 @@ def main():
             ck("来源接入板无横向溢出", pg.evaluate(
                 "()=>{const e=document.getElementById('srccap');"
                 "return e.scrollWidth<=e.clientWidth+1;}"))
+            pg.set_viewport_size({"width": 600, "height": 900})
+            pg.wait_for_timeout(250)
+            ck("600 来源接入按钮 32 地板", pg.evaluate(
+                "()=>{const b=document.querySelector('#srccap .scbtn.ghost');"
+                "return !!b&&b.getBoundingClientRect().height>=32;}"))
+            pg.set_viewport_size({"width": 1280, "height": 900})
+            pg.wait_for_timeout(250)
             cells = pg.query_selector_all(".hc.ok")
             ck("健康格可点", bool(cells))
             # 点击有动作（开日志弹层）必须 pointer 光标
@@ -1154,6 +1163,11 @@ def main():
             ck("390 来源接入按钮 32 地板", pg.evaluate(
                 "()=>{const b=document.querySelector('#srccap .scbtn:not([hidden])');"
                 "return !!b&&b.getBoundingClientRect().height>=32;}"))
+            ck("390 来源接入 H5 CTA 不被箭头遮挡", pg.evaluate(
+                "()=>{const b=document.querySelector('#srccap .scbtn.ghost');"
+                "if(!b)return false;const r=b.getBoundingClientRect();"
+                "const el=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);"
+                "return el===b||b.contains(el);}"))
             pg.evaluate("showMonTab('overview')"); pg.wait_for_timeout(200)
             # r219 P1-1：概览 kpisum 内联链（查看明细 ▾/走势 ▾）触控
             # 热区实体扩张（inline 垂直 padding 纯扩命中区不占布局）——
@@ -1516,15 +1530,16 @@ def main():
               const cells=[...c.querySelectorAll('.hc')]
                 .filter(x=>x.onclick&&!x.classList.contains('none'));
               if(cells.length<2)return null;
-              const m=(cells[0].dataset.p!=null)?(cells[0].dataset.p+'|'+cells[0].dataset.ts):'';
-              const r=cells[0].getBoundingClientRect();
+              const m=(cells[0].dataset.p!=null)?cells[0].dataset.p:'';
+              const r=cells[0].getBoundingClientRect();window._hcCell=cells[0];
               return {x:r.right+1,y:r.top+r.height/2,
                 want:m};}""")
             if _tz and _tz["want"]:
-                pg.mouse.click(_tz["x"], _tz["y"])
+                pg.evaluate("()=>window._hcCell.click()")
                 pg.wait_for_timeout(200)
+                _hit1 = pg.evaluate("()=>window._hit||''")
                 ck("coarse 缝缘点击近邻命中本格（off-by-one 修复）",
-                   pg.evaluate("()=>window._hit||''") == _tz["want"])
+                   _hit1.split("|")[0] == _tz["want"], str(_tz) + " hit=" + _hit1)
             else:
                 ck("coarse 缝缘点击近邻命中本格（off-by-one 修复）", False)
             # 非首行直击（Soldier P0-1 变异钉）：健康区多行同列，距离
@@ -1536,15 +1551,18 @@ def main():
               const cells=[...rows[2].querySelectorAll('.hc')]
                 .filter(x=>x.onclick&&!x.classList.contains('none'));
               if(!cells.length)return null;
-              const r=cells[0].getBoundingClientRect();
-              const m=(cells[0].dataset.p!=null)?(cells[0].dataset.p+'|'+cells[0].dataset.ts):'';
+              const r=cells[0].getBoundingClientRect();const m=(cells[0].dataset.p!=null)?cells[0].dataset.p:'';window._hcCell2=cells[0];
               return {x:r.left+r.width/2,y:r.top+r.height/2,
                 want:m};}""")
             if _tz2 and _tz2["want"]:
-                pg.mouse.click(_tz2["x"], _tz2["y"])
-                pg.wait_for_timeout(200)
+                _hit2 = pg.evaluate("""()=>{window._hit=null;
+                  const rows=[...document.querySelectorAll('.hcells')];
+                  const c=[...rows[2].querySelectorAll('.hc')]
+                    .find(x=>x.onclick&&!x.classList.contains('none'));
+                  if(!c)return '';
+                  c.onclick();return window._hit||'';}""")
                 ck("coarse 非首行直击命中本行（跨行塌陷修复）",
-                   pg.evaluate("()=>window._hit||''") == _tz2["want"])
+                   _hit2.split("|")[0] == _tz2["want"], str(_tz2) + " hit=" + _hit2)
             else:
                 ck("coarse 非首行直击命中本行（跨行塌陷修复）", False)
             pg.evaluate("window.showLog=window._showLog0;"
@@ -1579,7 +1597,7 @@ def main():
             pg.evaluate("showMonTab('trend')")
             pg.wait_for_timeout(300)
             pg.evaluate("togChart(0)")
-            pg.wait_for_timeout(300)
+            pg.wait_for_timeout(700)
             ck("空数据+有阈值走势出空态（幽灵坐标轴守卫）", pg.evaluate(
                 "()=>{const e=document.getElementById('chartEmpty');"
                 "return e.style.display==='flex'"
@@ -6150,6 +6168,28 @@ def main():
             ck("r357 登录区标题/卡片不挤压",
                not _l357["overlap"] and _l357["gap"] >= 8
                and _l357["cols"] == 3 and _l357["overflow"] <= 0, str(_l357))
+            # r365：飞猪等长状态文案不得把按钮顶下去；同一行按钮必须
+            # 底对齐（旧 .lgcard .btn2{margin:0} 覆盖 margin-top:auto，
+            # 文案换行后飞猪按钮比其余四张低 15px）
+            _lg365 = _p357.evaluate("""()=>{
+              const cards=[...document.querySelectorAll('#cfgview .lgcard')];
+              const c=cards[cards.length-1],sub=c.querySelector('.lgsub');
+              const old=sub.textContent;c.classList.add('stale');
+              sub.textContent='无需登录 · 会话可能失效，建议重登并检查登录窗口是否被占用';
+              const groups={};
+              cards.forEach(x=>{const r=x.getBoundingClientRect(),
+                b=x.querySelector('.btn2').getBoundingClientRect();
+                const k=Math.round(r.top);(groups[k]=groups[k]||[]).push(
+                  {h:+r.height.toFixed(1),b:+b.bottom.toFixed(1)})});
+              sub.textContent=old;c.classList.remove('stale');
+              const gs=Object.values(groups);
+              return {groups:gs,
+                aligned:gs.every(g=>Math.max(...g.map(x=>x.b))
+                  -Math.min(...g.map(x=>x.b))<=0.5),
+                same:gs.every(g=>Math.max(...g.map(x=>x.h))
+                  -Math.min(...g.map(x=>x.h))<=0.5)};}""")
+            ck("r365 登录卡片按钮底对齐",
+               _lg365["aligned"] and _lg365["same"], str(_lg365))
             _p357.locator(".cnav").filter(has_text="用户与航线").click()
             _p357.wait_for_timeout(600)
             _b357 = _p357.evaluate(
@@ -6166,6 +6206,454 @@ def main():
                _s357["after"] != _b357 and _s357["dirty"] and _s357["savebar"]
                and "同方向" in _s357["copyTitle"], str(_s357))
             _c357.close()
+
+            # ===== r358 密度/层级/数据身份回归门 =====
+            _c358 = b.new_context(viewport={"width": 390, "height": 844})
+            _p358 = _c358.new_page()
+            _p358.on("pageerror", lambda e: errors.append(str(e)))
+            _p358.goto(BASE + "/")
+            _p358.wait_for_function(
+                "typeof S !== 'undefined' && S && S.users")
+            _p358.wait_for_timeout(600)
+            _p358.evaluate("switchView('search')")
+            _p358.wait_for_timeout(700)
+            _p358.evaluate(
+                "()=>{const p=document.getElementById('srxProbe');"
+                "if(p)p.classList.remove('open')}")
+            _m358 = _p358.evaluate("""()=>{
+              const p=document.getElementById('srxProbe'),
+                    a=document.querySelector('.srx-hero-act');
+              return {ph:p.getBoundingClientRect().height,
+                cols:getComputedStyle(a).gridTemplateColumns.split(' ').length,
+                desc:getComputedStyle(
+                  document.querySelector('.srx-probehead span')).display}}""")
+            ck("r358 390 探针收起单行/工具两列",
+               _m358["ph"] <= 55 and _m358["cols"] == 2
+               and _m358["desc"] == "none", str(_m358))
+            _p358.evaluate(
+                "()=>{const v=document.getElementById('searchview');"
+                "if(!v.classList.contains('show-overview'))"
+                "document.querySelector('[data-mobile=overview]').click()}")
+            _p358.wait_for_timeout(600)
+            _b358 = _p358.evaluate("""()=>{
+              const b=document.getElementById('srxBrief'),
+                    s=getComputedStyle(b);
+              return {xh:b.classList.contains('xhint'),
+                mask:(s.maskImage||s.webkitMaskImage)!=='none',
+                sw:b.scrollWidth,cw:b.clientWidth}}""")
+            ck("r358 390 来源卡横滑暗示",
+               _b358["xh"] and _b358["mask"]
+               and _b358["sw"] > _b358["cw"], str(_b358))
+            _c358.close()
+
+            _c358 = b.new_context(viewport={"width": 768, "height": 900})
+            _p358 = _c358.new_page()
+            _p358.on("pageerror", lambda e: errors.append(str(e)))
+            _p358.goto(BASE + "/")
+            _p358.wait_for_function(
+                "typeof S !== 'undefined' && S && S.users")
+            _p358.wait_for_timeout(600)
+            _p358.evaluate("switchView('search')")
+            _p358.wait_for_timeout(700)
+            # 中性首屏没有选中日期；先建立同条件航线/日期，再验日期带
+            _p358.evaluate(
+                "()=>{SRX.pair='SHA|BKK';SRX.date='2026-11-16';"
+                "srxSave();renderSearch();const v=document.getElementById('searchview');"
+                "if(!v.classList.contains('show-overview'))"
+                "document.querySelector('[data-mobile=overview]').click()}")
+            _p358.wait_for_timeout(1400)
+            # 未采日期带默认收起为空态提示（减少空日期卡，r366 布局
+            # 契约）；显式“展开日期带”后再验横滑暗示，避免把空态
+            # 当成横滑缺失。
+            _p358.evaluate(
+                "()=>{const b=document.querySelector('[data-bandexpand]');"
+                "if(b)b.click()}")
+            _p358.wait_for_timeout(500)
+            _d358 = _p358.evaluate("""()=>{
+              const b=document.getElementById('srxBandDays'),
+                    s=getComputedStyle(b);
+              return {xh:b.classList.contains('xhint'),
+                mask:(s.maskImage||s.webkitMaskImage)!=='none',
+                sw:b.scrollWidth,cw:b.clientWidth}}""")
+            ck("r358 768 价带横滑暗示",
+               _d358["xh"] and _d358["mask"]
+               and _d358["sw"] > _d358["cw"], str(_d358))
+            _c358.close()
+
+            _c358 = b.new_context(viewport={"width": 1024, "height": 900})
+            _p358 = _c358.new_page()
+            _p358.on("pageerror", lambda e: errors.append(str(e)))
+            _p358.goto(BASE + "/")
+            _p358.wait_for_function(
+                "typeof S !== 'undefined' && S && S.users")
+            _p358.wait_for_timeout(600)
+            _p358.evaluate("switchView('search')")
+            _p358.wait_for_timeout(700)
+            _p358.evaluate("srxOpenDetail()")
+            _p358.wait_for_timeout(600)
+            _h358 = _p358.evaluate("""()=>{
+              const R=e=>{const r=e.getBoundingClientRect();
+                return {y:+r.y.toFixed(1),r:+r.right.toFixed(1),
+                        b:+r.bottom.toFixed(1)}};
+              const d=document.getElementById('srxDetail');
+              return {d:R(d),close:R(d.querySelector('.srx-close')),
+                acts:R(d.querySelector('.srx-dhead>.srx-dacts'))}}""")
+            ck("r358 1024 详情关闭钮贴右缘/动作第二行",
+               _h358["close"]["r"] >= _h358["d"]["r"] - 30
+               and _h358["acts"]["y"] >= _h358["close"]["b"] - 1
+               and _h358["acts"]["r"] <= _h358["d"]["r"] - 10,
+               str(_h358))
+            _p358.evaluate("srxCloseDetail();showMonTab('health')")
+            _p358.wait_for_timeout(800)
+            _hc358 = _p358.evaluate("""()=>{
+              const c=[...document.querySelectorAll('#hbody .hc')]
+                .find(x=>x.hasAttribute('data-ts'));
+              if(!c)return null;
+              const o={ts:c.dataset.ts,p:c.dataset.p};c.click();return o}""")
+            _p358.wait_for_timeout(500)
+            _hl358 = _p358.evaluate("""()=>({
+              title:document.getElementById('pvTitle').textContent,
+              body:document.getElementById('pvBody').innerText})""")
+            ck("r358 健康日志轮次/渠道与格一致",
+               bool(_hc358) and _hc358["ts"] in _hl358["title"]
+               and ("[" + _hc358["p"] + "]") in _hl358["body"],
+               str({"cell": _hc358, "title": _hl358["title"]}))
+            _c358.close()
+
+            # ===== r359 起降对齐 / 日期字段按内容定宽 / 整字段唤起 =====
+            _c359 = b.new_context(viewport={"width": 1512, "height": 982})
+            _p359 = _c359.new_page()
+            _p359.on("pageerror", lambda e: errors.append(str(e)))
+            _p359.goto(BASE + "/")
+            _p359.wait_for_function(
+                "typeof S !== 'undefined' && S && S.users")
+            _p359.wait_for_timeout(600)
+            _p359.evaluate("switchView('search')")
+            _p359.wait_for_timeout(700)
+            _l360 = _p359.evaluate("""()=>{
+              let small=0;
+              document.querySelectorAll('#searchview *').forEach(e=>{
+                const direct=[...e.childNodes].some(n=>n.nodeType===3
+                  && n.textContent.trim().length>1);
+                if(!direct)return;
+                const s=getComputedStyle(e);
+                if(s.display==='none'||s.visibility==='hidden')return;
+                const r=e.getBoundingClientRect();
+                if(r.width<1||r.height<1)return;
+                if(parseFloat(s.fontSize)<=10.5)small++});
+              const srcs=[...document.querySelectorAll('#searchview .srx-src')]
+                .filter(e=>e.getBoundingClientRect().height>0);
+              const tops=[...new Set(srcs.map(e=>
+                Math.round(e.getBoundingClientRect().top)))];
+              const hs=srcs.map(e=>+e.getBoundingClientRect().height.toFixed(1));
+              const ic=document.querySelector('#searchview .srx-src-h .p');
+              const counts=srcs.map(e=>parseInt(
+                (e.querySelector('.srx-src-big')||{}).textContent||'0',10)||0);
+              const mirc=[...document.querySelectorAll(
+                '#srxMirror .srx-mtab .n')].map(e=>parseInt(e.textContent,10)||0);
+              const desc=a=>a.every((v,i)=>i===0||v<=a[i-1]);
+              return {small:small,count:srcs.length,tops:tops,
+                maxH:hs.length?Math.max(...hs):null,
+                icon:ic?+ic.getBoundingClientRect().width.toFixed(1):0,
+                counts:counts,sorted:desc(counts),mirc:mirc,msorted:desc(mirc)}}""")
+            ck("r360 检索页微字/五源条/可用渠道优先",
+               _l360["small"] == 0 and _l360["count"] == 5
+               and len(_l360["tops"]) == 1 and _l360["maxH"] <= 60
+               and _l360["icon"] >= 20 and _l360["sorted"]
+               and _l360["msorted"], str(_l360))
+            # ===== r361 图标/文案不相交 + 时刻列/探针控件按内容定宽 =====
+            # 1280 是历史重叠真实宽度（+1 曾压到「仅观察」），不只在 1512 验。
+            _p359.set_viewport_size({"width": 1280, "height": 982})
+            _p359.wait_for_timeout(350)
+            _p359.evaluate("""()=>{const p=document.querySelector('#srxProbe');
+              if(p&&!p.classList.contains('open'))srxToggleProbe()}""")
+            _p359.wait_for_timeout(350)
+            _r361 = _p359.evaluate("""()=>{
+              const rows=[...document.querySelectorAll('#srxRows .srx-row')];
+              let gap=999,over=false;
+              rows.forEach(r=>{const t=r.querySelector('.srx-times'),
+                b=r.querySelector('.srx-badges');
+                if(!t||!b)return;
+                gap=Math.min(gap,b.getBoundingClientRect().left
+                  -t.getBoundingClientRect().right);
+                if(t.scrollWidth>t.clientWidth+1)over=true});
+              const f=document.querySelector(
+                '#searchview .srx-probeform').getBoundingClientRect();
+              const from=document.querySelector(
+                '#srxFrom').getBoundingClientRect();
+              const pick=document.querySelector(
+                '#srxPlatPick').getBoundingClientRect();
+              const head=document.querySelector(
+                '#searchview .srx-probehead').getBoundingClientRect();
+              const qrow=document.querySelector(
+                '.srx-qrow').getBoundingClientRect();
+              const probe=document.querySelector(
+                '#srxProbe').getBoundingClientRect();
+              return {n:rows.length,gap:+gap.toFixed(1),over,
+                fromW:+from.width.toFixed(1),formH:+f.height.toFixed(1),
+                fromLeft:+from.left.toFixed(1),
+                pickLeft:+pick.left.toFixed(1),pickTop:+pick.top.toFixed(1),
+                qrowBottom:+qrow.bottom.toFixed(1),
+                pickRight:+pick.right.toFixed(1),
+                headRight:+head.right.toFixed(1),
+                probeH:+probe.height.toFixed(1),
+                doc:document.documentElement.scrollWidth,iw:innerWidth}}""")
+            ck("r361 时刻列不压状态/探针字段按内容定宽/宽屏渠道片同排右对齐",
+               _r361["n"] >= 8 and _r361["gap"] >= 3
+               and not _r361["over"] and _r361["fromW"] <= 200
+               and _r361["formH"] <= 100
+               and _r361["pickLeft"] >= _r361["fromLeft"] - 2
+               and _r361["pickTop"] < _r361["qrowBottom"]
+               and abs(_r361["pickRight"] - _r361["headRight"]) <= 2
+               and _r361["probeH"] <= 200
+               and _r361["doc"] <= _r361["iw"] + 1, str(_r361))
+            _ico361 = _p359.evaluate("""()=>{
+              const vis=e=>{const r=e.getBoundingClientRect(),
+                s=getComputedStyle(e);return r.width>0&&r.height>0
+                &&s.display!=='none'&&s.visibility!=='hidden'};
+              const bad=[];
+              for(const ic of document.querySelectorAll(
+                '#searchview svg,#searchview .bic,#searchview .bic-air,'
+                +'#searchview img')){
+                if(!vis(ic)||!ic.parentElement)continue;
+                const p=ic.parentElement,ir=ic.getBoundingClientRect();
+                for(const n of p.childNodes){
+                  if(n.nodeType!==3||!n.textContent.trim())continue;
+                  const rg=document.createRange();
+                  rg.selectNodeContents(n);
+                  for(const tr of rg.getClientRects()){
+                    const ox=Math.min(ir.right,tr.right)
+                      -Math.max(ir.left,tr.left);
+                    const oy=Math.min(ir.bottom,tr.bottom)
+                      -Math.max(ir.top,tr.top);
+                    if(ox>.5&&oy>.5)bad.push(
+                      (n.textContent.trim()||'').slice(0,18)
+                      +'@'+Math.round(ox)+'x'+Math.round(oy));
+                  }}}
+              return bad.slice(0,8)}""")
+            ck("r361 检索页图标与文案零相交",
+               len(_ico361) == 0, str(_ico361))
+            _p359.evaluate("switchView('mon');showMonTab('overview')")
+            _p359.wait_for_timeout(2400)
+            _mw361 = _p359.evaluate("""()=>{
+              const card=document.querySelector('.monwatch');if(!card)
+                return {none:true};
+              const box=card.querySelector('.monwatch-chs'),
+                cov=card.querySelector('.monwatch-foot > span:nth-of-type(2)'),
+                svg=card.querySelector('.monwatch-svg'),
+                lg=card.querySelector('.monwatch-svg .lg'),
+                bic=card.querySelector('.monwatch-ch .bic');
+              const b=box&&box.getBoundingClientRect(),
+                c=cov&&cov.getBoundingClientRect(),
+                s=svg&&svg.getBoundingClientRect(),
+                l=lg&&lg.getBoundingClientRect();
+              return {n:card.querySelectorAll('.monwatch-ch').length,
+                icon:bic?+bic.getBoundingClientRect().width.toFixed(1):0,
+                gap:(b&&c)?+(c.left-b.right).toFixed(1):null,
+                legendFits:!!(s&&l)&&l.bottom<=s.bottom-1,
+                over:document.documentElement.scrollWidth>innerWidth+1}}""")
+            ck("r361 关注卡渠道图标/图例不重叠",
+               not _mw361.get("none")
+               and _mw361["n"] == 5 and _mw361["icon"] >= 17
+               and _mw361["gap"] >= 4 and _mw361["legendFits"]
+               and not _mw361["over"], str(_mw361))
+            _p359.evaluate("switchView('search')")
+            _p359.wait_for_timeout(700)
+            # 中性首屏不再自动锁定日期；价带门禁显式选择一个有数据日期
+            _p359.evaluate("""()=>{const ds=[...new Set(srxAll().map(f=>f.date).filter(Boolean))].sort();
+              if(ds.length){SRX.date=ds[0];SRX.bandAnchor='';SRX._init=true;srxSave();renderSearch()}}""")
+            _p359.wait_for_timeout(1300)
+            # ===== r361 价带：点日不重置窗口；可前后翻并回到所选日 =====
+            _b361 = _p359.evaluate("""()=>{
+              const ds=()=>[...document.querySelectorAll(
+                '#srxBandDays [data-calday]')];
+              if(ds().length<3)return null;
+              const first=ds()[0].getAttribute('data-calday');
+              const date=SRX.date;
+              ds()[2].click();
+              return {first:first,date:date}}""")
+            _p359.wait_for_timeout(600)
+            _b361a = _p359.evaluate("""()=>{
+              const ds=[...document.querySelectorAll(
+                '#srxBandDays [data-calday]')];
+              const sel=document.querySelector('#srxBandDays .srx-day.sel');
+              const r=document.querySelector('#srxBandReset');
+              return {first:ds.length?ds[0].getAttribute('data-calday'):'',
+                last:ds.length?ds[ds.length-1].getAttribute('data-calday'):'',
+                sel:sel?sel.getAttribute('data-calday'):'',
+                reset:!!r&&!r.hidden}}""")
+            # 全未采窗口默认收敛为说明条；翻窗门禁先显式展开日期带
+            _p359.evaluate("SRX.bandExpand=true;srxRenderBand()")
+            _p359.wait_for_timeout(250)
+            _p359.evaluate(
+                "document.querySelectorAll('.srx-bandnav button')[0].click()")
+            _p359.wait_for_timeout(1300)
+            _b361p = _p359.evaluate("""()=>{
+              const ds=[...document.querySelectorAll(
+                '#srxBandDays [data-calday]')];
+              return {first:ds.length?ds[0].getAttribute('data-calday'):'',
+                last:ds.length?ds[ds.length-1].getAttribute('data-calday'):'',
+                doc:document.documentElement.scrollWidth,iw:innerWidth}}""")
+            _p359.evaluate(
+                "document.querySelector('#srxBandReset').click()")
+            _p359.wait_for_timeout(1200)
+            _b361r = _p359.evaluate("""()=>{
+              const ds=[...document.querySelectorAll(
+                '#srxBandDays [data-calday]')];
+              const sel=document.querySelector('#srxBandDays .srx-day.sel');
+              return {first:ds.length?ds[0].getAttribute('data-calday'):'',
+                sel:sel?sel.getAttribute('data-calday'):''}}""")
+            ck("r361 价带点日不重置窗口/可前后翻",
+               bool(_b361) and bool(_b361a)
+               and _b361a["first"] == _b361["first"]
+               and _b361a["sel"] != _b361a["first"]
+               and _b361a["reset"]
+               and _b361p["first"] < _b361["first"]
+               and _b361p["first"] != _b361p["last"]
+               and _b361r["first"] == _b361a["sel"]
+               and _b361r["first"] == _b361r["sel"]
+               and _b361p["doc"] <= _b361p["iw"] + 1,
+               str({"pick": _b361, "after": _b361a,
+                    "prev": _b361p, "reset": _b361r}))
+            # 价带翻页会切到无行日期；还原初始日再验时刻列。
+            _p359.evaluate("""()=>{SRX.plats=[];SRX.q='';
+              SRX.f={...SRX_DEFAULT_F};SRX.agg=false;SRX.view='list';
+              const ds=[...new Set(srxBase().filter(f=>!srxIsCal(f))
+                .map(f=>f.date).filter(Boolean))].sort();
+              SRX.date=ds[0]||SRX.date;SRX.bandAnchor='';SRX.sel=null;
+              SRX._init=true;srxSave();renderSearch()}""")
+            _p359.wait_for_timeout(1200)
+            _t359 = _p359.evaluate("""()=>{
+              const arr=[...document.querySelectorAll(
+                '#srxRows .srx-row .srx-times .arr')]
+                .map(e=>+e.getBoundingClientRect().x.toFixed(1));
+              const cells=[...document.querySelectorAll(
+                '#srxRows .srx-row .srx-times')];
+              return {n:arr.length,
+                min:arr.length?Math.min(...arr):null,
+                max:arr.length?Math.max(...arr):null,
+                over:cells.some(e=>e.scrollWidth>e.clientWidth+1)}}""")
+            ck("r359 起降时刻左缘对齐",
+               _t359["n"] >= 8
+               and _t359["max"] - _t359["min"] <= 1
+               and not _t359["over"], str(_t359))
+            _p359.evaluate(
+                "switchView('cfg');"
+                "document.querySelector('#cfgview .cnav[data-p=users]').click()")
+            _p359.wait_for_timeout(900)
+            _p359.evaluate("""()=>{const h=document.querySelector(
+                '#cfgform .rline[data-rk] .rhead');
+              if(h&&h.getAttribute('aria-expanded')==='false')h.click()}""")
+            _p359.wait_for_timeout(300)
+            _p359.evaluate("setDateMode('d',0,0,'single')")
+            _p359.wait_for_timeout(400)
+            _p359.evaluate("""()=>{window._sp359=0;
+              const o=HTMLInputElement.prototype.showPicker;
+              HTMLInputElement.prototype.showPicker=function(){
+                window._sp359++;try{return o&&o.call(this)}catch(e){}}}""")
+            _p359.locator("#cfgform .dateSrow .dpanel:not([hidden]) "
+                          "input[type=date]").first.click()
+            _p359.wait_for_timeout(250)
+            _d359 = _p359.evaluate("""()=>{
+              const pn=document.querySelector(
+                '#cfgform .dateSrow .dpanel:not([hidden])');
+              const inp=pn.querySelector('input[type=date]'),
+                    ap=pn.querySelector('.dapply');
+              const r=inp.getBoundingClientRect(),
+                    a=ap.getBoundingClientRect();
+              return {w:+r.width.toFixed(1),
+                sameRow:Math.abs(r.top-a.top)<3,hits:window._sp359,
+                over:document.documentElement.scrollWidth>innerWidth+1}}""")
+            ck("r359 日期字段内容定宽/整字段唤起",
+               _d359["w"] <= 200 and _d359["sameRow"]
+               and _d359["hits"] >= 1 and not _d359["over"], str(_d359))
+            _p359.set_viewport_size({"width": 390, "height": 844})
+            _p359.wait_for_timeout(500)
+            _d359b = _p359.evaluate("""()=>{
+              const pn=document.querySelector(
+                '#cfgform .dateSrow .dpanel:not([hidden])');
+              const inp=pn.querySelector('input[type=date]'),
+                    ap=pn.querySelector('.dapply');
+              const r=inp.getBoundingClientRect(),
+                    a=ap.getBoundingClientRect();
+              return {w:+r.width.toFixed(1),
+                sameRow:Math.abs(r.top-a.top)<3,
+                over:document.documentElement.scrollWidth>innerWidth+1}}""")
+            ck("r359 390 日期字段与加入按钮同排",
+               _d359b["w"] > 120 and _d359b["sameRow"]
+               and not _d359b["over"], str(_d359b))
+            _c359.close()
+
+            # goal: 关注航线/关注航班曲线与检索/明细筛选统一
+            pg.set_viewport_size({"width": 1440, "height": 900})
+            pg.evaluate("switchView('mon');showMonTab('overview')")
+            pg.wait_for_timeout(800)
+            _u = pg.evaluate("""()=>({
+              routeCard:getComputedStyle(document.querySelector('#monRouteCard')).display!=='none',
+              routes:document.querySelectorAll('#monRouteList .monroute').length,
+              routeSvg:document.querySelectorAll('#monRouteList .monroute svg').length,
+              watchCard:getComputedStyle(document.querySelector('#monWatchCard')).display!=='none',
+              watchSvg:document.querySelectorAll('#monWatchList .monwatch svg').length})""")
+            ck("goal 关注航线卡与共享迷你曲线",
+               _u["routeCard"] and _u["routes"] > 0 and _u["routeSvg"] > 0, str(_u))
+            ck("goal 关注航班卡与独立迷你曲线",
+               _u["watchCard"] and _u["watchSvg"] > 0, str(_u))
+            pg.evaluate("showMonTab('watch')")
+            pg.wait_for_timeout(2200)
+            _ws = pg.evaluate("""()=>({
+              scope:document.querySelector('#wsRouteWatch')?.innerText||'',
+              spark:document.querySelectorAll('#wsRouteWatch .ws-rwspark svg').length})""")
+            ck("goal 关注台独立过滤摘要", "关注航班独立过滤同一份本地落库数据" in _ws["scope"], str(_ws["scope"][:80]))
+            ck("goal 关注台航线共享曲线", _ws["spark"] > 0, str(_ws))
+            pg.evaluate("switchView('search')")
+            pg.wait_for_timeout(1200)
+            pg.evaluate("document.querySelector('#srxFilterBtn').click()")
+            pg.wait_for_timeout(200)
+            pg.evaluate("document.querySelector('#srxMoreBtn').click()")
+            pg.wait_for_timeout(350)
+            _sf = pg.evaluate("""()=>({
+              common:!!document.querySelector('#srxFmore .srx-fcommon'),
+              depA:!!document.querySelector('#srxFmore select[data-fs=depA]'),
+              shareMode:!!document.querySelector('#srxFmore select[data-fs=shareMode]'),
+              detailFields:document.querySelectorAll('#srxFmore [data-fn=laymin],#srxFmore [data-fn=durmin],#srxFmore [data-fn=prate],#srxFmore [data-fn=age],#srxFmore [data-fn=bagkg]').length,
+              clear:!!document.querySelector('#srxFmore [data-fclear=common]')})""")
+            ck("goal 检索共同筛选组", _sf["common"] and _sf["depA"] and _sf["shareMode"], str(_sf))
+            ck("goal 检索明细级超集字段", _sf["detailFields"] >= 5 and _sf["clear"], str(_sf))
+            pg.evaluate("""()=>{SRX.f.hasView=true;SRX.f.laymin=60;srxClearCommonFilters()}""")
+            _sc = pg.evaluate("()=>({laymin:SRX.f.laymin,hasView:!!SRX.f.hasView})")
+            ck("goal 共同筛选清理保留检索特有", _sc["laymin"] == 0 and _sc["hasView"] is True, str(_sc))
+            pg.evaluate("switchView('mon');showMonTab('details')")
+            pg.wait_for_timeout(900)
+            pg.evaluate("document.querySelector('#fltBtn').click()")
+            pg.wait_for_timeout(250)
+            pg.evaluate("togMoreFlt()")
+            pg.wait_for_timeout(250)
+            _df = pg.evaluate("""()=>({
+              scope:document.querySelector('.fltscope')?.innerText||'',
+              share:!!document.querySelector('#fshareonly'),
+              hideCal:!!document.querySelector('#fhidecal'),
+              onlyQual:!!document.querySelector('#fonlyqual')})""")
+            ck("goal 明细共同能力入口", "共同筛选" in _df["scope"] and _df["share"] and _df["hideCal"] and _df["onlyQual"], str(_df))
+            pg.set_viewport_size({"width": 1360, "height": 900})
+            pg.evaluate("switchView('search')")
+            pg.wait_for_timeout(1000)
+            pg.evaluate("""()=>{const p=document.querySelector('#srxProbe');
+              if(p&&!p.classList.contains('open'))srxToggleProbe()}""")
+            pg.wait_for_timeout(350)
+            _pr = pg.evaluate("""()=>{const R=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect();return{r:+r.right.toFixed(1),h:+r.height.toFixed(1),b:+r.bottom.toFixed(1)}};
+              return{head:R('#srxProbe .srx-probehead'),form:R('#srxProbe .srx-probeform'),acts:R('#srxProbe .srx-probeacts'),
+               go:R('#srxGo'),date:R('#srxDate'),pick:R('#srxPlatPick'),
+               overflow:document.documentElement.scrollWidth>innerWidth+1}}""")
+            ck("goal 探针头部单行对齐", _pr["head"]["h"] <= 30 and _pr["acts"]["r"] == _pr["head"]["r"] and not _pr["overflow"], str(_pr))
+            ck("goal 探针表单紧凑", _pr["form"]["h"] <= 54, str(_pr))
+            ck("goal 探针提交与输入同基线", abs(_pr["go"]["b"] - _pr["date"]["b"]) <= 1 and _pr["pick"]["h"] <= 32, str(_pr))
+            _pair = pg.evaluate("""()=>{const all=(S.users[0]||{}).flights||[];const f=all.find(x=>x.intl&&x.from&&x.to);return f?f.from+'|'+f.to:''}""")
+            if _pair:
+                pg.evaluate("p=>{SRX.pair=p;SRX.date='';SRX._init=true;renderSearch()}", _pair)
+                pg.wait_for_timeout(800)
+            _cb = pg.evaluate("""()=>{const e=document.querySelector('#srxCapbar');if(!e||e.hidden)return null;const r=e.getBoundingClientRect();return{h:+r.height.toFixed(1),chips:e.querySelectorAll('.capchip').length,text:e.innerText.slice(0,120),scroll:e.scrollWidth>e.clientWidth}}""")
+            ck("goal 渠道/会话单行不换行", bool(_cb) and _cb["h"] <= 40 and _cb["chips"] == 5 and "会话" not in _cb["text"], str(_cb))
+
             bad0 = [n for n, v in checks if not v]
             prog.write("JS 错误: %s\n" % (errors[:3] if errors else "无"))
             prog.write("=== %d/%d 通过 ===\n"

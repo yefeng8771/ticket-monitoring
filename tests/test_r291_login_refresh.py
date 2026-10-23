@@ -38,8 +38,8 @@ def test_finish_login_clears_backoff():
         assert r["ok"] is True
         assert q._cooldown_until == 0, (
             "登录完成后退避冷却未清——下轮验证被退避残留拖慢")
-        assert time.time() - webui._State.login_pending.get(
-            "qunar", 0) < 5, "finish 未置 pending 验证窗"
+        assert "qunar" not in webui._State.login_pending, (
+            "finish 仅确认保存请求；pending 必须等 worker 真正落盘后置位")
     finally:
         webui._State.login_sessions.pop("qunar", None)
         if old_cd is not None:
@@ -78,12 +78,13 @@ def test_login_polling_in_page():
 
 
 def test_finish_login_toast_wording():
-    """toast 词面与真实生效路径一致：验证发生在下一轮采集（≤5 分钟），
-    不再承诺「下轮采集自动生效（无需重启）」的模糊表述。"""
+    """toast 不得承诺未保证的分钟数：调度周期可配，只承诺「下一轮
+    采集验证后自动更新（无需重启）」；检索页登录态另行即时同步。"""
     import webui
     src = open(webui.__file__, encoding="utf-8").read()
-    assert "下一轮采集（≤5 分钟）" in src, "验证时机词面缺席"
-    assert "下轮采集自动生效（无需重启）" not in src, "旧模糊词面禁复活"
+    assert "下一轮采集验证后自动更新状态（无需重启）" in src, "验证时机词面缺席"
+    assert "下一轮采集（≤5 分钟）" not in src, "未保证的分钟数不得承诺"
+    assert "SRX_LOGIN_T=0;SCAT=0;" in src, "finish 后未触发检索页登录态同步"
 
 
 def test_finish_login_sets_pending_window():
@@ -113,6 +114,29 @@ def test_finish_login_sets_pending_window():
         webui._State.login_pending = old_pending
 
 
+def test_newer_login_rejection_ends_pending_window(monkeypatch):
+    """点「登录完成」后只有**新的**明确拒绝才能结束待验证窗；旧拒绝
+    证据不得把刚点的登录瞬间打回「建议重登」。"""
+    import time
+    from datetime import datetime
+    import webui
+    old_pending = dict(webui._State.login_pending)
+    try:
+        webui._State.login_pending["qunar"] = time.time() - 30
+        monkeypatch.setattr(
+            webui, "_health_state",
+            lambda hours: {"evidence": {"qunar": {"domestic": {
+                "auth_at": datetime.now().isoformat(timespec="seconds"),
+                "detail_at": "", "auth_reason": "需登录"}}}})
+        monkeypatch.setattr(webui, "_PROBE_AUTH", {})
+        monkeypatch.setattr(webui._State, "login_sessions", {})
+        v = webui._login_state_view()["plats"]["qunar"]
+        assert v["pending"] is False, "新拒绝应结束待验证窗"
+        assert v["status"] == "login_required"
+    finally:
+        webui._State.login_pending = old_pending
+
+
 def test_login_pending_wording_in_page():
     """前端过渡词面钉：pending 窗内显示「验证中」不再说「建议重登」；
     登录窗口开着（active）时词面优先「登录中…」——登录中却说「建议
@@ -120,4 +144,4 @@ def test_login_pending_wording_in_page():
     import webui
     src = open(webui.__file__, encoding="utf-8").read()
     assert "下轮采集验证中" in src, "pending 过渡词面缺席"
-    assert "会话可能失效，建议重登" in src, "常态失效词面被误删"
+    assert "会话需重新登录" in src, "常态失效词面被误删"

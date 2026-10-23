@@ -19,7 +19,7 @@
 
 ![Trend & calendar (dark)](docs/screenshots/console-dark.png)
 
-![Flight watch studio (real data): real collection points, target line and channel coverage in one view](docs/screenshots/console-watch-studio.png)
+![Flight watch studio (demo synthetic data, not live quotes): real collection points, target line and channel coverage in one view](docs/screenshots/console-watch-studio.png)
 
 <details>
 <summary>More screenshots: panel-based settings / flight watch config / date modes / global config center / restart &amp; migration / flight details / K-line / watch K-line / push preview / mobile</summary>
@@ -67,7 +67,7 @@ A zero-dependency single-page console served on `127.0.0.1:8765`, designed like 
 
 **Official brand layer**: the five OTAs and 87 airlines use locally embedded official app/site marks where verified — channels are square app tiles, airlines are circular carrier avatars — across search rows, mirrors, details, matrices, the watch studio and every config surface. Unlisted carriers fall back to an IATA circular code; no runtime external requests and no borrowed logos.
 
-**Watch-flight studio** adds a fifth monitor tab: a route rail selects watched flights, a full-width line/K-line chart replays only real observations (48h/7/30/90/180d), and a focus strip shows target gap, channel coverage and source freshness. The same route rail drives a filterable flight roster (status, target, airline, direct/transfer, departure window, cabin, channel, price); the overview also mounts watch cards with a 7-day mini trend, channel coverage and a 30-day jump. Every flight seen during a normal route scan is persisted to a flight-level daily OHLC table, so any search row can preview its real history without being watched; target-hit alerts are sent by the scan pipeline with dedupe. All watch settings (cities with autocomplete, date, live candidate flights, channels, target, alert toggle, note) are editable independently in Settings → Flight watch.
+**Watch-flight studio** adds a fifth monitor tab: watched flights are independent entities layered over the same locally stored route data; a route rail filters them and a full-width line/K-line chart replays only real observations (48h/7/30/90/180d), and a focus strip shows target gap, channel coverage and source freshness. The same route rail drives a filterable flight roster (status, target, airline, direct/transfer, departure window, cabin, channel, price); the overview also mounts watch cards with a 7-day mini trend, channel coverage and a 30-day jump. Every flight seen during a normal route scan is persisted to a flight-level daily OHLC table, so any search row can preview its real history without being watched; target-hit alerts are sent by the scan pipeline with dedupe. All watch settings (cities with autocomplete, date, live candidate flights, channels, target, alert toggle, note) are editable independently in Settings → Flight watch.
 
 Run pulse: per-round per-channel row counts & latency in a ring buffer — a 4-cell mono statline plus stacked pulse bars (red cap = some channel failed), so collection health is visible at a glance. DingTalk pushes carry a "full details" link; on Windows, target-hit toasts jump straight to the same single-alert page. Keyboard: `1`/`2` switch console/settings, `S` open the realtime search view, `M` toggle list / flight × channel matrix, `J`/`K` step through detail differences, `3`/`4`/`5`/`6`/`7` jump straight to Overview / Trend / Watch / Details / Health, `Ctrl/⌘+S` save settings, `R` run a sweep now (press twice to confirm), `/` focus search, `↑`/`↓` step through probe rows, `Esc` close overlays.
 
@@ -85,21 +85,21 @@ Run pulse: per-round per-channel row counts & latency in a ring buffer — a 4-c
 
 ![Probe city autocomplete: Chinese / pinyin / IATA, keyboard selection, full domestic/international picker](docs/screenshots/console-probe-city.png)
 
-<details><summary>Production workbench: overview / monitor / health / probe</summary>
+<details><summary>Demo console (synthetic data, DEMO badge visible): overview / search / list-mirror / calibration / probe / shared filters</summary>
 
-<img src="docs/screenshots/console-probe-overview.png" width="300" alt="Production overview">
-<img src="docs/screenshots/console-probe-monitor.png" width="300" alt="Production monitor">
-<img src="docs/screenshots/console-probe-workbench.png" width="300" alt="Production search workbench">
-<img src="docs/screenshots/console-probe-health.png" width="300" alt="Channel health and field coverage">
-<img src="docs/screenshots/console-probe-probe-overview.png" width="300" alt="Active probe overview">
-<img src="docs/screenshots/console-probe-probe-workbench.png" width="300" alt="Active probe workbench">
+<img src="docs/screenshots/console-probe-overview.png" width="300" alt="Demo console overview (synthetic data)">
+<img src="docs/screenshots/console-probe-monitor.png" width="300" alt="Demo search console, dark (synthetic data)">
+<img src="docs/screenshots/console-probe-workbench.png" width="300" alt="Demo parsed list and original-page mirror (synthetic data)">
+<img src="docs/screenshots/console-probe-health.png" width="300" alt="Demo five-platform calibration (synthetic data)">
+<img src="docs/screenshots/console-probe-probe-overview.png" width="300" alt="Demo active probe, one-line form and batch (synthetic data)">
+<img src="docs/screenshots/console-probe-probe-workbench.png" width="300" alt="Demo shared filters: common / processed-history / search-only (synthetic data)">
 
 </details>
 
-**Realtime search** (`🔎 Search`, real collected data): a dedicated view over real `/api/state` rows, not a mock table. The chain is: 14-day departure band + five-source briefing → quick/advanced filters → parsed list or flight × channel matrix → original-page mirror → triple-aligned detail → sign-off/export.
+**Realtime search** (`🔎 Search`, real collected data): a dedicated view over real `/api/state` rows, not a mock table. The chain is: 14-day departure band + five-source briefing → quick/advanced filters → parsed list or flight × channel matrix → original-page mirror → triple-aligned detail → sign-off/export. The live probe now supports up to four route/date legs in one batch, with real per-channel phases, incremental results, cancel, reconnect and retry.
 
 - **Honest data boundary**: the departure band only draws points that exist in the DB; missing days stay “not collected”; the observation-day axis is labeled separately. Calendar-only rows (no flight number/time) are never marked qualified and never enter same-flight ladders. A channel with no rows stays “unavailable” — no sample data is injected.
-- **Filters**: direct/transfer, cabin, airline, departure/arrival windows, price band, baggage/meal, LCC/share/cross-day/stop, has-original-page, has-raw, hide-calendar, missing/complete/risk; persisted, with one-click relax on empty.
+- **Common + processed-history + search-only filters**: the common group (direct/transfer, cabin, airline, departure/arrival airport, share/stop/risk, time windows, price band, baggage/meal/LCC/cross-day/hide-calendar) uses the same names and semantics as the details table; the processed-history group (layover/flight duration, on-time rate, aircraft age, checked baggage, aircraft type/size, child fare, few seats) filters the same locally stored fields; search-only gates cover original page, raw, missing/complete fields, stale padding and qualified-only. Search filters are a superset of detail filters; “clear common filters” keeps search-only conditions. Persisted, with one-click relax on empty.
 - **Parsed list ⇄ flight × channel matrix**: 13 field ticks, risk badges (age/policy/check-in/bait/black-card/refund), in-row quick view, same-flight grouping, load-more; matrix rows are real same-flight groups, missing cells are “not supplied”; a cell opens the detail.
 - **Mirror**: five channel tabs, list/detail/four-up; mirror values are projected from **the same raw row** (missing keys = not supplied). The UI explicitly says “structural redraw, not an original screenshot/iframe” and links to the real page.
 - **Triple-aligned detail**: parsed ⇄ mirror(raw) ⇄ raw path with four states (match / not supplied / not captured / mismatch); derived fields (price/airport/cabin) are labeled “scope difference”. Field click locates the raw key; 30-day trend, two-axis calendar, five-cell same-flight ladder, conclusion/note/review, prev/next (J/K), evidence JSON and snapshot.
@@ -198,14 +198,14 @@ The capability map follows **collect → push → visualize → configure**. Eac
 
 ## Quick start (prebuilt, no Python needed)
 
-1. Download your platform package from [Releases](https://github.com/dengmeiluan/ticket-monitoring/releases) (about 58–88 MB):
+1. Download your platform package from [Releases](https://github.com/dengmeiluan/ticket-monitoring/releases) (about 60–94 MB):
    Windows `…-win64.zip` / Linux `…-linux-x64.zip` / Apple Silicon `…-macos-arm64.zip` / Intel Mac `…-macos-x64.zip`.
 2. Unzip anywhere and run it: Windows `TicketMonitor.exe`;
    Linux/macOS `chmod +x TicketMonitor && ./TicketMonitor`.
 3. Open `http://127.0.0.1:8765` → ⚙️ Settings: add routes (Chinese city names with autocomplete), target prices, and your DingTalk robot Webhook + signing secret. Hit 「🔔 测试推送」 to verify.
 4. Save — monitoring starts immediately.
 
-> Ctrip and Qunar require a login session (`--login ctrip` / `--login qunar`); Qunar's login opens the unified account page (SMS code / QR), and its H5 only returns full detail when signed in. Tongcheng/Tuniu are best after a login session, Fliggy works without one.
+> Ctrip and Qunar require a login session (`--login ctrip` / `--login qunar`); Qunar's login opens the unified account page (SMS code / QR), and its H5 only returns full detail when signed in. Tongcheng is best after a login session; Tuniu requires a login for its domestic list (international works anonymously); Fliggy works anonymously domestically, while its international list needs a login session.
 
 ### Docker / NAS
 
@@ -349,8 +349,8 @@ while all other channels stay available. All assets attach to one Release and a
 ## Development
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 3292 tests — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate
-python docs/uitest.py             # full UI self-test (586 assertions, self-hosted demo, zero-JS-error hard gate)
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 3505 tests — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate
+python docs/uitest.py             # full UI self-test (614 assertions, self-hosted demo, zero-JS-error hard gate)
 python docs/screenshot.py         # regenerate README screenshots (start the demo first: python webui.py --demo --port 8799)
 python docs/demo_build.py         # rebake the static demo site (docs/site)
 ```

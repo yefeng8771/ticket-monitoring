@@ -363,6 +363,38 @@ def test_fetch_intl_prefers_pc_list_and_backfills_calendar(monkeypatch):
     assert len(out3) == 1
 
 
+def test_intl_airport_scope_filters_city_airports():
+    """机场级路线（PVG→NRT）只留该机场；城市级（SHA→TYO）不筛。
+
+    Ctrip 城市搜索 TYO 会混入 HND、LHR 会混入 LGW/STN/LCY；不筛会
+    让「上海→成田」的趋势/告警/同班比价混入羽田价格。
+    """
+    rows = [
+        {"depAirportCode": "PVG", "arrAirportCode": "NRT"},
+        {"depAirportCode": "PVG", "arrAirportCode": "HND"},
+        {"depAirportCode": "SHA", "arrAirportCode": "NRT"},
+    ]
+    out, dropped = CtripCrawler._filter_airport_scope(rows, "PVG", "NRT")
+    assert dropped == 2
+    assert [(r["depAirportCode"], r["arrAirportCode"]) for r in out] == [
+        ("PVG", "NRT")]
+    same, d2 = CtripCrawler._filter_airport_scope(rows, "SHA", "TYO")
+    assert d2 == 0 and len(same) == 3
+
+
+def test_intl_list_dst_uses_flight_date():
+    """时区按航班日取 DST：LHR 2026-11-16 应为 UTC+0（冬季），
+    不能按抓取日 10 月夏令时盖 +60。"""
+    legs = [_leg("BA001", dep="2026-11-16 20:00:00",
+                 arr="2026-11-17 08:00:00", dap="PVG", aap="LHR",
+                 acity="LON", acn="伦敦", duration=720)]
+    rows, _ = CtripCrawler._extract_intl_list(
+        _list_body([_it(legs, [_policy(adult=3000, tax=600)])]),
+        "2026-11-16")
+    assert rows[0]["tz_dep"] == 480
+    assert rows[0]["tz_arr"] == 0
+
+
 def test_intl_list_url_is_pc_source():
     assert CtripCrawler.URL_LIST_INTL.startswith(
         "https://flights.ctrip.com/online/list/oneway-")

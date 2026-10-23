@@ -78,6 +78,11 @@ class CtripCrawler(BaseCrawler):
     # 机场码先归并城市码（NRT→TYO），与日历端点同口径。
     URL_LIST_INTL = ("https://flights.ctrip.com/online/list/"
                      "oneway-{from_city}-{to_city}?depdate={date}")
+    # 国内 PC 列表：H5 taro 列表在部分日期只给日历/空壳，
+    # flights.ctrip.com 国内 batchSearch 仍是真实行程来源。
+    URL_LIST_DOM = ("https://flights.ctrip.com/online/list/"
+                    "oneway-{from_city}-{to_city}?depdate={date}"
+                    "&cabin=y_s_c_f&adult=1&child=0&infant=0")
 
     # 仅认航班列表接口；LowestPriceSearch 是跨日期低价日历，会混入其他日期价格
     XHR_KEYS = [
@@ -86,6 +91,7 @@ class CtripCrawler(BaseCrawler):
 
     # PC 国际列表分页/增量：batchSearch 首批全量，pull 为滚动补量
     XHR_KEYS_INTL_LIST = [
+        "batchSearch",
         "international/search/api/search/batchSearch",
         "international/search/api/search/pull/",
     ]
@@ -110,6 +116,7 @@ class CtripCrawler(BaseCrawler):
 
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        self.path_reset()
         # 国际分流（r325→R44b 定谳改道）：14488 列表端点对国际查询
         # 业务性拒答（请求体与国内逐字段同构仍 30212，r39_reqdiff
         # 实证），国际真价面=FlightIntlAndInlandLowestPriceSearch
@@ -130,6 +137,7 @@ class CtripCrawler(BaseCrawler):
                 url = self._entry_url(from_city, to_city, date)
                 self.logger.info("[ctrip] GET %s", url)
                 captured = self.attach_xhr_collector(page, self.XHR_KEYS)
+                t_h5 = time.time()
                 try:
                     page.goto(url, wait_until="domcontentloaded")
                     page.wait_for_timeout(8000)
@@ -179,12 +187,45 @@ class CtripCrawler(BaseCrawler):
                         self.logger.info(
                             "[ctrip] %s 最低价 ￥%.0f（明细 %d 条：直飞 %d / 中转 %d）",
                             date, price, len(flights), n_d, len(flights) - n_d)
+                        self.path_note(
+                            "H5", "ok", rows=len(flights), date=date,
+                            detail="m.ctrip.com H5 列表",
+                            ms=int((time.time() - t_h5) * 1000))
                     else:
                         self.logger.warning("[ctrip] %s 未解析到价格", date)
+                        try:
+                            _body = page.inner_text("body")[:800]
+                        except Exception:
+                            _body = ""
+                        _blocked = bool(re.search(
+                            r"whaleguard|验证码|安全验证|访问验证|滑块", _body))
+                        _login = bool(re.search(
+                            r"登录|扫码|账号密码", _body))
+                        self.path_note(
+                            "H5", "blocked" if _blocked
+                            else ("login" if _login else "empty"),
+                            date=date,
+                            detail=("风控验证页" if _blocked
+                                    else "H5 列表未解析到价格"),
+                            ms=int((time.time() - t_h5) * 1000))
                         self._debug_snapshot(page, f"nopx_{date}")
                 except Exception as e:
                     self.logger.exception("[ctrip] %s 抓取异常: %s", date, e)
+                    self.path_note("H5", "error", date=date,
+                                   detail=str(e)[:120],
+                                   ms=int((time.time() - t_h5) * 1000))
                 self._sleep()
+        # H5 列表缺日时补国内 PC 列表；H5 已出数的日期不重复请求。
+        missing = [d for d in dates if d not in {r.depart_date for r in results}]
+        if missing:
+            try:
+                self.logger.info("[ctrip][dom] H5 缺 %d 日，补 PC 列表: %s",
+                                 len(missing), ",".join(missing))
+                results.extend(self._fetch_intl_list(
+                    from_city, to_city, from_city, to_city, missing,
+                    url_tpl=self.URL_LIST_DOM, label="国内"))
+            except Exception as e:
+                self.logger.warning("[ctrip][dom] PC 列表补采失败: %s", e)
         return results
 
     @staticmethod
@@ -221,8 +262,8 @@ class CtripCrawler(BaseCrawler):
         return results
 
     def _fetch_intl_list(self, from_city: str, to_city: str,
-                         fc: str, tc: str,
-                         dates: List[str]) -> List[FlightPrice]:
+                         fc: str, tc: str, dates: List[str],
+                         url_tpl: str = "", label: str = "国际") -> List[FlightPrice]:
         """PC 国际列表：batchSearch/pull 捕获 → 行程行解析。
 
         profile 未登录时 data.needUserLogin=true 且无行程——置
@@ -249,9 +290,10 @@ class CtripCrawler(BaseCrawler):
                 page = self.new_page(ctx)
                 captured = self.attach_xhr_collector(
                     page, self.XHR_KEYS_INTL_LIST)
-                url = self.URL_LIST_INTL.format(
+                url = (url_tpl or self.URL_LIST_INTL).format(
                     from_city=fc.lower(), to_city=tc.lower(), date=date)
                 self.logger.info("[ctrip][intl] GET %s", url)
+                t_pc = time.time()
                 try:
                     page.goto(url, wait_until="domcontentloaded",
                               timeout=45000)
@@ -261,8 +303,12 @@ class CtripCrawler(BaseCrawler):
                     # 9s 宽限，既不在空壳上早退，也不为空结果干等
                     t0 = time.monotonic()
                     parsed, flights, need_login = set(), [], False
+                    first_rows_at = None
                     finished = False
-                    while time.monotonic() - t0 < 20:
+                    # 有行后的 9s 宽限从首行到达起算（旧实现从 goto 起算，
+                    # 首包慢时会在 pull 补量前早退，实测 173→136 行）；
+                    # 总等待 16s 给单日最坏情况留出 15min 栅栏余量。
+                    while time.monotonic() - t0 < 16:
                         for item in list(captured):
                             u = item.get("url", "")
                             if u in parsed:
@@ -270,13 +316,17 @@ class CtripCrawler(BaseCrawler):
                             parsed.add(u)
                             body = item.get("text") or ""
                             part, nl = self._extract_intl_list(body, date)
+                            if part and first_rows_at is None:
+                                first_rows_at = time.monotonic()
                             flights.extend(part)
                             need_login = need_login or nl
-                            if '"finished":true' in body:
+                            if not finished and re.search(
+                                    r'"finished"\s*:\s*true', body):
                                 finished = True
                         if finished:
                             break
-                        if flights and time.monotonic() - t0 > 9:
+                        if (flights and first_rows_at is not None
+                                and time.monotonic() - first_rows_at > 9):
                             break
                         page.wait_for_timeout(600)
                     # 两包各约 2.6MB，debug 全量落盘会按日×14 膨胀数十
@@ -294,6 +344,16 @@ class CtripCrawler(BaseCrawler):
                         if k not in dedup or f["price"] < dedup[k]["price"]:
                             dedup[k] = f
                     flights = list(dedup.values())
+                    # 机场级路线只保留该机场：Ctrip 城市搜索 TYO 会混入
+                    # HND，NRT 路由照单全收会把成田与羽田合并进趋势/
+                    # 告警/同班（实测 136 行中 58 行 HND；LHR 混入
+                    # LGW/STN/LCY）。城市级路线（SHA/TYO）不过滤。
+                    flights, _drop_apt = self._filter_airport_scope(
+                        flights, from_city, to_city)
+                    if _drop_apt:
+                        self.logger.info(
+                            "[ctrip][intl] %s 机场级路线过滤城市内其他机场"
+                            " %d 行", date, _drop_apt)
                     try:
                         _body = page.inner_text("body")[:1200]
                     except Exception:
@@ -307,9 +367,20 @@ class CtripCrawler(BaseCrawler):
                     if not flights:
                         self.logger.warning(
                             "[ctrip][intl] %s PC 列表未解析到航班", date)
+                        _blocked = bool(re.search(
+                            r"whaleguard|验证码|安全验证|访问验证", _body))
+                        self.path_note(
+                            "PC", "blocked" if _blocked
+                            else ("login" if need_login else "empty"),
+                            date=date, detail=("风控验证页" if _blocked
+                                               else "国际列表未解析到航班"),
+                            ms=int((time.time() - t_pc) * 1000))
                         self._sleep()
                         continue
                     CtripCrawler.login_suspect = False
+                    self.path_note("PC", "ok", rows=len(flights), date=date,
+                                   detail="flights.ctrip.com %s列表" % label,
+                                   ms=int((time.time() - t_pc) * 1000))
                     best = min(flights, key=lambda f: f["price"])
                     results.append(FlightPrice(
                         platform=self.name,
@@ -333,8 +404,32 @@ class CtripCrawler(BaseCrawler):
                         page.close()
                     except Exception:
                         pass
-                self._sleep()
+                # 逐日整页导航本身已天然限速（10s 级），不再叠加
+                # 5–15s 随机 sleep——14 日窗曾因此额外多花 2–3 分钟
+                time.sleep(0.5)
         return results
+
+    @staticmethod
+    def _filter_airport_scope(flights: list, from_city: str,
+                              to_city: str):
+        """机场级路线只保留该机场；返回 (flights, dropped)。
+
+        城市级路线（SHA/TYO）不筛：Ctrip 城市搜索本就覆盖同城多场。
+        机场级路线（NRT/LHR/PVG）必须筛——CTrip TYO 会混入 HND，
+        LHR 会混入 LGW/STN/LCY，照单全收会让趋势/告警/同班比价
+        把“上海→成田”写成“上海→东京”并混入羽田价格。
+        """
+        dropped = 0
+        for key, raw in (("depAirportCode", from_city),
+                         ("arrAirportCode", to_city)):
+            want = str(raw or "").upper()
+            if not want or airport_city_code(want) == want:
+                continue
+            before = len(flights)
+            flights = [f for f in flights
+                       if str(f.get(key) or "").upper() == want]
+            dropped += before - len(flights)
+        return flights, dropped
 
     @staticmethod
     def _extract_intl_list(body: str, date: str):
@@ -468,8 +563,10 @@ class CtripCrawler(BaseCrawler):
                 _xday = 0
             cross = ({0: "", 1: "+1天", 2: "+2天"}.get(_xday)
                      or (f"+{_xday}天" if _xday > 0 else ""))
-            tz_dep = tz_offset_min(dep_apc)
-            tz_arr = tz_offset_min(arr_apc)
+            # DST 按航班日取真历法（抓取日 10 月仍夏令时会让 LHR
+            # 11 月航班错 60 分钟；base._stamp_intl 同律）
+            tz_dep = tz_offset_min(dep_apc, when=date)
+            tz_arr = tz_offset_min(arr_apc, when=date)
             dur_min = 0
             try:
                 dur_min = int(segs[0].get("duration") or 0)
@@ -622,6 +719,7 @@ class CtripCrawler(BaseCrawler):
                 self.logger.info("[ctrip][intl] GET %s", url)
                 captured = self.attach_xhr_collector(page, [
                     "FlightIntlAndInlandLowestPriceSearch"])
+                t_cal = time.time()
                 try:
                     page.goto(url, wait_until="domcontentloaded")
                     page.wait_for_timeout(9000)
@@ -647,9 +745,17 @@ class CtripCrawler(BaseCrawler):
                     if not flights:
                         self.logger.warning(
                             "[ctrip][intl] %s 未拿到日历价", date)
+                        self.path_note(
+                            "日历", "empty", date=date,
+                            detail="国际日历未返回该日报价",
+                            ms=int((time.time() - t_cal) * 1000))
                         self._sleep()
                         continue
                     best = min(flights, key=lambda f: f["price"])
+                    self.path_note("日历", "calendar", rows=len(flights),
+                                   date=date,
+                                   detail="仅日历最低价，无航班明细",
+                                   ms=int((time.time() - t_cal) * 1000))
                     results.append(FlightPrice(
                         platform=self.name,
                         from_city=from_city, to_city=to_city,

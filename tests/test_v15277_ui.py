@@ -85,7 +85,7 @@ def test_overlay_top_layer_and_z_order():
     s = _ui()
     assert "#searchview #srxModalmask{z-index:139}" in s
     assert "#searchview .srx-modal{z-index:140}" in s
-    assert "#toasts{z-index:124}" in s
+    assert "#toasts{z-index:170}" in s   # toast 抬到详情/浮层之上（r357 z=170）
     assert "if(srxTopLayer()==='detail')srxCloseDetail();" in s
     assert "if(srxTopLayer()==='gallery')srxCloseGallery();" in s
     assert "function srxLockBody()" in s and "function srxUnlockBody()" in s
@@ -124,8 +124,8 @@ def test_pages_root_redirect_and_readme_truth():
     for name in ("README.md", "README_EN.md"):
         with open(os.path.join(ROOT, name), encoding="utf-8") as f:
             t = f.read()
-        assert "58–92" not in t
-        assert "58–88" in t
+        assert "60–94" in t
+        assert "58–88" not in t and "58–92" not in t
     with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
         cn = f.read()
     with open(os.path.join(ROOT, "README_EN.md"), encoding="utf-8") as f:

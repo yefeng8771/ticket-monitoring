@@ -91,5 +91,5 @@ def test_login_stale_wording_in_page(q_cls):
     （无失效证据时不变——档案在且无失效证据仍显示登录态）。"""
     import webui
     src = open(webui.__file__, encoding="utf-8").read()
-    assert "会话可能失效" in src, "失效档词面缺席"
+    assert "会话需重新登录" in src, "失效档词面缺席"
     assert "已有登录态" in src, "常态档词面被误删"

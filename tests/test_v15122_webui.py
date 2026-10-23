@@ -68,7 +68,7 @@ def test_p2d_letter_spacing_two_tier_tokens():
     # r340 生产检索页新增 7 处微签（eyebrow/live/lab/kpi/thead/dlab/prov）
     # → 23；r340b 三重对齐表头再 +1 → 24；r348 探针字段/城市分组 +2 → 26；
     # r351 关注航班配置/清单微签 +6 → 32（新增微签不得裸写 px 字距）
-    assert s.count("letter-spacing:var(--ls1)") == 37  # r352 关注台/试看/K线微签 +6
+    assert s.count("letter-spacing:var(--ls1)") == 39  # goal 关注航线/筛选共同组微签 +2
     # --ls2 消费四处：装饰英文签两处（.seclab .en / .grouplab .en）
     # + r273 收编的两处 15px 展示签（.pvbody .md-g 主站 / .md .g notify）
     assert s.count("letter-spacing:var(--ls2)") == 4
@@ -88,8 +88,9 @@ def test_p2e_tile_radius_token():
     assert s.count("border-radius:10px") == 0
     assert s.count("border-radius:0 10px 10px 10px") == 0
     # 主站 7 处 + notify 2 处 + .pldesp 单角变体 1 处 + r340 检索浮层 1 处
-    # + r340b 详情抽屉/校准册 2 处 + r357 配置表面 4 处 = 16
-    assert s.count("border-radius:var(--r10)") == 16
+    # + r340b 详情抽屉/校准册 2 处 + r357 配置表面 4 处
+    # + 检索台 srx-mxcard/srx-hero-act 2 处 = 18
+    assert s.count("border-radius:var(--r10)") == 18
     assert "border-radius:0 var(--r10) var(--r10) var(--r10)" in s
     # --r3=9px 值不动（uitest 在案钉：notify logo 9px）
     assert "--r3:9px" in s

@@ -40,7 +40,7 @@ class TestWebuiV182Pins:
 
     def test_health_errbody_keep_stale(self):
         src = self._src()
-        i0 = src.index("function renderHealth")
+        i0 = src.index("function renderHealth(j){")
         seg = src[i0:i0 + 700]
         assert "healthcard').style.display!=='none')return" in seg, \
             "renderHealth 已有时间线时不保陈旧（500 掀翻时间线病面仍在）"

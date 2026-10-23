@@ -47,6 +47,7 @@ class TestWebuiV1555Pins:
         c = len(re.findall(r"</div\b", page))
         # r325：城市面板「🌐 国际目的地」页签（cp-sec/lhead/grid 三容器）
         # +3 对；R34：scope 分 Tab 行（cfgScopeBar 容器）+1 对；
+        # r366 探针查询行/渠道行/KPI 次级行 +1 对 = 993/993；
         # 后续并行 r326 对账至 391/391（含 cptabs 等后续增量）；
         # r339 双特性对账至 426/426（Bark 通道卡 chcard+4 srow、
         # 往返返程日期 chips 行 srow、渠道徽标 glab 增量）；
@@ -64,6 +65,7 @@ class TestWebuiV1555Pins:
         # r340 生产检索页静态骨架 + JS 渲染模板 +78 对 = 583/583；
         # r340b 原页镜像 + 三重对齐抽屉 + 校准册 +69 对 = 652/652；
         # r340c 主动探针表单 +8 对 = 660/660；r348 证据工作台/探针城市联想 +91 对 = 751/751；
+        # v286 探针链路账本（路径行容器 + 渲染模板）+2 对 = 992/992；
         # r351 配置中心独立航班监控（路由/筛选/表单/列表/走势模板）+74 对 = 825/825；
         # r352 关注航班台/名册/轨迹/K线/试看/独立编排 +116 对 = 941/941；
         # r353 品牌层：总览关注卡代码行 monwatch-code +1 对、详情来源承运航司行 +1 对 = 943/943；
@@ -75,7 +77,14 @@ class TestWebuiV1555Pins:
         # r357 关注数据预热的 cfgwatch-skel 骨架 +1 开/闭
         # r358 来源接入卡（srccap/uhead/scpath/3 scnode/scfoot）+7 对、
         # 登录卡停服说明 lgnote +1 对 = 964/964
-        assert (o, c, o - c) == (964, 964, 0)
+        # r358b 检索矩阵窄屏卡片（srx-mxcards/srx-mxcard ×5 格）+7 对 = 971/971
+        # r364 镜像截断提示 +1、r365 语义容器 +1 = 973/973
+        # v284 组合探针静态骨架（#srxBatchWrap/.srx-batchbar/#srxBatchList）
+        # +3 对、矩阵身份格 fname/fsub +1 对 = 977/977；v285 任务面板
+        # （panel/sum/body/legs/evbar/events）+6 对、恢复条 +1 对 = 984/984
+        # （运行期任务行/事件模板另计，不在 PAGE 字面）
+        # goal 关注航线卡 4 对 + 共享曲线容器 + 整合树探针标记 = 1003/1003
+        assert (o, c, o - c) == (1003, 1003, 0)
 
     def test_dingtalk_card_closed_before_ntfy(self):
         """钉钉卡闭合补钉字面在位，且位于 ntfy 卡开标签之前（顺序钉死）。"""

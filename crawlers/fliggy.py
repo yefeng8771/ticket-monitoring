@@ -15,6 +15,7 @@
 import json
 import logging
 import re
+import time
 from typing import List
 
 import httpx
@@ -34,6 +35,10 @@ class FliggyCrawler(BaseCrawler):
     URL_TPL = ("https://sjipiao.fliggy.com/flight_search_result.htm"
                "?tripType=0&depCity={fc}&arrCity={tc}&depDate={d}"
                "&depCityName={fn}&arrCityName={tn}")
+    # 国际 PC 列表（sjipiao 同源 302 到 /ie/，城市码直连即可；实测
+    # 2026-10-22 SHA→BKK 104 条全量 DOM，不再只有日历最低价）。
+    INTL_URL_TPL = ("https://sijipiao.fliggy.com/ie/flight_search_result.htm"
+                    "?tripType=0&depCity={fc}&arrCity={tc}&depDate={d}")
 
     # 行头容忍尾部「 经停」后缀（10-15 dump 实证中转二段「吉祥HO1068
     # 经停」；直飞经停班的「经停」词面在机型行，由机型行分支承载，不
@@ -180,14 +185,26 @@ class FliggyCrawler(BaseCrawler):
     # ==================== 主流程 ====================
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        self.path_reset()
         # 国际分流（r325）：core.intl 自动判定
         if is_intl_route(from_city, to_city):
             return self._fetch_intl(from_city, to_city, dates,
                                     ret_date=ret_date)
         results: List[FlightPrice] = []
-        fc, tc = from_city.upper(), to_city.upper()
+        # 飞猪国内搜索入参是城市码（北京=BJS），机场码 PEK 会落到
+        # “入参校验失败：三字码查不到城市信息”；国际同样先归并城市码。
+        fc, tc = airport_city_code(from_city.upper()), airport_city_code(to_city.upper())
         for date in dates:
+            t0 = time.time()
             flights = self._fetch_pc(fc, tc, date)
+            _blocked = bool(getattr(self, "_last_blocked", False))
+            self.path_note("PC", "ok" if flights else
+                           ("blocked" if _blocked else "empty"),
+                           rows=len(flights), date=date,
+                           detail=("人机验证页，需在渠道登录窗口完成验证"
+                                   if _blocked else
+                                   "sjipiao.fliggy.com SSR 列表"),
+                           ms=int((time.time() - t0) * 1000))
             if flights:
                 best = min(flights, key=lambda f: f["price"])
                 results.append(FlightPrice(
@@ -334,18 +351,194 @@ class FliggyCrawler(BaseCrawler):
 
     def _fetch_intl(self, from_city: str, to_city: str,
                     dates: List[str], ret_date: str = "") -> List[FlightPrice]:
-        """国际采集主路径（r325）：机场码 → 城市码映射（飞猪国际按
-        城市码收，机场码被拒实证），一次日历请求覆盖多日期查询。
-        ret_date（R15 往返一期）：在场即往返对监控（§2.6 契约）。"""
+        """国际采集主路径：PC 明细优先，日历兜底。
+
+        飞猪国际在 sijipiao /ie/ 提供与国内同级的航班列表（实测
+        SHA→BKK 104 条），此前只走 cheapestCalendar 导致国际线永远
+        只有日历价。往返（ret_date）仍走日历一期，避免拼错回程语义。
+        """
         results: List[FlightPrice] = []
         fc, tc = (airport_city_code(from_city.upper()),
                   airport_city_code(to_city.upper()))
+        if not dates:
+            return results
+        missing = list(dates)
+        if not ret_date:
+            try:
+                pc_map = self._fetch_intl_pc(fc, tc, dates)
+            except Exception as e:
+                self.logger.warning("[fliggy][intl] PC 列表异常: %s", e)
+                pc_map = {}
+            missing = []
+            for date in dates:
+                rows = pc_map.get(date) or []
+                if rows:
+                    best = min(rows, key=lambda f: f["price"])
+                    results.append(FlightPrice(
+                        platform=self.name,
+                        from_city=from_city, to_city=to_city,
+                        depart_date=date, price=float(best["price"]),
+                        airline=best.get("name", "")[:20],
+                        flight_no=best.get("code", ""),
+                        depart_time=best.get("depTime", ""),
+                        arrive_time=best.get("arrTime", ""),
+                        extra=json.dumps(rows, ensure_ascii=False),
+                    ))
+                    self.logger.info(
+                        "[fliggy][intl] %s PC 明细 %d 条 · 最低 ￥%.0f",
+                        date, len(rows), float(best["price"]))
+                else:
+                    missing.append(date)
+        if missing:
+            results.extend(self._fetch_intl_calendar(
+                fc, tc, missing, from_city, to_city, ret_date))
+        return results
+
+    def _fetch_intl_pc(self, fc: str, tc: str,
+                       dates: List[str]) -> dict:
+        """国际列表页逐日采集（一个持久上下文内顺序加载）。"""
+        out = {}
+        with self.browser() as ctx:
+            page = self.new_page(ctx)
+            for date in dates:
+                url = self.INTL_URL_TPL.format(fc=fc, tc=tc, d=date)
+                t0 = time.time()
+                try:
+                    page.goto(url, wait_until="load", timeout=45000)
+                    page.wait_for_timeout(5000)
+                    try:
+                        page.mouse.wheel(0, 1400)
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(1200)
+                    items = page.evaluate(self._INTL_ITEMS_JS) or []
+                    rows = self._parse_intl_items(items, date)
+                    out[date] = rows
+                    if not items:
+                        self.logger.warning(
+                            "[fliggy][intl] %s 列表空/未登录（%s→%s）",
+                            date, fc, tc)
+                    try:
+                        _body = page.inner_text("body")[:800]
+                    except Exception:
+                        _body = ""
+                    _login = bool(re.search(r"登录|扫码|passport|login",
+                                            str(page.url) + " " + _body))
+                    self.path_note(
+                        "PC", "ok" if rows else ("login" if _login else "empty"),
+                        rows=len(rows), date=date,
+                        detail="sjipiao.fliggy.com 国际列表",
+                        ms=int((time.time() - t0) * 1000))
+                    self._debug_snapshot(
+                        page, f"intl_pc_{fc}{tc}_{date}",
+                        extra_text=page.inner_text("body"))
+                except Exception as e:
+                    self.logger.warning(
+                        "[fliggy][intl] %s 列表加载失败: %s", date, e)
+                    out[date] = []
+                    self.path_note("PC", "error", date=date,
+                                   detail=str(e)[:120],
+                                   ms=int((time.time() - t0) * 1000))
+                self._sleep()
+        return out
+
+    # 列表页 DOM → 结构化行（与国内 extra 行同键族；缺键不造值）
+    _INTL_ITEMS_JS = r"""() => [...document.querySelectorAll('.flightItem')].map(it => {
+      const depEls = [...it.querySelectorAll('.col-time .time-info')];
+      const arrEls = [...it.querySelectorAll('.col-arr-time .time-info')];
+      const arrTxt = arrEls.length ? arrEls[arrEls.length - 1].innerText : '';
+      const priceEl = it.querySelector('.J_FlightListPrice');
+      const pick = (sel) => { const e = it.querySelector(sel); return e ? e.innerText : ''; };
+      return {
+        nameLine: (it.querySelector('.flight-info span[aria-label^="航班号"]') || {}).innerText || '',
+        tips: pick('.tip-info'),
+        depTime: depEls.length ? depEls[0].innerText.trim() : '',
+        arrTime: arrTxt.split('\n')[0].trim(),
+        cross: /\+1天/.test(arrTxt) ? '+1天' : '',
+        depAirport: (it.querySelector('.col-time p[aria-label^="出发机场"]') || {}).innerText || '',
+        arrAirport: (it.querySelector('.col-arr-time p[aria-label^="到达机场"]') || {}).innerText || '',
+        duration: pick('.totalTime-info p'),
+        priceText: priceEl ? (priceEl.getAttribute('aria-label') || '') : '',
+        priceNum: priceEl ? priceEl.innerText : '',
+        taxText: pick('.tax-price'),
+        quantity: pick('.quantity'),
+        trans: pick('.transfer-city'),
+        segs: depEls.length
+      };
+    })"""
+
+    @classmethod
+    def _parse_intl_items(cls, items, date: str) -> list:
+        """国际列表 DOM 提取值 → extra 行；无航班号/时刻/正价一律丢。"""
+        out = []
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            line = str(it.get("nameLine") or "").strip()
+            m = re.match(r"^(.*?)\s*([A-Z0-9]{2}\d{3,4})\s*$", line)
+            if not m:
+                continue
+            name, code = m.group(1).strip(), m.group(2).upper()
+            dep = str(it.get("depTime") or "").strip()
+            arr = str(it.get("arrTime") or "").strip()
+            if not (dep and arr):
+                continue
+            raw_price = str(it.get("priceText") or "")
+            if "机票价格" in raw_price:
+                raw_price = raw_price.split("机票价格")[-1]
+            try:
+                price = float(re.sub(r"[^0-9.]", "", raw_price
+                                     or str(it.get("priceNum") or "")))
+            except (TypeError, ValueError):
+                continue
+            if not price_band_ok(price, el={"intl": 1}):
+                continue
+            tax = None
+            try:
+                tax = float(re.sub(r"[^0-9.]",
+                                   "", str(it.get("taxText") or "")))
+            except (TypeError, ValueError):
+                tax = None
+            qty = None
+            qm = re.search(r"(\d+)\s*张", str(it.get("quantity") or ""))
+            if qm:
+                qty = int(qm.group(1))
+            tips = " ".join(str(it.get("tips") or "").split())
+            trans = " ".join(str(it.get("trans") or "").split())
+            segs = int(it.get("segs") or 1)
+            out.append({
+                "code": code, "name": name,
+                "depTime": dep, "arrTime": arr, "depDate": date,
+                "crossDayDesc": str(it.get("cross") or ""),
+                "depAirport": str(it.get("depAirport") or "").strip(),
+                "arrAirport": str(it.get("arrAirport") or "").strip(),
+                "totalDuration": str(it.get("duration") or "").replace("约", "").strip(),
+                "plane": tips, "price": price, "tax": tax,
+                "leftTickets": qty,
+                "transfer": bool(trans) or segs > 1,
+                "transCity": trans, "intl": 1,
+                "codeShare": "共享" in tips,
+            })
+        uniq = {}
+        for r in out:
+            k = (r["code"], r["depTime"], r["arrTime"], r["price"])
+            uniq.setdefault(k, r)
+        return list(uniq.values())
+
+    def _fetch_intl_calendar(self, fc: str, tc: str, dates: List[str],
+                             from_city: str, to_city: str,
+                             ret_date: str = "") -> List[FlightPrice]:
+        """日历兜底（原 r325 路径）：PC 列表空/未登录/往返时的最低含税价。"""
+        results: List[FlightPrice] = []
         if not dates:
             return results
         days = self._intl_calendar(fc, tc, dates[0], ret_date=ret_date)
         if days is None:
             self.logger.warning("[fliggy][intl] %s→%s 日历不可用",
                                 from_city, to_city)
+            for date in dates:
+                self.path_note("日历", "empty", date=date,
+                               detail="cheapestCalendar 不可用")
             return results
         for date in dates:
             parsed = self._parse_calendar_days(
@@ -355,17 +548,19 @@ class FliggyCrawler(BaseCrawler):
                 self.logger.warning(
                     "[fliggy][intl] %s 日历无该日报价（窗 %s 起共 %d 日）",
                     date, dates[0], len(days or []))
+                self.path_note("日历", "empty", date=date,
+                               detail="日历窗无该日报价")
                 self._sleep()
                 continue
             element = parsed
             price = element["price"]
-            # 哨 W-R326-F1（intl 折扣疑占位哨）：国际日历 discount 恒
-            # 0.0 疑占位（调研备案）。若后续值域多值（真实折扣率），
-            # 复评折扣出口（对齐国内 discount 键消费端）；恒 0 维持
-            # 不落键（宁缺勿错，防「0 折」假词面）
             if not price_band_ok(price, el={"intl": 1}):
+                self.path_note("日历", "empty", date=date,
+                               detail="日历价越界")
                 self._sleep()
                 continue
+            self.path_note("日历", "calendar", rows=1, date=date,
+                           detail="仅日历最低价，无航班明细")
             results.append(FlightPrice(
                 platform=self.name,
                 from_city=from_city, to_city=to_city,
@@ -382,6 +577,7 @@ class FliggyCrawler(BaseCrawler):
 
     def _fetch_pc(self, fc: str, tc: str, date: str) -> list:
         import urllib.parse
+        self._last_blocked = False
         url = self.URL_TPL.format(
             fc=fc, tc=tc, d=date,
             fn=urllib.parse.quote(_Q.CITY_NAME.get(fc, fc)),
@@ -462,6 +658,8 @@ class FliggyCrawler(BaseCrawler):
             # 产物不在其中，存壳 dump 冻结回放结构性 0 行命中）
             self._debug_snapshot(page, f"pc_{fc}{tc}_{date}",
                                  extra_text=full)
+            self._last_blocked = bool(re.search(
+                r"验证码|人机验证|滑动验证|拖动|安全验证|拼图", full or ""))
             if not flights:
                 # 未解析到航班时另落 nopx 标记快照（ctrip/tongcheng 同
                 # 目录同名约定）——行状态机失效有据可查
@@ -932,26 +1130,26 @@ class FliggyCrawler(BaseCrawler):
                 continue
             seen.add(key)
             clean.append(f)
-        # 幻影价守卫（qunar 0.5x 同思想）：明细中位数作群体锚，
-        # 单行价 < 中位×0.5 视为页面异源模块污染弃行——行距锚杀「尾部
-        # 吸入」，此守卫杀「模块恰好紧邻」的漏网（CA8564 ￥700 vs 明细
-        # 群 2850+ 生产实锤）。合法跨舱位双价（9900/3960）与明细群同量
-        # 级不误伤。
+        # 幻影价守卫（qunar 0.5x 同思想）：下四分位作群体锚而非中位
+        # ——中位锚在宽价差航线误杀真实早班低价（SHA→BJS 实测：中位
+        # ￥930，MU5195 ￥405 与去哪儿同班同价却被弃）；下四分位只
+        # 锚尾部异源模块（CA8564 ￥700 vs 群 2850+ 生产实锤仍命中）。
         # 中转真值豁免（实跑复现）：layoverSrc=
         # transInfo 行的时刻/衔接是渠道结构化真值非页面猜测，其价也是
         # 独立报价——低价中转恰是本批核心价值行（¥900 中转 vs 直飞群
         # 2020 曾被 0.5x 中位锚误杀弃行），守卫只服务猜测值（与
         # flightnorm 1440 回绕判伪豁免同哲学）
         if len(clean) >= 4:
-            med = sorted(f["price"] for f in clean)[len(clean) // 2]
-            kept = [f for f in clean if f["price"] >= med * 0.5
+            prices = sorted(f["price"] for f in clean)
+            anchor = prices[len(prices) // 4]
+            kept = [f for f in clean if f["price"] >= anchor * 0.5
                     or f.get("layoverSrc") == "transInfo"]
             for f in clean:
-                if (f["price"] < med * 0.5
+                if (f["price"] < anchor * 0.5
                         and f.get("layoverSrc") != "transInfo"):
                     _LOG.warning("[fliggy] 幻影价守卫弃行 %s ￥%.0f"
-                                 "（< 明细中位 ￥%.0f 的 0.5x，页面异源"
-                                 "模块污染）", f.get("code"), f["price"], med)
+                                 "（< 下四分位 ￥%.0f 的 0.5x，页面异源"
+                                 "模块污染）", f.get("code"), f["price"], anchor)
             clean = kept
         # 日历邻日最低价（trendGo 跨渠道协议归一第三源）：qunar
         # goFTrend / tongcheng pc[] 同语义同键同形态 [["MM-DD",价],…]，

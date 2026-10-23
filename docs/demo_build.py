@@ -58,6 +58,34 @@ window.__BAKED__=%s;
      err:'在线演示为静态站：添加/调整关注请在本机控制台使用'}));
    return Promise.resolve(J(B.watch||{ok:true,demo:true,watches:[]}));
   }
+  if(u.indexOf('/api/srx/calendar')===0){
+   const q=new URLSearchParams(u.split('?')[1]||'');
+   const pair=q.get('from')+'|'+q.get('to');
+   const C=B.calendar||{},hit=C[pair+'|'+(q.get('date')||'')]||C[pair];
+   if(!hit)return Promise.resolve(J({ok:false,demo:true,
+    err:'演示库该航线暂无烘焙价带'}));
+   const add=(d,n)=>{const a=d.split('-').map(Number);
+    const t=new Date(Date.UTC(a[0],a[1]-1,a[2]+n));
+    return t.toISOString().slice(0,10)};
+   const anchor=q.get('date')||hit.anchor,end=add(anchor,13);
+   const out=Object.assign({},hit,{anchor:anchor,
+    departure:(hit.departure||[]).filter(x=>x.date>=anchor&&x.date<=end)});
+   return Promise.resolve(J(out));
+  }
+  if(u.indexOf('/api/srx/links')===0){
+   const q=new URLSearchParams(u.split('?')[1]||'');
+   const pair=q.get('from')+'|'+q.get('to');
+   const L=B.links||{};
+   return Promise.resolve(J(L[q.get('from')+'|'+q.get('to')+'|'+q.get('date')]
+    ||L[pair]||{ok:true,demo:true,links:[]}));
+  }
+  if(u.indexOf('/api/srx/health')===0){
+   const q=new URLSearchParams(u.split('?')[1]||'');
+   const pair=q.get('from')+'|'+q.get('to');
+   const H=B.srchealth||{};
+   return Promise.resolve(J(H[q.get('from')+'|'+q.get('to')+'|'+q.get('date')]
+    ||H[pair]||{ok:false,demo:true,err:'演示库该航线暂无字段健康样本'}));
+  }
   return Promise.resolve(J({ok:false,demo:true,
    err:'在线演示为静态烘焙页——此操作在真实控制台（本地运行）可用'}));
  };})();
@@ -108,12 +136,39 @@ def build():
                     "from": [_r["from"]], "to": [_r["to"]],
                     "date": [_r["dates"][0]], "days": [str(_days)],
                     "th": [str(_r["alert_direct"] or 0)]})
+    # 检索页价带/深链/字段健康同样烘焙：shim 按 14 天窗口切片，
+    # 静态站进页即 14 格价带，不再走真实 API 的 demo 兜底错误体。
+    calendar, links, srchealth = {}, {}, {}
+    for _r in demo_routes():
+        _key = _r["from"] + "|" + _r["to"]
+        _dt = _r["dates"][0]
+        try:
+            calendar[_key + "|" + _dt] = webui._srx_calendar_raw(
+                _r["from"], _r["to"], _dt, 14, axis="both")
+            calendar.setdefault(_key, calendar[_key + "|" + _dt])
+        except Exception:
+            pass
+        try:
+            links[_key + "|" + _dt] = webui._srx_links(
+                _r["from"], _r["to"], _dt)
+            links.setdefault(_key, links[_key + "|" + _dt])
+        except Exception:
+            pass
+        try:
+            srchealth[_key + "|" + _dt] = webui._srx_health(
+                _r["from"], _r["to"], _dt)
+            srchealth.setdefault(_key, srchealth[_key + "|" + _dt])
+        except Exception:
+            pass
     baked = {
         "state": state,
         "trend": trend,
         "watch": watch,
         "watchTrends": watch_trends,
         "health": demo_health(),
+        "calendar": calendar,
+        "links": links,
+        "srchealth": srchealth,
         "preview": webui._preview_payload(0),
         "logtail": {"ok": True, "demo": True, "lines": [
             "2026-11-05 14:00:00 [INFO] ticket-monitor: ===== 开始一轮扫描（1 用户 / 3 航线） =====",

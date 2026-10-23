@@ -31,12 +31,12 @@ _DATE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
 # 每轮出价也被记 fail（r355 实锤：ctrip/fliggy/tuniu 连续 91 轮红）。
 _OK_PRICE = re.compile(
     r"(?:日历最低含税价|最低含税价|最低价)\s*[￥¥]\s*([\d,]+)")
+_DETAIL_COUNT = re.compile(r"明细\s*[1-9]\d*\s*条")
 _FAIL_DATED = ("达到最大重试圈数", "未解析到价格", "未拿到真实价格",
                "未拿到日历价")
-# 登录失效/会话门拒都是「可执行状态」而非普通抓取失败：健康页需给出
-# 重登入口。同程 444「非法链接」也是会话层门拒（r355 实测）。
-_AUTH_MARKS = ("未登录硬拒", "需登录", "登录失效", "会话失效",
-               "会话门拒", "非法链接")
+# 非法链接/会话门拒也可能来自签名、入口或业务校验，不能证明认证失效。
+_AUTH_MARKS = ("未登录硬拒", "需登录", "请登录", "登录失效", "会话失效")
+_GATE_MARKS = ("会话门拒", "非法链接", "请求环境拒绝")
 _EXC_MARK = "请求异常"
 _RETRY_MARKS = ("命中风控", "疑似限流", "后第")
 _MAINT_MARK = "进入维护模式"
@@ -46,8 +46,19 @@ _ROUND_END = "本轮扫描结束"
 _TS_FMT = "%Y-%m-%d %H:%M:%S"
 
 
+def _evidence_scope(message):
+    # 历史国内日志常无标签；缺范围时保留 unknown，不能当作国内证据。
+    if (re.match(r"\[(?:intl|international|国际)\]", message)
+            or re.search(r"(?:^|\s)国际(?!机场)", message)):
+        return "international"
+    if (re.match(r"\[(?:domestic|国内)\]", message)
+            or re.search(r"(?:^|\s)国内", message)):
+        return "domestic"
+    return "unknown"
+
+
 def parse_health(log_text, now=None, hours=24):
-    """解析日志 → {"rounds": [...], "stats": {...}}（按时间升序）。
+    """解析日志 → {"rounds": [...], "stats": {...}, "evidence": {...}}。
 
     round: {"ts": "YYYY-MM-DD HH:MM",
             "plats": {plat: {"s": ok|part|fail|maint, "ok": n, "tot": n,
@@ -56,6 +67,10 @@ def parse_health(log_text, now=None, hours=24):
     stats: {plat: {"ok": n, "part": n, "fail": n, "maint": n,
                    "cal": n, "detail": n, "auth": n,
                    "rate": ok/(ok+part+fail)}}}
+    evidence: {plat: {scope: {"auth_at": "YYYY-MM-DD HH:MM:SS" 或 "",
+                             "detail_at": 同式, "auth_reason": 安全摘要}}}
+    证据按事件时间独立截窗、跨轮取最新，scope 为 domestic/international/
+    unknown。明细出数是业务证据，不等同于认证验证；日历出数不计明细证据。
     """
     if isinstance(now, str):
         now = datetime.strptime(now, _TS_FMT)
@@ -63,8 +78,20 @@ def parse_health(log_text, now=None, hours=24):
     cutoff = now - timedelta(hours=hours)
 
     rounds = []
+    evidence = {}
     cur = None        # {"ts": datetime, "events": {plat: ev}}
     maint = set()     # 维护锁存（跨轮）
+
+    def _record_evidence(plat, scope, ts, field, reason=""):
+        if not cutoff <= ts <= now:
+            return
+        item = evidence.setdefault(plat, {}).setdefault(
+            scope, {"auth_at": "", "detail_at": "", "auth_reason": ""})
+        at = ts.strftime(_TS_FMT)
+        if at >= item[field]:
+            item[field] = at
+            if field == "auth_at":
+                item["auth_reason"] = reason
 
     def _new_round(ts):
         return {"ts": ts, "events": {}}
@@ -156,6 +183,7 @@ def parse_health(log_text, now=None, hours=24):
         dm = _DATE.search(rest)
         d = dm.group(1) if dm else None
         okm = _OK_PRICE.search(msg)
+        auth_reason = next((k for k in _AUTH_MARKS if k in msg), "")
         if _MAINT_MARK in msg:
             maint.add(plat)
             ev["note"] = "渠道维护模式"
@@ -167,16 +195,24 @@ def parse_health(log_text, now=None, hours=24):
                     else "detail")
             if ev["kinds"].get(d) != "detail":
                 ev["kinds"][d] = kind
+            if kind == "detail" and _DETAIL_COUNT.search(rest):
+                _record_evidence(plat, _evidence_scope(rest), ts, "detail_at")
             maint.discard(plat)
-        elif any(k in msg for k in _AUTH_MARKS):
+        elif auth_reason:
             if d:
                 ev["fail"].add(d)
             else:
                 ev["generic_fail"] += 1
             ev["auth"] = True
-            _gate = ("会话门拒" in msg or "非法链接" in msg)
-            ev["note"] = ("会话门拒 · 请重登" if _gate
-                          else "需登录 · 会话失效")
+            ev["note"] = "需登录 · 会话失效"
+            _record_evidence(plat, _evidence_scope(rest), ts, "auth_at", auth_reason)
+        elif any(k in msg for k in _GATE_MARKS):
+            if d:
+                ev["fail"].add(d)
+            else:
+                ev["generic_fail"] += 1
+            if not ev["note"]:
+                ev["note"] = "请求被拒（认证状态未确认）"
         elif any(k in msg for k in _FAIL_DATED):
             if d:
                 ev["fail"].add(d)
@@ -219,4 +255,4 @@ def parse_health(log_text, now=None, hours=24):
         # 永远不可能有航班级明细，放进分母会把 16/18 压成 16/96
         det_att = att - st["cal_only"]
         st["detail_rate"] = (st["detail_ok"] / det_att) if det_att else 0.0
-    return {"rounds": rounds, "stats": stats}
+    return {"rounds": rounds, "stats": stats, "evidence": evidence}

@@ -54,6 +54,8 @@ def test_unwrap_jsonp():
 # ---- _fetch_intl 全逻辑（网络层替换） ----
 
 def _patch_calendar(days):
+    # v284 起国际 PC 明细优先；本文件冻结日历兜底逻辑，PC 返回空
+    _FG._fetch_intl_pc = lambda fc, tc, dates: {}
     _FG._intl_calendar = lambda fc, tc, ld, ret_date="": days
 
 

@@ -176,9 +176,9 @@ class QunarCrawler(BaseCrawler):
         "&goDate={date}&from=touch_index_search"
         "&child=0&baby=0&cabinType=0"
     )
-    # PC 版单程列表：H5 接口 touchInnerList 风控升级
-    # （token 每轮刷新成功仍 1999，阶梯退避耗尽），PC 页 + wbdflightlist
-    # 接口在同款无头浏览器下实测正常出全量明细（77 条级），立为主路径
+    # PC 版单程列表（2026-10-10 起已停服，仅保留显式复活探测）：
+    # H5 接口 touchInnerList 曾风控升级，PC 页 + wbdflightlist 曾为主
+    # 路径；停服后由 _fetch_one 的 PC_PROBE_ON_MISS 开关控制，默认不走。
     PC_URL_TPL = (
         "https://flight.qunar.com/site/oneway_list.htm?"
         "searchDepartureAirport={from_name}&searchArrivalAirport={to_name}"
@@ -193,6 +193,9 @@ class QunarCrawler(BaseCrawler):
     # 自适应降暴露：首采样较上轮跌超 5%（幻影信号特征，正常轮间波动
     # <3%）才值得花额外请求加采复核，平时单采样即收工
     PC_DROP_RATIO = 0.95
+    # 2026-10-10 PC 站停服：H5 未命中时默认不再等 PC 复活
+    # （3 采样×等待≈72s/日期）；保留代码供人工显式置 True 做一次性复核。
+    PC_PROBE_ON_MISS = False
 
     def __init__(self, config, logger):
         super().__init__(config, logger)
@@ -303,6 +306,7 @@ class QunarCrawler(BaseCrawler):
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
         import time as _t
+        self.path_reset()
         for attempt in range(len(self._BACKOFF_S) + 1):
             wait = max(QunarCrawler._cooldown_until - _t.time(),
                        self._MIN_GAP_S - (_t.time() - QunarCrawler._last_done_ts))
@@ -405,23 +409,41 @@ class QunarCrawler(BaseCrawler):
         return results
 
     def _fetch_one(self, from_city: str, to_city: str, date: str) -> Optional[tuple]:
-        """单日期抓取：H5 浏览器优先（2026-10 起 PC 断供），
-        再探测 PC 复活，最后 httpx token 直连；真截断/风控整单拒落价。"""
+        """单日期抓取：H5 浏览器优先（2026-10 起 PC 断供）；
+        PC 复活探测默认关闭，最后 httpx token 直连；真截断/风控整单拒落价。"""
         # 2026-10-10 起 PC 列表页 302 回 www.qunar.com 促销聚合，
         # wbdflightlist 断供；H5 列表页（m.flight）仍出全量明细。
-        # H5 先行，PC 仅作未来复活探测/兜底，最后 token 直连。
+        # H5 先行；匿名/失效会话 H5 空结果时不再把每日期 ~72s 耗在
+        # PC 死入口上，直接走 token 直连。PC 探测保留为显式开关。
         got = self._fetch_via_browser(from_city, to_city, date)
+        self.path_note(
+            "H5", "ok" if got else
+            ("login" if QunarCrawler.login_suspect else "empty"),
+            rows=len(got[1]) if got else 0, date=date,
+            detail="touch.qunar.com H5 列表")
         if got is not None:
             self.logger.info("[qunar] H5 浏览器命中（完整明细）")
             return got
-        self.logger.info("[qunar] H5 未命中，探测 PC 是否复活")
-        got = self._fetch_via_pc(from_city, to_city, date)
-        if got is not None:
-            return got
-        self.logger.info("[qunar] PC 未命中，回退 httpx")
-        return self._fetch_via_httpx(from_city, to_city, date)
+        if self.PC_PROBE_ON_MISS:
+            self.logger.info("[qunar] H5 未命中，探测 PC 是否复活")
+            got = self._fetch_via_pc(from_city, to_city, date)
+            self.path_note("PC", "ok" if got else "empty",
+                           rows=len(got[1]) if got else 0, date=date,
+                           detail="PC 复活探测（默认停服）")
+            if got is not None:
+                return got
+            self.logger.info("[qunar] PC 未命中，回退 httpx")
+        else:
+            self.logger.info("[qunar] H5 未命中，跳过已停服的 PC，回退 httpx")
+        got = self._fetch_via_httpx(from_city, to_city, date)
+        self.path_note(
+            "API", "ok" if got else
+            ("login" if QunarCrawler.login_suspect else "empty"),
+            rows=len(got[1]) if got else 0, date=date,
+            detail="touchInnerList token 直连")
+        return got
 
-    # ==================== PC 版主路径（wbdflightlist） ====================
+    # ==================== PC 版复活探测（默认关闭，wbdflightlist） ====================
     def _fetch_via_pc(self, from_city: str, to_city: str,
                       date: str) -> Optional[tuple]:
         """PC 版列表页抓取：桌面上下文打开 flight.qunar.com 列表页，
@@ -526,7 +548,7 @@ class QunarCrawler(BaseCrawler):
                 len(samples), len(merged))
             return (float(best["price"]), merged)
         if snap.get("soft_reject"):
-            self.logger.info("[qunar] PC 软拒绝（空壳响应），直接回退 H5 浏览器")
+            self.logger.info("[qunar] PC 软拒绝（空壳响应），交由调用方回退")
         elif snap["texts"]:
             self.logger.warning("[qunar] PC 接口有响应但未解析出明细")
         return None
@@ -1956,6 +1978,8 @@ class QunarCrawler(BaseCrawler):
             if risk == "login":
                 # 登录态卡片分层「会话可能失效」同款证据（国内 313 同律）
                 QunarCrawler.login_suspect = True
+                self.path_note("H5", "login", date=date,
+                               detail="国际列表 1999/8 未登录硬拒")
                 # 1999 硬拒不设 30 分钟冷却（r339 观测轮 2 定谳：cooldown
                 # sleep 在 worker 线程内同步等 1776s——错峰等待即栅栏内
                 # 泊车，每查询吃满 900s 路由栅栏实录 8 条/日）。硬拒面
@@ -1971,12 +1995,16 @@ class QunarCrawler(BaseCrawler):
                 self.logger.warning(
                     "[qunar][intl] %s 风控验证码（%s）——本轮拒采不绕过",
                     date, risk)
+                self.path_note("H5", "blocked", date=date,
+                               detail="国际列表风控 %s" % risk)
                 self._sleep()
                 continue
             if risk == "refresh":
                 self.logger.warning("[qunar][intl] %s 服务端要求强刷（9）",
                                     date)
             if flights:
+                self.path_note("H5", "ok", rows=len(flights), date=date,
+                               detail="touch.qunar.com 国际列表")
                 self._stamp_intl(flights, fc, tc)
                 # R53 详情增强合并：interdetail 四维落最低行（_dkey=
                 # (code 链, 价格) 对位——原始行与提取行同源匹配）
@@ -2007,6 +2035,8 @@ class QunarCrawler(BaseCrawler):
                 self.logger.warning(
                     "[qunar][intl] %s 未解析到价格（响应 %d 份%s）",
                     date, len(bodies), f"，风控态 {risk}" if risk else "")
+                self.path_note("H5", "empty", date=date,
+                               detail="国际列表有响应但未解析出价格")
             self._sleep()
         return results
 

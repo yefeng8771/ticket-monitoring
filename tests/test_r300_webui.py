@@ -257,19 +257,19 @@ def test_dx_trailing_hit_behavior(srv):
 # ---------- P3-2: 渠道胶囊 title 条件化 ----------
 
 def test_plat_chip_title_source_pin():
-    """源码钉：title 按渠道条件化（ctrip 保留登录词面）；写死公共
-    片段形态禁复活（title=\"携程…\" 带属性前缀的精确形态——shint
-    帮助文本里同词面是合法在场，不误伤）。"""
+    """源码钉：title 按渠道条件化（ctrip/qunar 需登录，其余开箱即用）；
+    写死公共片段形态禁复活（title=\"携程…\" 带属性前缀的精确形态——
+    shint 帮助文本里同词面是合法在场，不误伤）。"""
     src = _page_src()
-    assert "title=\"${p==='ctrip'?'携程需本机已建立登录态':'开箱即用'}\"" in src, \
-        "渠道胶囊 title 未按渠道条件化"
+    assert ("title=\"${(p==='ctrip'||p==='qunar')?'需本机已建立登录态'"
+            ":'开箱即用'}\"") in src, "渠道胶囊 title 未按渠道条件化"
     assert 'title="携程需本机已建立登录态"' not in src, \
         "写死 title 公共片段复活（五颗全挂携程词面）"
 
 
 def test_plat_chip_title_behavior(srv):
-    """行为钉：qunar 胶囊 title=开箱即用（不含携程词面），ctrip
-    胶囊 title 保留登录提示。"""
+    """行为钉：qunar/ctrip 胶囊 title=需本机已建立登录态，fliggy
+    保持开箱即用（2026-10 去哪儿 H5 登录门）。"""
     _pw, page = srv
     _open_cfg_users_light(page)
     r = page.evaluate("""()=>{
@@ -279,6 +279,8 @@ def test_plat_chip_title_behavior(srv):
               fliggy:get('fliggy')};
     }""")
     assert r["qunar"] is not None, "qunar 胶囊未渲染（面板态异常）"
-    assert r["qunar"] == "开箱即用", "qunar title=%r（应为开箱即用）" % r["qunar"]
+    assert r["qunar"] == "需本机已建立登录态", (
+        "qunar title=%r（H5 登录门）" % r["qunar"])
     assert r["fliggy"] == "开箱即用", "fliggy title=%r" % r["fliggy"]
-    assert "携程" in (r["ctrip"] or ""), "ctrip title=%r（登录提示丢失）" % r["ctrip"]
+    assert r["ctrip"] == "需本机已建立登录态", (
+        "ctrip title=%r（登录提示丢失）" % r["ctrip"])

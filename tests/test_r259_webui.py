@@ -117,11 +117,9 @@ def test_tier_value_domain_note():
     src = _page_src()
     i = src.index("const TIER=")
     seg = src[max(0, i - 1500):i]
-    assert "TIER 值域" in seg and "语义分叉" in seg, (
-        "前端 TIER 值域 {2,1,-1,0} 注释缺位：q===0∧v≤tv 落 2 的分支"
-        "与服务端语义分叉且现三重不可达（纯防御性冗余），无值域注释"
-        "会被误判死代码删除；后端旗标协议变化时此处必须改出 1 的"
-        "联动条件须随注释在场")
+    assert "TIER 值域 {2,1,0}" in seg and "只认后端旗标" in seg, (
+        "前端 TIER 值域注释缺位：长窗日桶 flag=0 不得按 v≤tv 回退成"
+        "真达标；注释须锁死「只认后端旗标」的联动条件，防被误判死代码删除")
 
 
 # ---------- playwright srv fixture（demo 实例，行为钉共用；r251 形态） ----------

@@ -2175,7 +2175,7 @@ def recent_platform_flights(db_path, from_city, to_city, date, hours=6):
     # × 28KB extra 白解析 ~8s/航线-日期。fetched_at 为
     # '%Y-%m-%d %H:%M:%S' 定长格式，字符串比较即时间比较。
     rows = conn.execute(
-        "SELECT platform, extra, fetched_at FROM flight_prices "
+        "SELECT id AS _row_id, platform, extra, fetched_at FROM flight_prices "
         "WHERE from_city=? AND to_city=? AND depart_date=? AND extra != '' "
         "AND fetched_at >= datetime('now', 'localtime', ?) "
         "ORDER BY id DESC",
@@ -2203,9 +2203,14 @@ def recent_platform_flights(db_path, from_city, to_city, date, hours=6):
             # 下游写不出 fetchedAt，<0.5h 的补位还会被四舍五入成 0h
             # 冒充本轮。这里把 DB 的 fetched_at 随行挂回，展示/导出
             # 均按“补位 N.Nh”如实标注。
-            for _it in obj:
+            for _ix, _it in enumerate(obj):
                 if isinstance(_it, dict):
                     _it["_fetched_at"] = r["fetched_at"]
+                    # 双重对齐溯源：补位行也必须带 DB id + extra 下标，
+                    # 否则详情/CSV 把“有 raw”误标未采（生产 1432 行
+                    # rowId=null 实锤）
+                    _it["_row_id"] = r["_row_id"]
+                    _it["_raw_idx"] = _ix
             out[p] = (age, obj)
     return out
 

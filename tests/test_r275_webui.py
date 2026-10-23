@@ -71,8 +71,8 @@ def test_p32_montabs_tablist_retired():
     assert "setAttribute('aria-controls','montab-'" not in _WEBUI, \
         "tab↔tabpanel 关联复活"
     # 合法 aria-selected：日期模式条 1 + 检索台移动 tab 2 + 城市联想选中项 2
-    # （搜索/配置各一处 listbox option）。montabs 本身仍禁（上方 role 断言）。
-    assert _WEBUI.count("setAttribute('aria-selected'") == 5, \
+    # + 城市面板国内/国际真 tab 1 = 6。montabs 本身仍禁（上方 role 断言）。
+    assert _WEBUI.count("setAttribute('aria-selected'") == 6, \
         "aria-selected 使用点变化：核对是否误挂回 tablist"
     assert "setDateMode" in _WEBUI
 

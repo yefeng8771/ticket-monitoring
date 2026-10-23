@@ -475,7 +475,10 @@ def demo_health(hours=24, seed=7):
     now = datetime.now().replace(second=0, microsecond=0)
     rounds = []
     n = hours * 4                       # 15min 一轮
-    cal_only = {"ctrip", "fliggy", "tongcheng"}
+    # Ctrip 已接 PC 国际航班列表（v1.5.280）：演示健康也必须是航班级，
+    # 否则公共演示仍宣称“携程日历价 3（无航班明细）”，与 README/
+    # Release 的 174 行真实航班直接矛盾。
+    cal_only = {"fliggy", "tongcheng"}
 
     def _cell(s, ok, tot, note="", cal=0, detail=0, auth=False):
         return {"s": s, "ok": ok, "tot": tot, "note": note,

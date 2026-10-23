@@ -29,7 +29,7 @@ class TestWebuiV183Pins:
     def test_load_catch_branch_split(self):
         src = self._src()
         i0 = src.index("async function load()")
-        seg = src[i0:i0 + 2000]
+        seg = src[i0:i0 + 4200]
         ci = seg.index("catch(e){LASTTXT")
         cseg = seg[ci:ci + 560]
         assert "if(S)" in cseg, "fetch 失败 catch 分支未按有无旧数据分叉"
@@ -45,7 +45,7 @@ class TestWebuiV183Pins:
     def test_state_errbody_wordface(self):
         src = self._src()
         i0 = src.index("async function load()")
-        seg = src[i0:i0 + 2000]
+        seg = src[i0:i0 + 4200]
         ei = seg.index("错误体分支")
         eseg = seg[ei:ei + 560]
         assert "服务异常" in eseg, "错误体（服务在线）分支 pill 词面过重"
@@ -100,8 +100,8 @@ class TestWebuiV183Pins:
         seg = src[i0:i1]
         assert "(svc||'服务未启动')" in seg, \
             "_markStale 未参数化词面（冷启动 500 错误体与服务在线状态混轨）"
-        seg1 = src[i1:i1 + 2000]
+        seg1 = src[i1:i1 + 6000]
         ei = seg1.index("错误体分支")
-        eseg = seg1[ei:ei + 560]
+        eseg = seg1[ei:]
         assert "_markStale('服务异常')" in eseg, \
             "错误体冷启动分支未传「服务异常」词面（骨架与 pill 混轨）"

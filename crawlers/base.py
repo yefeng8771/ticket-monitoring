@@ -5,6 +5,8 @@ import json
 import random
 import time
 import logging
+import tempfile
+import threading
 from contextlib import contextmanager
 from typing import List, Optional, Callable
 
@@ -12,6 +14,15 @@ from playwright.sync_api import sync_playwright, BrowserContext, Page, Response
 
 from core.models import PRICE_MAX, PRICE_MIN, FlightPrice
 from core.intl import tz_offset_min
+
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROFILE_LOCKS = {}
+_PROFILE_LOCKS_GUARD = threading.Lock()
+
+
+class SessionBusyError(RuntimeError):
+    """同一渠道资料目录正由登录或采集使用。"""
 
 
 # 桌面/手机 UA
@@ -50,16 +61,49 @@ class BaseCrawler:
     # 本地会话档案在（saved）而标记在场时显示「会话可能失效」
     login_suspect: bool = False
 
+    # ── 采集链路观测（PC/H5/API/日历 逐路径尝试账本）──
+    # 只记代码真实走过的尝试，不按结果反推路径；探针面板与渠道状态共用。
+    PATH_STATUS = ("ok", "empty", "login", "blocked", "timeout",
+                   "error", "calendar")
+
+    def path_reset(self):
+        self.paths = []
+        self.last_path = ""
+        self.last_status = ""
+
+    def path_note(self, path: str, status: str, rows: int = 0,
+                  date: str = "", detail: str = "", ms: int = 0):
+        if status not in self.PATH_STATUS:
+            status = "error"
+        rec = {"path": str(path), "status": status,
+               "rows": int(rows or 0), "date": str(date or ""),
+               "detail": str(detail or "")[:160], "ms": int(ms or 0)}
+        if not hasattr(self, "paths"):
+            self.path_reset()
+        self.paths.append(rec)
+        self.last_path = rec["path"]
+        self.last_status = rec["status"]
+        cb = getattr(self, "on_path", None)
+        if cb:
+            try:
+                cb(rec)
+            except Exception:
+                pass
+        return rec
+
     def __init__(self, config: dict, logger: logging.Logger):
         self.config = config
         self.logger = logger
         self.headless: bool = config.get("headless", True)
+        # 用户主动探针可复用可见会话取明细；定时监控不弹窗。
+        self.probe_mode: bool = False
         self.timeout_ms: int = int(config.get("timeout_seconds", 45)) * 1000
         self.delay_min: float = float(config.get("delay_min", 2))
         self.delay_max: float = float(config.get("delay_max", 5))
         self.debug: bool = bool(config.get("debug", False))
         self.debug_dir: str = config.get("debug_dir", "debug")
-        self.user_data_root: str = config.get("user_data_dir", "user_data")
+        root = str(config.get("user_data_dir") or "user_data").strip() or "user_data"
+        self.user_data_root = os.path.abspath(os.path.join(_REPO_ROOT, root))
         # 可选本地代理（r319，如 Clash http://127.0.0.1:7897）：浏览器与
         # httpx 采集面统一走它，让出口 IP 可变（IP 级限流绕行）。注意
         # 国内站+境外出口=风控风险升档，建议国内直落节点或负载均衡组
@@ -73,6 +117,74 @@ class BaseCrawler:
         os.makedirs(path, exist_ok=True)
         return path
 
+    @property
+    def session_state_path(self) -> str:
+        return os.path.join(self.user_data_root, self.name, "session-state.json")
+
+    def _read_session_state(self) -> dict:
+        try:
+            with open(self.session_state_path, encoding="utf-8") as f:
+                state = json.load(f)
+            return state if isinstance(state, dict) else {}
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            self.logger.warning("[%s] 无法读取会话快照", self.name)
+            return {}
+
+    @property
+    def session_saved_at(self) -> float:
+        """明确确认登录并保存的时刻；旧 profile 迁移不算重新登录。"""
+        try:
+            return float(self._read_session_state().get("saved_at") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _write_session_state(self, state: dict, saved_at: float):
+        state = dict(state, saved_at=saved_at)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.user_data_dir,
+                    prefix=".session-state-", suffix=".tmp", delete=False) as f:
+                tmp = f.name
+                json.dump(state, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.session_state_path)
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def load_session_cookies(self, domains=None) -> list:
+        """读取最新快照，保留 Cookie 的域、路径和期限，不缓存认证值。"""
+        if not os.path.isfile(self.session_state_path) and os.path.isdir(
+                os.path.join(self.user_data_root, self.name, "Default")):
+            # 既有用户无需重登：首次 HTTP 采集导出 Chromium 已存会话。
+            # 仅迁移快照，不设置新登录时间，也不代表渠道已接受会话。
+            with self.browser(headless=True, save_session="migrate"):
+                pass
+        state = self._read_session_state()
+        domains = [domains] if isinstance(domains, str) else domains
+        allowed = [str(d).lower().lstrip(".") for d in domains or []]
+        now = time.time()
+        cookies = []
+        for c in state.get("cookies") or []:
+            if not isinstance(c, dict) or not c.get("name"):
+                continue
+            domain = str(c.get("domain") or "").lower().lstrip(".")
+            if allowed and not any(domain == d or domain.endswith("." + d)
+                                   for d in allowed):
+                continue
+            try:
+                expiry = float(c.get("expires", -1))
+            except (TypeError, ValueError):
+                continue
+            if expiry >= 0 and expiry <= now:
+                continue
+            cookies.append(dict(c))
+        return cookies
+
     def _ua(self) -> str:
         if self.use_mobile:
             return self.config.get("mobile_user_agent") or MOBILE_UA
@@ -85,8 +197,24 @@ class BaseCrawler:
 
     @contextmanager
     def browser(self, headless: Optional[bool] = None,
-                window_front: bool = False, window_idx: int = 0):
+                window_front: bool = False, window_idx: int = 0,
+                save_session: Optional[str] = None):
         """启动持久化浏览器上下文。headless=None 时使用配置。"""
+        path = os.path.normcase(os.path.realpath(self.user_data_dir))
+        with _PROFILE_LOCKS_GUARD:
+            lock = _PROFILE_LOCKS.setdefault(path, threading.Lock())
+        if not lock.acquire(blocking=False):
+            raise SessionBusyError(
+                "[%s] 会话正在登录或采集，请完成当前操作后重试" % self.name)
+        try:
+            with self._browser_context(headless, window_front, window_idx,
+                                       save_session) as ctx:
+                yield ctx
+        finally:
+            lock.release()
+
+    @contextmanager
+    def _browser_context(self, headless, window_front, window_idx, save_session):
         hl = self.headless if headless is None else headless
         with sync_playwright() as p:
             x, y = 40 + window_idx * 170, 24 + window_idx * 150
@@ -111,16 +239,28 @@ class BaseCrawler:
                     "--disable-dev-shm-usage",
                 ],
             )
-            ctx.add_init_script(
-                "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
-            )
             try:
+                # Chromium 重开可能丢弃 expires=-1 的会话 Cookie；只补
+                # profile 缺少的键，避免旧快照覆盖站点已更新的持久 Cookie。
+                if os.path.isfile(self.session_state_path):
+                    saved = self.load_session_cookies()
+                    if saved:
+                        key = lambda c: (c["name"], c["domain"], c.get("path", "/"))
+                        existing = {key(c) for c in ctx.cookies()}
+                        missing = [c for c in saved if key(c) not in existing]
+                        if missing:
+                            ctx.add_cookies(missing)
+                ctx.add_init_script(
+                    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+                )
                 yield ctx
+                state = ctx.storage_state() if save_session else None
             finally:
-                try:
-                    ctx.close()
-                except Exception:
-                    pass
+                ctx.close()
+            # 保存、关闭、发布必须全部成功，调用方才能报告登录已保存。
+            if state is not None:
+                saved_at = time.time() if save_session == "login" else self.session_saved_at
+                self._write_session_state(state, saved_at)
 
     def new_page(self, ctx: BrowserContext) -> Page:
         page = ctx.new_page()
@@ -297,7 +437,7 @@ class BaseCrawler:
         self.use_mobile = False
         try:
             with self.browser(headless=False, window_front=True,
-                              window_idx=idx) as ctx:
+                              window_idx=idx, save_session="login") as ctx:
                 page = self.new_page(ctx)
                 page.goto(url, wait_until="domcontentloaded", timeout=40000)
                 import time as _t
@@ -308,7 +448,8 @@ class BaseCrawler:
             self.use_mobile = bak
 
     def _interactive_login_inner(self, url: str):
-        with self.browser(headless=False, window_front=True) as ctx:
+        with self.browser(headless=False, window_front=True,
+                          save_session="login") as ctx:
             page = self.new_page(ctx)
             page.goto(url, wait_until="domcontentloaded")
             print()
@@ -320,4 +461,4 @@ class BaseCrawler:
                 input(">>> 完成后按 Enter：")
             except EOFError:
                 time.sleep(60)
-            self.logger.info("[%s] 会话已保存到 %s", self.name, self.user_data_dir)
+        self.logger.info("[%s] 会话已保存到 %s", self.name, self.user_data_dir)

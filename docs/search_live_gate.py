@@ -10,7 +10,7 @@
 import json, os, sys, time
 from playwright.sync_api import sync_playwright, expect
 
-BASE = "http://127.0.0.1:8765/"
+BASE = os.environ.get("GATE_BASE", "http://127.0.0.1:8765/")
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "_scratch", "search_live_gate")
 os.makedirs(OUT, exist_ok=True)
 fails = []
@@ -39,7 +39,26 @@ with sync_playwright() as p:
         pass
 
     ck("search visible", pg.locator("#searchview").is_visible())
+    _neutral = pg.evaluate("()=>({date:SRX.date,plats:SRX.plats.length,q:SRX.q})")
+    ck("neutral all-date initial", _neutral["date"] == "" and _neutral["plats"] == 0
+       and _neutral["q"] == "", str(_neutral))
     ck("rows > 0", pg.locator("#srxRows .srx-row").count() > 0, str(pg.locator("#srxRows .srx-row").count()))
+    # 中性首屏不自动锁日；价带/矩阵门禁显式选一个当前非 stale 的航线/日期
+    _pick = pg.evaluate("""()=>{const u=(S.users||[])[U]||{},all=u.flights||[],c={};
+      all.filter(f=>!srxIsCal(f)&&!srxIsStale(f)).forEach(f=>{
+        const k=f.from+'|'+f.to;c[k]=c[k]||{};c[k][f.date]=(c[k][f.date]||0)+1});
+      let best='',bd='',bn=0;
+      Object.entries(c).forEach(([k,ds])=>Object.entries(ds).forEach(([d,n])=>{
+        if(n>bn){bn=n;best=k;bd=d}}));
+      if(best){SRX.pair=best;SRX.date=bd;SRX.plats=[];SRX.q='';
+        SRX.f={...SRX_DEFAULT_F};SRX.bandAnchor='';SRX._init=true;renderSearch()}
+      return {pair:best,date:bd,n:bn}}""")
+    ck("fresh pair/date selected", bool(_pick["pair"]), str(_pick))
+    pg.wait_for_timeout(1500)
+    try:
+        pg.wait_for_function("()=>document.querySelectorAll('#srxBandDays .srx-day').length===14", timeout=15000)
+    except Exception:
+        pass
     ck("band 14 cells", pg.locator("#srxBandDays .srx-day").count() == 14, str(pg.locator("#srxBandDays .srx-day").count()))
     ck("brief 5 sources", pg.locator("#srxBrief .srx-src").count() == 5)
     ck("mirror 5 tabs", pg.locator("#srxMirror [data-mch]").count() == 5)
@@ -117,6 +136,10 @@ with sync_playwright() as p:
     pg.locator("#srxGallery [data-galclose]").click(); pg.wait_for_timeout(200)
 
     # health
+    # 折叠式 hero 工具条（窄屏/新视觉）把二级动作收进「更多」；先展开再点
+    _mb = pg.locator("#searchview .srx-hero-act .srx-more-btn")
+    if _mb.count() and _mb.first.is_visible():
+        _mb.first.click(); pg.wait_for_timeout(200)
     pg.locator("#searchview .srx-hero-act button[onclick='srxOpenHealth()']").click(); pg.wait_for_timeout(1800)
     ck("health modal", pg.locator("#srxModal.open").count() == 1 and pg.locator("#srxModal .srx-health").count() == 1)
     pg.locator("#srxModal [data-modalclose]").click(); pg.wait_for_timeout(200)

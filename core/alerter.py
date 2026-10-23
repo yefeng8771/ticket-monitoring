@@ -54,6 +54,16 @@ FLIGGY_TAX_PAD = 0
 # FLIGGY_TAX_PAD 的旋钮模式接入 _qual_price
 
 
+def _is_calendar_row(f) -> bool:
+    """日历/薄行（起降时刻双空）=不可出手机票。
+
+    推送/达标/告警/TOP 与曲线、检索台同律：日历最低价不得冒充
+    直飞/中转航班命中——历史曾把「日历最低价」按无 transCity 分入
+    直飞池，￥719 日历价直接触发「真达标·建议出手」。"""
+    return not (str(f.get("depTime") or "").strip()
+                or str(f.get("arrTime") or "").strip())
+
+
 def _qual_price(f) -> float:
     """达标判定口径价 = 展示价 + 飞猪税垫；行情展示与排序仍用展示价。
     脏价（非数字）按不达标（inf）处理——若原样穿透，`<= th` 判定处
@@ -1565,6 +1575,19 @@ class Alerter:
             except Exception as e:
                 self.logger.warning("近期明细补位失败: %s", e)
 
+            # 日历/薄行不得进入推送分类池：无时刻=渠道日历最低价，
+            # 既不是直飞也不是中转让；历史曾按「无 transCity」落直飞
+            # 并直接触发 ￥719 真达标推送。曲线/检索台早已排除，推送
+            # 池是最后缺口。补位池同样过滤（旧轮日历行不能借补位复活）。
+            _n_cal = sum(1 for f in flights if _is_calendar_row(f))
+            if _n_cal:
+                self.logger.info(
+                    "[推送] %s→%s %s 排除日历/薄行 %d 条（不参与达标）",
+                    route.from_code, route.to_code, date, _n_cal)
+                flights = [f for f in flights if not _is_calendar_row(f)]
+            if not flights:
+                continue
+
             # 跨源时刻仲裁：同航班号时以飞猪（结构化 JSON，可靠）时刻为准，
             # 纠正去哪儿碎片解析中残余的邻串时刻污染。
             # 仅直飞行（code 无 /）参战：中转链的任一段号都可能恰是 fliggy
@@ -2159,16 +2182,15 @@ class Alerter:
         hits = []
         for route, sections in rs_list:
             for s in sections:
-                if (route.alert_direct > 0 and s["best_direct"] is not None
-                        and _qual_price(s["best_direct"])
-                        <= route.alert_direct):
-                    hits.append((route, s, "直飞", s["best_direct"],
-                                 route.alert_direct))
-                if (route.alert_transfer > 0 and s["best_transfer"] is not None
-                        and _qual_price(s["best_transfer"])
-                        <= route.alert_transfer):
-                    hits.append((route, s, "中转", s["best_transfer"],
-                                 route.alert_transfer))
+                bd, bt = s["best_direct"], s["best_transfer"]
+                if (route.alert_direct > 0 and bd is not None
+                        and not _is_calendar_row(bd)
+                        and _qual_price(bd) <= route.alert_direct):
+                    hits.append((route, s, "直飞", bd, route.alert_direct))
+                if (route.alert_transfer > 0 and bt is not None
+                        and not _is_calendar_row(bt)
+                        and _qual_price(bt) <= route.alert_transfer):
+                    hits.append((route, s, "中转", bt, route.alert_transfer))
         return hits
 
     def _ops_notes(self, rs_list: list, no_data: list = None) -> list:

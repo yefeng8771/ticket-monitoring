@@ -22,7 +22,9 @@ def test_same_flight_fingerprint_includes_identity():
 
 def test_kpi_flights_include_date_and_exclude_calendar():
     s = _src()
-    assert "function _flightUid(f)" in s and "(f.cal?'cal|':'')+(f.date||'')" in s
+    # r365：班次去重与 srxFlightKey 同源（航班号+日期+时刻+中转/跨天/经停）
+    assert "function _flightUid(f)" in s and "srxFlightKey(f)" in s
+    assert "flightNo||f.name" not in s[s.index("function _flightUid"):][:900]
     assert "rows.filter(f=>!f.cal).map(f=>_flightUid(f))" in s
 
 

@@ -14,7 +14,7 @@
 import argparse
 import json
 
-__version__ = "1.5.280"
+__version__ = "1.5.289"
 import os
 import subprocess
 import sys
@@ -1729,20 +1729,31 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
 
     # 平台实例：按「平台集合」缓存（去哪儿实例的 token/浏览器会话复用）
     crawler_cache = {}
+    from threading import RLock
+    crawler_cache_lock = RLock()
+    session_root = _anchored((cfg.get("crawler") or {}).get("user_data_dir"),
+                             "user_data")
     # 热改无头模式后清缓存，下轮按新配置重建浏览器实例
-    rt["clear_crawlers"] = crawler_cache.clear
+    def clear_crawlers(platform=None):
+        with crawler_cache_lock:
+            for key in list(crawler_cache):
+                if platform is None or platform in key:
+                    del crawler_cache[key]
+    rt["clear_crawlers"] = clear_crawlers
 
     def get_crawlers(platforms):
         key = tuple(sorted(set(platforms)))
-        if key not in crawler_cache:
-            crawler_cfg = (rt.get("cfg") or cfg).get("crawler", {})
-            insts = []
-            for name in key:
-                cls = REGISTRY.get(name)
-                if cls:
-                    insts.append(cls(crawler_cfg, logger))
-            crawler_cache[key] = insts
-        return crawler_cache[key]
+        with crawler_cache_lock:
+            if key not in crawler_cache:
+                crawler_cfg = dict((rt.get("cfg") or cfg).get("crawler", {}))
+                crawler_cfg["user_data_dir"] = session_root
+                insts = []
+                for name in key:
+                    cls = REGISTRY.get(name)
+                    if cls:
+                        insts.append(cls(crawler_cfg, logger))
+                crawler_cache[key] = insts
+            return crawler_cache[key]
 
     def sweep():
         if not _sweep_lock.acquire(blocking=False):
@@ -1755,6 +1766,25 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
 
     def _sweep_inner():
         from core.pulse import PULSE
+        from datetime import datetime as _dtm
+        # 轮次标记（单源）：同一轮多航线按顺序完成可跨 8-10 分钟，
+        # 控制台 420s 断口聚类会把先完成的 NRT/BKK 误判为“补位”并
+        # 压掉真达标。这里把本轮开始时刻落盘，state 以它划轮，
+        # 不再靠行间断口猜。end 只作审计留痕，不参与新鲜度判断。
+        _scan_marker = os.path.join(
+            os.path.dirname(os.path.abspath(storage.db_path)),
+            "last_scan.json")
+        _scan_start = _dtm.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        def _mark_scan(end=""):
+            try:
+                with open(_scan_marker, "w", encoding="utf-8") as _f:
+                    json.dump({"start": _scan_start, "end": end,
+                               "pid": os.getpid()}, _f)
+            except OSError as _e:
+                logger.warning("[扫描] 轮次标记写入失败: %s", _e)
+
+        _mark_scan()
         users, alerters = rt["users"], rt["alerters"]
         if disk_low(_REPO_ROOT):
             logger.warning("[磁盘] 剩余水位低于 %.0fGB，写库/渲染图可能"
@@ -1947,6 +1977,7 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
         except Exception as e:
             logger.warning("[特价] 本轮异常: %s", e)
         PULSE.end()
+        _mark_scan(_dtm.now().strftime("%Y-%m-%d %H:%M:%S"))
         # 渠道整轮零记录哨（本轮全部查询聚合行数；风控断供「零记录」
         # 形态对行历史池/no_det 双盲，独立观测面）
         try:
@@ -2345,7 +2376,7 @@ def main():
 
             start_web(cfg, sweep, _report_push, logger, users=rt["users"],
                       reload_cb=reload_config, config_path=str(cfg_path),
-                      version=__version__)
+                      version=__version__, login_saved_cb=rt["clear_crawlers"])
             rt["web_port"] = int((cfg.get("web") or {}).get("port", 8765))
             rt["headless"] = bool((cfg.get("crawler") or {}).get(
                 "headless", True))

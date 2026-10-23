@@ -322,6 +322,32 @@ def test_cluster_round_rows_splits_across_rounds():
     assert out[0]["fetched_at"] == "2026-09-20 10:16:00"
 
 
+def test_cluster_round_rows_scan_marker_keeps_slow_routes():
+    """同一轮多航线跨 8-10 分钟完成：有轮次标记时不按 420s 断口切开。
+
+    生产实证 13:37 NRT 与 13:45 SIN 相隔 466s，旧断口把 NRT 标补位，
+    IJ004 ￥972 真达标被压成 stale。标记 start=13:34 时三行都属本轮。
+    """
+    rows = ["2026-10-22 13:45:35", "2026-10-22 13:37:49",
+            "2026-10-22 13:34:02", "2026-10-22 13:23:10"]
+    out = _cluster_round_rows([_row(t) for t in rows],
+                              scan_start="2026-10-22 13:34:00")
+    assert [r["fetched_at"] for r in out] == rows[:3]
+    # 标记缺失时回退断口，旧轮不会被合并
+    out2 = _cluster_round_rows([_row(t) for t in rows])
+    assert len(out2) == 1
+    # /api/state 传入的是 sqlite3.Row（无 .get）：标记分支必须只下标访问
+    class _RowLike:
+        def __init__(self, ts):
+            self._d = {"fetched_at": ts}
+
+        def __getitem__(self, k):
+            return self._d[k]
+    out3 = _cluster_round_rows([_RowLike(t) for t in rows],
+                               scan_start="2026-10-22 13:34:00")
+    assert len(out3) == 3
+
+
 # ---- notifier：恰达线剥注 + 装饰符剥离 ----
 
 def test_alert_body_strips_broken_line_word():
@@ -353,6 +379,17 @@ def test_ptrip_note_not_orphan():
     # 爬虫落键、渲染门必须下发（防 PC 复活当日静默丢失）
     src = open("webui.py", encoding="utf-8").read()
     assert '"ptripNote"' in src
+
+
+def test_trend_ring_candle_and_watch_honesty_pins():
+    # 长窗日桶 flag=0 不得按价格回退成真达标；K线用日桶真 OHLC；
+    # 关注台 stale/paused/expired 不得显示已达标。
+    src = open("webui.py", encoding="utf-8").read()
+    assert "const TIER=(q,v,tv)=>q===2?2:(q===1?1:0);" in src
+    assert 'pts = lambda rows: [[r["day"], r["lo"], 0, r["open"]' in src
+    assert "const ohlc=g.every(x=>x.length>=6);" in src
+    assert "const eligible=!!(w.active&&w.inScope&&q&&!q.stale);" in src
+    assert "if(!q||q.stale||!w.active||!w.inScope)return '';" in src
 
 
 if __name__ == "__main__":

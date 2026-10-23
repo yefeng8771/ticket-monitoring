@@ -34,7 +34,7 @@ class TestWebuiSeatTilt:
     def test_csv_column(self):
         src = self._src()
         # CSV「座椅倾斜」列:cabinCode 列之后(导出分析消费面)
-        i0 = src.index("(f.cabinT||'').replace(/<[^>]*>/g,'')")
+        i0 = src.index("(f.cabin||'').replace(/<[^>]*>/g,'')")
         seg = src[i0:i0 + 400]
         assert "seatTilt" in seg, "CSV 缺座椅倾斜列(cabinCode 列后)"
 
