@@ -16,7 +16,7 @@ def test_watch_data_is_prefetched_on_config_entry():
     assert "loading:false,loadedOnce:false" in SRC
     load_cfg = _between("async function loadCfg(){", "/* ===== r351")
     assert "try{loadCfgWatch()}catch(e){}" in load_cfg
-    switch = _between("function switchView(v){", "/* URL 深链恢复视图")
+    switch = _between("function switchView(v,hist){", "/* URL 深链恢复视图")
     assert "if(v==='cfg'&&CFG){try{loadCfgWatch()}catch(e){}}" in switch
     watch = _between("async function loadCfgWatch(force){", "/* 未保存草稿守卫")
     for needle in ("CFG_WATCH.loading=true", "CFG_WATCH.loadedOnce=true",

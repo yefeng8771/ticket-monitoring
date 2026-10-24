@@ -52,7 +52,8 @@ def test_health_badge_uses_all_attempts_and_swr():
 
 def test_trend_kline_note_discloses_calendar():
     s = _src()
-    assert '日K=当日最低价（含日历价 · 开/收=当日首末价）' in s
+    assert '日K=真实航班当日最低价（不含日历价 · 开/收=当日首末价）' in s
+    assert '日K=行情池当日最低价（含日历价 · 开/收=当日首末价）' in s
 
 
 def test_qual_kpi_counts_flights_and_rows():

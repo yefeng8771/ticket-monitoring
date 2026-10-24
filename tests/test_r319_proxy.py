@@ -67,7 +67,7 @@ class TestProxyPlumbing(unittest.TestCase):
         # 一律不吃，出口只由显式 proxy 形参控制
         sp = _src("crawlers/special.py")
         self.assertNotIn("trust_env=not proxy", sp)
-        self.assertEqual(sp.count("trust_env=False"), 4)   # 四源 fetcher
+        self.assertEqual(sp.count("trust_env=False"), 7)   # 五源 fetcher（新增飞猪/同程/途牛日历）   # 四源 fetcher
 
     def test_example_config_documents_proxy(self):
         src = _src("config.example.yaml")

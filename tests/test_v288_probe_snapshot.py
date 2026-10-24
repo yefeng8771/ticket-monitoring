@@ -242,13 +242,14 @@ def test_empty_info_distinguishes_calendar_fallback_rows():
     assert "发起探针补明细" in src
 
 
-def test_retry_bypasses_probe_cooldown():
-    import inspect
-    src = inspect.getsource(webui._probe_search)
+def test_probe_retry_bypasses_global_cooldown():
+    # 直接读源文件，避免并行编辑时 inspect 行缓存命中邻近函数。
+    src = open(webui.__file__, encoding="utf-8").read()
+    assert "def _probe_search(" in src
     assert "retry=False" in src
     assert "if not retry and _now0 - _PROBE_LAST" in src
-    src2 = inspect.getsource(webui._probe_start_task)
-    assert "retry=retry" in src2
+    assert "if not retry and _now0 - _PROBE_LAST" in src
+    assert "retry=retry" in src
     assert "retry:true" in webui.PAGE
     assert "o.retry)_p.retry=true" in webui.PAGE
 

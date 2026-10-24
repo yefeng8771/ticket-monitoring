@@ -302,9 +302,10 @@ def test_unfollow_opens_confirm_and_cancel_keeps_watch(page):
 def test_watch_form_hides_savebar_and_cancel_restores(page):
     page.goto(BASE + "/")
     page.wait_for_function("typeof S !== 'undefined' && S && S.users")
-    page.evaluate("switchView('cfg');showCfgPanel('watch',true)")
-    page.wait_for_selector("[data-cwact='add']", timeout=10000)
-    page.click("[data-cwact='add']")
+    page.evaluate("switchView('cfg');showCfgPanel('users',true);"
+                  "if(OPEN_USER<0)document.querySelector('.uhead2').click()")
+    page.wait_for_selector("#uwatch-0 [data-cwact='add']", timeout=10000)
+    page.click("#uwatch-0 [data-cwact='add']")
     page.wait_for_selector("#cwForm", state="visible", timeout=5000)
     assert page.evaluate(
         "document.body.classList.contains('cwform-open')") is True

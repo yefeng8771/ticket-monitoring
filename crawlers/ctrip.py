@@ -20,6 +20,7 @@ from core.flightnorm import AIRPORT_NAME_CN
 from core.intl import (INTL_CITY_NAME, airport_city_code, is_intl_route,
                        tz_offset_min)
 from .base import BaseCrawler, iata2, iata3
+from .challenge import classify_text
 
 _LOG = logging.getLogger(__name__)
 
@@ -694,6 +695,12 @@ class CtripCrawler(BaseCrawler):
             out.append(row)
         return out, need_login
 
+    @staticmethod
+    def _empty_calendar_status(body: str, url: str = "") -> str:
+        """Empty calendar result: login/blocked evidence must not be empty."""
+        sig = classify_text(body, url)
+        return sig.status if sig else "empty"
+
     def _fetch_intl_calendar(self, from_city: str, to_city: str,
                              fc: str, tc: str,
                              dates: List[str]) -> List[FlightPrice]:
@@ -730,11 +737,17 @@ class CtripCrawler(BaseCrawler):
                         _body = page.inner_text("body")[:1200]
                     except Exception:
                         _body = ""
-                    if "手机登录/注册" in _body or "账号密码登录" in _body:
+                    _page_url = str(getattr(page, "url", ""))
+                    _cal_status = self._empty_calendar_status(_body, _page_url)
+                    if _cal_status == "login":
                         CtripCrawler.login_suspect = True
                         self.logger.warning(
                             "[ctrip][intl] 需登录 · 国际列表需携程会话"
                             "（请在配置页「渠道登录」重登 ctrip）")
+                    elif _cal_status == "blocked":
+                        self.logger.warning(
+                            "[ctrip][intl] %s 日历页命中人机/访问验证",
+                            date)
                     elif "服务器发生异常" in _body:
                         self.logger.warning(
                             "[ctrip][intl] %s 渠道返回服务器异常", date)
@@ -746,8 +759,10 @@ class CtripCrawler(BaseCrawler):
                         self.logger.warning(
                             "[ctrip][intl] %s 未拿到日历价", date)
                         self.path_note(
-                            "日历", "empty", date=date,
-                            detail="国际日历未返回该日报价",
+                            "日历", _cal_status, date=date,
+                            detail=("登录/验证页，非空结果"
+                                    if _cal_status != "empty" else
+                                    "国际日历未返回该日报价"),
                             ms=int((time.time() - t_cal) * 1000))
                         self._sleep()
                         continue

@@ -135,8 +135,9 @@ class TestWebuiV1553Pins:
         # 启动恢复块 localStorage 回退档补写裸 tab 再+1（#tab/uN 双段
         # 深链档保持原 hash 零写入——写点受控枚举锁，非永恒数字）
         assert src.count("history.replaceState(null,'',") == 6
-        assert "['overview','trend','watch','details','health'].indexOf(_ht)>=0" in src   # hash 白名单防注入（启动块双段解析后）
-        assert "location.hash.slice(1)==='cfg')switchView('cfg')" in src
+        assert "['overview','specials','trend','watch','details','health'].indexOf(_ht)>=0" in src   # hash 白名单防注入（启动块双段解析后；specials 为监控页签）
+        assert "const _hv=location.hash.slice(1).split('/')[0]" in src
+        assert "switchView('cfg',false)" in src
 
     # ---- K/L 宽屏档 ----------
 

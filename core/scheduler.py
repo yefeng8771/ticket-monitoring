@@ -65,6 +65,8 @@ def run_scheduler(job, state: dict, run_on_start: bool = True):
     )
     if run_on_start:
         wrapped()
+    else:
+        _schedule_next(sched, state)
     global SCHED
     SCHED = sched
     sched.start()

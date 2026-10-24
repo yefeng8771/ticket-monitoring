@@ -201,7 +201,7 @@ def test_c3_dingtalk_toggle_updates_heads(page):
           return {model: CFG[0].notifier.dingtalk.enabled,
                   pill: document.querySelectorAll(
                     '#cfgform .ucard .uhead2 .upill')[3].textContent.trim(),
-                  aHead: g('A'), eHead: g('E')};
+                  aHead: g('A'), eHead: g('F')};
         })()""")
         assert out["model"] is True, out
         # r345：开关开但 Webhook 空 → 待完善（后端会跳过，不能假绿）
@@ -255,10 +255,10 @@ def test_c5_specials_pill_composite_truth(page):
                   off: pillAt(), dOff: dHead()};
         })()""")
         assert out["on"]["t"] == "特价 开" and out["on"]["ok"], out
-        assert out["dOn"] == "已启用", out
+        assert out["dOn"] == "按用户独立", out
         assert out["model"] is False, out
         assert out["off"]["t"] == "特价 关" and not out["off"]["ok"], out
-        assert out["dOff"] == "未启用", out
+        assert out["dOff"] == "按用户独立", out
         # r339j 价位门反例：enabled+出发地齐但价位 0=未完形→恒「关」
         out2 = page.evaluate("""(() => {
           CFG[0].specials = [{enabled: true, from_name: '上海',
@@ -284,7 +284,7 @@ def test_c6_ntfy_topic_updates_ehead(page):
           inp.dispatchEvent(new Event('change', {bubbles: true}));
           return {model: CFG[0].notifier.ntfy,
                   eHead: document.querySelector(
-                    '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+                    '#cfgform .grouplab[data-sec="F"] .gsum').textContent};
         })()""")
         assert out["eHead"] and "ntfy✓" in out["eHead"], out
     finally:

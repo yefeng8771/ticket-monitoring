@@ -14,7 +14,7 @@
 import argparse
 import json
 
-__version__ = "1.5.289"
+__version__ = "1.5.292"
 import os
 import subprocess
 import sys
@@ -32,6 +32,7 @@ from core.alerter import Alerter, sanitize_desp
 from core.scheduler import run_scheduler
 from core.notifier import build_notifier
 from crawlers import REGISTRY
+from crawlers.base import channel_slot
 
 
 class _NoDupKeyLoader(yaml.SafeLoader):
@@ -1653,7 +1654,9 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
         for d in cands:
             prices = []
             for c in crawlers:
-                rows = c.safe_fetch(d.from_code, d.to_code, [d.date]) or []
+                with channel_slot(c.name):
+                    rows = c.safe_fetch(d.from_code, d.to_code,
+                                        [d.date]) or []
                 prices += [p.price for p in rows if p.price]
             action, val = verify_verdict(
                 min(prices) if prices else None, d.src_price,
@@ -1824,7 +1827,9 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
             # 承载，crawler/storage 零改动）；单值/无返程退化为单次
             # fetch（rds=[""] 与旧行为逐字节等价）
             for _rd in (ret_dates.get((fc_, tc_, d_)) or [""]):
-                prices.extend(c.safe_fetch(fc_, tc_, [d_], ret_date=_rd))
+                with channel_slot(c.name):
+                    prices.extend(c.safe_fetch(fc_, tc_, [d_],
+                                               ret_date=_rd))
             try:
                 PULSE.channel(c.name, len(prices), time.time() - t0)
             except Exception:

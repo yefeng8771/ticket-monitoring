@@ -70,9 +70,9 @@ def test_watch_scope_accepts_route_object():
         e = webui._watch_entry(_payload())
         assert webui._watch_in_scope(e, "u1") is True
         assert webui._watch_in_scope(e, "nobody") is False
-        # 关注航班是独立实体：日期不必落在某条配置航线的日期内
+        # 关注航班是配置航线+日期明细的子集：未命中的日期不再是有效范围
         assert webui._watch_in_scope(
-            webui._watch_entry(_payload(date="2026-11-17")), "u1") is True
+            webui._watch_entry(_payload(date="2026-11-17")), "u1") is False
     finally:
         webui._State.users = old_users
 

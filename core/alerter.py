@@ -5043,22 +5043,10 @@ class Alerter:
             # §2/§3 实证，挂羊头第三起收口）
             if _intl_route(fc_up, tc_up):
                 from core.intl import airport_city_code as _apc_f
-                from core.intl import city_short_of as _cshort_f
-                try:
-                    from crawlers.qunar import QunarCrawler as _QC3
-                    _cn3 = getattr(_QC3, "CITY_NAME", {})
-                except Exception:
-                    _cn3 = {}
-                fn_i = _q(str(_cn3.get(fc_up, "") or _cshort_f(fc_up)
-                              or route.from_name or fc_up))
-                tn_i = _q(str(_cn3.get(tc_up, "") or _cshort_f(tc_up)
-                              or route.to_name or tc_up))
                 return (
-                    "https://sjipiao.fliggy.com/ie/flight_search_result.htm"
-                    f"?depCityName={fn_i}&depCityCode={_apc_f(fc_up)}"
-                    f"&arrCityName={tn_i}&arrCityCode={_apc_f(tc_up)}"
-                    f"&tripType=0&depDate={date}"
-                    "&arrDate=null&searchBy=1281&scene=null"
+                    "https://sijipiao.fliggy.com/ie/flight_search_result.htm"
+                    f"?tripType=0&depCity={_apc_f(fc_up)}"
+                    f"&arrCity={_apc_f(tc_up)}&depDate={date}"
                 )
             # fliggy：PC SSR 列表页（crawlers/fliggy.py URL_TPL 同源——
             # 渠道本体就是 PC 直读；原 H5 outfliggys 为旧入口）

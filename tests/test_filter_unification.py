@@ -52,7 +52,7 @@ def test_shared_spark_used_by_route_flight_and_overview():
         assert "trendSparkSvg(" in body, fn
 
 
-def test_watch_copy_states_independent_entity():
-    assert "关注航班独立于关注航线" in TEXT
-    assert "共享本地落库数据" in TEXT
-    assert "自定义城市" in TEXT
+def test_watch_copy_states_subset_entity():
+    assert "关注航班是配置关注航线+日期明细集合中的指定航班子集" in TEXT
+    assert "关注航班独立于关注航线" not in TEXT
+    assert "关注航班 = 配置关注航线 + 同日期明细中的指定航班" in TEXT

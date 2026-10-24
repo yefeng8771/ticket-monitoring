@@ -96,8 +96,8 @@ def test_sparse_transfer_series_lands_on_time_axis(pg):
     assert h["t"], "中转点在场"
     for pt in h["t"]:
         assert pt[0] > band, "稀疏系列点压左缘（索引位而非时刻位）: %s" % h
-    # 中转首点 '10-02 04:00' 的轴位=2/3，落在右带精确位（旧码压左缘 0）
-    exact = h["L"] + (h["Rx"] - h["L"]) * (2.0 / 3)
+    # 中转首点 '10-02 04:00' 距窗头 20h，真实时间轴位=20/24（旧索引码 2/3）
+    exact = h["L"] + (h["Rx"] - h["L"]) * (20.0 / 24.0)
     assert abs(h["t"][0][0] - exact) < 2.0, h
     # 直飞首点仍在窗头（同一映射对满系列无回归）
     assert h["d"][0][0] < h["L"] + (h["Rx"] - h["L"]) * 0.2

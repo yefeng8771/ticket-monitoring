@@ -76,8 +76,11 @@ class TestWebuiV170Pins:
         src = self._src()
         assert ".glcell{border:1px solid var(--line);border-radius:var(--r2);" \
                "padding:12px 14px;" in src
-        # 11px 垂直档仅余表头/按钮等非卡容器形态（audit 盘点对象为卡容器）
-        assert "padding:11px 14px" not in src, "glcell 11px 游离档残留"
+        # 11px 垂直档仅余表头/按钮等非卡容器形态（audit 盘点对象为卡容器）；
+        # 登录双端弹窗头 .lgmodal-h 属于表头形态，允许保留 11px 14px
+        bad = [ln for ln in src.splitlines()
+               if "padding:11px 14px" in ln and ".lgmodal-h" not in ln]
+        assert not bad, "glcell 11px 游离档残留: %s" % bad[:2]
 
     def test_toast_hover_rule(self):
         """P2-E：.toast:hover{background:var(--hover)} 与 .pvx 同语言。"""

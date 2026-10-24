@@ -119,8 +119,8 @@ def test_en7_kline_ringnote_breaks_line():
     assert i >= 0, "ringNote 备忘式守卫缺席"
     seg = s[i:i + 900]
     assert '<br>' in seg, "K线态图例未折行（专有释义应第二行）"
-    assert ("if(_ringWrote!==_rh+_tlSpan){_rn.innerHTML=_rh+_tlSpan;"
-            "_ringWrote=_rh+_tlSpan;}") in s, \
+    assert ("if(_ringWrote!==_rh+_tlSpan+_outNote){_rn.innerHTML=_rh+_tlSpan+_outNote;"
+            "_ringWrote=_rh+_tlSpan+_outNote;}") in s, \
         "ringNote 同值守卫写入缺席（r323 长窗覆盖注 _tlSpan 同拍写入门）"
 
 

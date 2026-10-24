@@ -88,7 +88,7 @@ def test_trend_chips_grouped():
     m = src.index('class="mdgrp"')
     j = src.index('id="chartRoutes"')
     seg = src[m:j]
-    assert seg.count('class="mdgrp"') == 2, (
+    assert seg.count('class="mdgrp"') == 3, (
         "走势卡头四 chip（折线/K线/48h/7天）须两组各包 .mdgrp：平铺同层"
         "时窄档折行后模式档与时间窗档混排（组间语义断裂）")
     assert ".mdgrp{display:inline-flex" in src, (

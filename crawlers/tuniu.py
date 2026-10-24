@@ -39,6 +39,7 @@ from core.flightnorm import cabin_clean, fmt_dur
 from core.intl import airport_city_code, is_intl_route
 from core.models import PRICE_MAX, PRICE_MIN, FlightPrice, price_band_ok
 from .base import BaseCrawler, iata2, iata3
+from .challenge import blocked_signal, login_signal
 
 _RE_HHMM = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
 # 舱位订座码形态门（r329：段级订座码串「W-W」单字母连串——B 报告
@@ -182,11 +183,31 @@ class TuniuCrawler(BaseCrawler):
         # 国内连败拖累国际健康的降载节奏
         self._fail_streak_intl: int = 0
         self._login_wall: bool = False
-        self._saved_cookies: dict = {}
+        self._last_challenge = None
+        self._last_challenge_intl = None
+        self._saved_cookies: list = []
         self._saved_cookies_at: float = 0.0
+        self._saved_token: str = ""
+        self._saved_token_at: float = 0.0
 
     def login_url(self) -> str:
         return "https://www.tuniu.com/"
+
+    @property
+    def user_data_dir(self) -> str:
+        """登录槽位把 PC/H5 会话分别存在 surfaces/{pc,h5}；采集必须读同一面。
+
+        历史上只读 user_data/tuniu（base），用户重新登录后 base 没有
+        tuniuuser_id/_taca，接口恒 710114，而 surfaces/h5 是登录态。
+        """
+        base = os.path.join(self.user_data_root,
+                            self.profile_name or self.name)
+        surface = "h5" if self.use_mobile else "pc"
+        path = os.path.join(base, "surfaces", surface)
+        if os.path.isdir(os.path.join(path, "Default")):
+            return path
+        os.makedirs(base, exist_ok=True)
+        return base
 
     def _rate_acquire(self):
         while True:
@@ -229,8 +250,9 @@ class TuniuCrawler(BaseCrawler):
 
     def _install_tac_cookies(self, client: httpx.Client) -> None:
         now = int(time.time() * 1000)
+        udid = client.cookies.get("udid") or self._fetch_udid(client)
         cookies = {
-            "udid": self._fetch_udid(client),
+            "udid": udid,
             "_taca": f"{now}.{now}.{now}.1",
             "_tacb": self._b64(self._new_guid()),
             "_tacc": "1",
@@ -239,8 +261,13 @@ class TuniuCrawler(BaseCrawler):
             "_tacz2": self._b64("0," + self._new_guid() + ",,"),
         }
         for k, v in cookies.items():
-            if v:
-                client.cookies.set(k, v, domain=COOKIE_DOMAIN, path="/")
+            if not v:
+                continue
+            # 654: 保存会话里的 _taca 带登录时间，重写会破坏 710114 登录态；
+            # 任何已存在（保存态或站点下发）的 cookie 都不得覆盖。
+            if client.cookies.get(k):
+                continue
+            client.cookies.set(k, v, domain=COOKIE_DOMAIN, path="/")
 
     @staticmethod
     def _has_price(node: Any) -> bool:
@@ -273,7 +300,64 @@ class TuniuCrawler(BaseCrawler):
         n = len(data.get("fareList") or [])
         return obj, n, (n == 0 and cls._has_price(data))
 
-    def _saved_session_cookies(self) -> dict:
+    @staticmethod
+    def _token_from_request(url: str) -> str:
+        """从页面 listFlight 请求的 d 参数提取 tokenKey（请求级校验）。"""
+        try:
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(str(url or "")).query)
+            obj = json.loads((q.get("d") or ["{}"])[0])
+            return str((obj or {}).get("tokenKey") or "")
+        except Exception:
+            return ""
+
+    def _saved_page_token(self, fc: str, tc: str, date: str) -> str:
+        """用保存登录态打开 H5 列表页，抓取页面请求里的 tokenKey。
+
+        页面列表请求即使因参数/返回段形态不完整而 170001，tokenKey 仍是
+        同一登录会话的请求级校验令牌；把它用于爬虫修正后的单段请求。
+        与 cookie 同一次浏览器读取共用，缓存 5 分钟；失败则回退空 token。
+        """
+        now = time.time()
+        if self._saved_token and now - self._saved_token_at < 300:
+            return self._saved_token
+        token = ""
+        try:
+            with self.browser(headless=True) as ctx:
+                page = self.new_page(ctx)
+                seen = {}
+
+                def on_req(req):
+                    if "listFlight" in req.url and not seen.get("t"):
+                        tk = self._token_from_request(req.url)
+                        if tk:
+                            seen["t"] = tk
+                page.on("request", on_req)
+                page.goto(self.list_url(fc, tc, date),
+                          wait_until="domcontentloaded", timeout=25000)
+                deadline = time.time() + 10
+                while time.time() < deadline and not seen.get("t"):
+                    page.wait_for_timeout(400)
+                token = seen.get("t", "")
+                # 同一次浏览器读取顺带刷新 cookie 缓存（登录态只存 user_data）
+                out = []
+                for c in ctx.cookies():
+                    if "tuniu.com" in str(c.get("domain") or ""):
+                        out.append((str(c.get("name") or ""),
+                                    str(c.get("value") or ""),
+                                    str(c.get("domain") or "")))
+                if out:
+                    self._saved_cookies = out
+                    self._saved_cookies_at = now
+            if token:
+                self.logger.info("[tuniu] 页面 tokenKey 长度=%d", len(token))
+        except Exception as ex:
+            self.logger.warning("[tuniu] 读取页面 tokenKey 失败: %s", ex)
+        self._saved_token = token
+        self._saved_token_at = now if token else 0.0
+        return token
+
+    def _saved_session_cookies(self) -> list:
         """从持久化浏览器档案取途牛 cookie（登录态只存在 user_data）。
 
         国内 listFlight 2026-10 起对匿名返回 710114「请登录」；此前
@@ -283,7 +367,7 @@ class TuniuCrawler(BaseCrawler):
         now = time.time()
         if self._saved_cookies and now - self._saved_cookies_at < 300:
             return self._saved_cookies
-        out = {}
+        out = []
         try:
             with self.browser(headless=True) as ctx:
                 page = self.new_page(ctx)
@@ -292,8 +376,9 @@ class TuniuCrawler(BaseCrawler):
                 page.wait_for_timeout(800)
                 for c in ctx.cookies():
                     if "tuniu.com" in str(c.get("domain") or ""):
-                        out[str(c.get("name"))] = (str(c.get("value") or ""),
-                                                   str(c.get("domain") or ""))
+                        out.append((str(c.get("name") or ""),
+                                    str(c.get("value") or ""),
+                                    str(c.get("domain") or "")))
         except Exception as ex:
             self.logger.warning("[tuniu] 读取已保存会话失败: %s", ex)
         self._saved_cookies = out
@@ -440,25 +525,34 @@ class TuniuCrawler(BaseCrawler):
         return out
 
     def _one_attempt(self, depart_code, arrive_code, depart_date, polls=None):
+        page_token = self._saved_page_token(depart_code, arrive_code, depart_date)
         client = httpx.Client(
             headers={
                 "User-Agent": self._ua() or UA,
                 "Accept-Language": "zh-CN,zh;q=0.9",
-                "sec-ch-ua-platform": '"iOS"',
-                "sec-ch-ua-mobile": "?1",
+                "Origin": "https://m.tuniu.com",
+                "Referer": "https://m.tuniu.com/",
             },
             timeout=25,
             follow_redirects=True,
         )
         try:
+            # 先让站点下发 mtoken/风控基础 cookie，再覆盖保存会话；反过来
+            # 会被站点的匿名 connect.sid 覆盖，接口又回到 710114。
             client.get(FLIGHT_HOME)
-            client.get(self.list_url(depart_code, arrive_code, depart_date))
-
-            for _ck, (_cv, _cd) in self._saved_session_cookies().items():
+            for _ck, _cv, _cd in self._saved_session_cookies():
                 try:
                     client.cookies.set(_ck, _cv, domain=_cd, path="/")
                 except Exception:
                     pass
+                # 654: connect.sid 是 m.tuniu.com 的 host-only 会话 cookie，
+                # listFlight 在 flight-api.tuniu.com 上收不到它；同一登录会话
+                # 在父域再挂一次，不改变值，只修正跨子域可见性。
+                if _cd == "m.tuniu.com":
+                    try:
+                        client.cookies.set(_ck, _cv, domain=COOKIE_DOMAIN, path="/")
+                    except Exception:
+                        pass
             self._install_tac_cookies(client)
             mtoken = client.cookies.get("mtoken", "") or ""
 
@@ -469,9 +563,12 @@ class TuniuCrawler(BaseCrawler):
                 "segmentList": [
                     {"dCityIataCode": depart_code, "aCityIataCode": arrive_code, "departDate": depart_date}
                 ],
-                "rph": 0, "hackersFlightNos": None, "tokenKey": mtoken,
+                "rph": 0, "hackersFlightNos": None,
+                "tokenKey": page_token or mtoken,
             }
-            api_hdrs = {"Referer": "https://m.tuniu.com/", "Accept": "application/json"}
+            api_hdrs = {"Origin": "https://m.tuniu.com",
+                        "Referer": "https://m.tuniu.com/",
+                        "Accept": "application/json"}
 
             last = ""
             blocked = False
@@ -485,12 +582,14 @@ class TuniuCrawler(BaseCrawler):
                 if "710114" in last or "请登录" in last:
                     type(self).login_suspect = True
                     self._login_wall = True
+                    self._last_challenge = login_signal("710114/needLogin")
                     self.logger.warning(
                         "[tuniu] %s 国内接口 710114 请登录——需在渠道登录保存途牛会话",
                         depart_date)
                     return False, None, True
                 if "179991" in last:
                     blocked = True
+                    self._last_challenge = blocked_signal("waf", "179991")
                 obj, n, legacy_price = self._poll_sample(last)
                 if obj is not None and (n >= _FARE_FLOOR or legacy_price):
                     return True, obj, blocked
@@ -654,6 +753,7 @@ class TuniuCrawler(BaseCrawler):
                 # 观察哨（report §6b）：国际通道预留登录门 needLogin
                 # 未启用——翻 true 即停采报事件（勿绕，同国内 710114 纪律）
                 if data.get("needLogin"):
+                    self._last_challenge_intl = login_signal("needLogin")
                     self.logger.warning(
                         "[tuniu][intl] needLogin 翻真——国际登录门启用，"
                         "停采（观察哨触发）")
@@ -677,6 +777,8 @@ class TuniuCrawler(BaseCrawler):
                     return (last_data is not None), last_data, False
                 time.sleep(1.5)
             # 拍数用尽：聚合未完结时以已拿到的最新非空盘兜底
+            if last_data is None and last_msg:
+                self._last_challenge_intl = blocked_signal("waf", "token门")
             return (last_data is not None), last_data, bool(last_msg)
         except Exception as ex:
             self.logger.warning("[tuniu][intl] 请求异常: %s", ex)
@@ -701,6 +803,12 @@ class TuniuCrawler(BaseCrawler):
                 if self.rate_limit:
                     self._rate_record()
                 return raw
+            if (self._last_challenge_intl is not None
+                    and self._last_challenge_intl.status == "login"):
+                # needLogin 是确定性账号门，重试只会空转。
+                self.logger.warning(
+                    "[tuniu][intl] %s 登录门在案，停止重试", date)
+                return None
             if eff_a and attempt >= eff_a:
                 self._fail_streak_intl += 1
                 self.logger.warning(
@@ -891,14 +999,18 @@ class TuniuCrawler(BaseCrawler):
         tc = airport_city_code(to_city.upper())
         for date in dates:
             t_h5 = time.time()
+            self._last_challenge_intl = None
             raw = self._hoop_intl(fc, tc, date)
             self._dump_raw(raw, f"tuniu_intl_{date}")
             if raw is None:
                 self.logger.warning("[tuniu][intl] %s 未拿到真实价格", date)
+                _sig = getattr(self, "_last_challenge_intl", None)
                 self.path_note(
                     "H5/API",
-                    "login" if type(self).login_suspect else "empty",
-                    date=date, detail="国际接口未返回价格",
+                    _sig.status if _sig else
+                    ("login" if type(self).login_suspect else "empty"),
+                    date=date,
+                    detail=(_sig.detail if _sig else "国际接口未返回价格"),
                     ms=int((time.time() - t_h5) * 1000))
                 self._sleep()
                 continue
@@ -944,7 +1056,13 @@ class TuniuCrawler(BaseCrawler):
         # 与飞猪/携程国内同律先归并城市码，FlightPrice 仍保留原航线。
         fc, tc = airport_city_code(from_city.upper()), airport_city_code(to_city.upper())
         pc_map = {}
+        h5_token = ""
         if not ret_date:
+            try:
+                h5_token = self._saved_page_token(fc, tc, dates[0])
+            except Exception:
+                h5_token = ""
+        if not ret_date and not h5_token:
             try:
                 pc_map = self._fetch_pc_dom(fc, tc, dates)
             except Exception as e:
@@ -983,14 +1101,19 @@ class TuniuCrawler(BaseCrawler):
                     date, len(pc_rows), float(best["price"]))
                 continue
             t_h5 = time.time()
+            self._last_challenge = None
             raw = self._hoop(fc, tc, date)
             self._dump_raw(raw, f"tuniu_raw_{date}")
             if raw is None:
                 self.logger.warning("[tuniu] %s 未拿到真实价格", date)
+                _sig = getattr(self, "_last_challenge", None)
                 self.path_note(
                     "H5/API",
-                    "login" if type(self).login_suspect else "empty",
-                    date=date, detail="m.tuniu.com 接口未返回价格",
+                    _sig.status if _sig else
+                    ("login" if type(self).login_suspect else "empty"),
+                    date=date,
+                    detail=(_sig.detail if _sig else
+                            "m.tuniu.com 接口未返回价格"),
                     ms=int((time.time() - t_h5) * 1000))
                 self._sleep()
                 continue

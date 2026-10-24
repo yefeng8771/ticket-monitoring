@@ -17,6 +17,8 @@
 """
 import logging
 import os
+import shutil
+import tempfile
 import re
 import json
 import time
@@ -32,6 +34,7 @@ from core.citydata import CODE_NAME as _CODE_NAME
 from core.intl import (airport_city_code, city_name_of, city_short_of,
                        is_intl_route)
 from .base import BaseCrawler, iata2, iata3
+from .challenge import ChallengeSignal, blocked_signal, classify_text, login_signal
 
 _LOG = logging.getLogger(__name__)
 
@@ -303,10 +306,110 @@ class QunarCrawler(BaseCrawler):
     _last_done_ts = 0.0
     _cooldown_until = 0.0
 
+    @staticmethod
+    def fetch_low_price_calendar(dep_name: str, arr_name: str,
+                                 start_date: str, end_date: str,
+                                 logger=None, timeout: float = 35.0,
+                                 proxy: str = "",
+                                 profile_root: str = "user_data"):
+        """去哪儿官方 H5 低价日历（特价页官方深链，零登录）。
+
+        页面 JS 自行生成 bella/june 签名；本函数只加载官方页面并读取
+        getFlightCalendar 的真实响应，不逆向签名、不绕过验证码/风控。
+        返回响应 dict（bstatus=0 且含 lowPriceList）或 None。"""
+        from urllib.parse import quote
+        log = logger or _LOG
+        prof = tempfile.mkdtemp(prefix="qn_radar_")
+        # 使用已保存的去哪儿会话（仅复制 Cookie/Preferences/Local State，
+        # 不复制缓存与历史）；无会话时仍走官方页面匿名路径。
+        src = os.path.join(profile_root, "qunar")
+        if os.path.isdir(src):
+            for rel in ("Default/Network/Cookies", "Default/Preferences",
+                        "Local State"):
+                sp = os.path.join(src, rel)
+                if not os.path.isfile(sp):
+                    continue
+                dp = os.path.join(prof, rel)
+                try:
+                    os.makedirs(os.path.dirname(dp), exist_ok=True)
+                    shutil.copy2(sp, dp)
+                except OSError as e:
+                    log.warning("[特价·qunar] 会话文件复制失败 %s: %s",
+                                rel, e)
+        url = ("https://touch.qunar.com/lowFlight/flightList"
+               "?dep=" + quote(dep_name) + "&arr=" + quote(arr_name) +
+               "&flightType=1&startDate=" + start_date +
+               "&endDate=" + end_date +
+               "&tag=-1&days=-1&tagNames="
+               "&cat=touchjpgg_lowFlight-cheap-ticket_urban_flow_research"
+               "&hybridid=flight_tejia&bizSource=SUPER_LOW")
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as e:
+            log.warning("[特价·qunar] Playwright 不可用: %s", e)
+            shutil.rmtree(prof, ignore_errors=True)
+            return None
+        obj = {}
+        try:
+            with sync_playwright() as pw:
+                ctx = pw.chromium.launch_persistent_context(
+                    prof, headless=True,
+                    viewport={"width": 390, "height": 844},
+                    user_agent=("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 "
+                                "like Mac OS X) AppleWebKit/605.1.15 "
+                                "(KHTML, like Gecko) Version/17.0 "
+                                "Mobile/15E148 Safari/604.1"),
+                    locale="zh-CN", timezone_id="Asia/Shanghai",
+                    is_mobile=True, has_touch=True,
+                    proxy={"server": proxy} if proxy else None)
+                page = ctx.new_page()
+
+                def _on_resp(r):
+                    if "getFlightCalendar" not in r.url:
+                        return
+                    try:
+                        j = r.json()
+                    except Exception:
+                        return
+                    if not isinstance(j, dict):
+                        return
+                    st = j.get("bstatus")
+                    ok = (st == 0 or (isinstance(st, dict)
+                                      and st.get("code") == 0))
+                    lp = j.get("lowPriceList") or (
+                        (j.get("data") or {}).get("lowPriceList")
+                        if isinstance(j.get("data"), dict) else None)
+                    if ok and isinstance(lp, list):
+                        obj["data"] = {"lowPriceList": lp,
+                                       "bstatus": 0}
+                page.on("response", _on_resp)
+                deadline = time.time() + max(8.0, timeout - 8)
+                for attempt in range(2):
+                    try:
+                        page.goto(url, wait_until="domcontentloaded",
+                                  timeout=int(timeout * 1000))
+                    except Exception as e:
+                        log.warning("[特价·qunar] 页面加载失败(第%d次): %s",
+                                    attempt + 1, str(e)[:120])
+                    while time.time() < deadline and not obj.get("data"):
+                        page.wait_for_timeout(500)
+                    if obj.get("data"):
+                        break
+                    # 10003 为页面侧通用风控失败，按页面正常重试一次
+                    url += ("&_r=" + str(int(time.time())))
+                ctx.close()
+        except Exception as e:
+            log.warning("[特价·qunar] 低价页异常: %s", str(e)[:160])
+        finally:
+            shutil.rmtree(prof, ignore_errors=True)
+        return obj.get("data")
+
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
         import time as _t
         self.path_reset()
+        self._last_challenge = None
+        self._query_challenge = None
         for attempt in range(len(self._BACKOFF_S) + 1):
             wait = max(QunarCrawler._cooldown_until - _t.time(),
                        self._MIN_GAP_S - (_t.time() - QunarCrawler._last_done_ts))
@@ -335,6 +438,13 @@ class QunarCrawler(BaseCrawler):
                        for r in res):
                     QunarCrawler.login_suspect = False
                 return res
+            _ch = (getattr(self, "_query_challenge", None)
+                   or getattr(self, "_last_challenge", None))
+            if _ch and _ch.status == "blocked":
+                # 人机/访问验证不是会话失效，也不该按限流退避连打。
+                self.logger.warning(
+                    "[qunar] %s 在案，跳过退避重试", _ch.detail)
+                return []
             if attempt >= len(self._BACKOFF_S):
                 self.logger.warning("[qunar] 阶梯重试耗尽（%d 次），本轮放弃",
                                     attempt)
@@ -415,15 +525,26 @@ class QunarCrawler(BaseCrawler):
         # wbdflightlist 断供；H5 列表页（m.flight）仍出全量明细。
         # H5 先行；匿名/失效会话 H5 空结果时不再把每日期 ~72s 耗在
         # PC 死入口上，直接走 token 直连。PC 探测保留为显式开关。
+        self._last_challenge = None
         got = self._fetch_via_browser(from_city, to_city, date)
+        _sig = getattr(self, "_last_challenge", None)
+        _h5_status = ("ok" if got else (_sig.status if _sig else
+                       ("login" if QunarCrawler.login_suspect else "empty")))
         self.path_note(
-            "H5", "ok" if got else
-            ("login" if QunarCrawler.login_suspect else "empty"),
+            "H5", _h5_status,
             rows=len(got[1]) if got else 0, date=date,
-            detail="touch.qunar.com H5 列表")
+            detail=(_sig.detail if _sig else "touch.qunar.com H5 列表"))
         if got is not None:
             self.logger.info("[qunar] H5 浏览器命中（完整明细）")
             return got
+        if _sig and _sig.status == "blocked":
+            # 人机验证：停手，不再换路径连打（重试只会加深风控）。
+            self._query_challenge = _sig
+            return None
+        if _sig:
+            # 登录墙：保留 H5 login 证据，但仍允许 httpx token 路径取数；
+            # token 有效时不能因为 H5 登录页丢掉真实明细。
+            self._query_challenge = _sig
         if self.PC_PROBE_ON_MISS:
             self.logger.info("[qunar] H5 未命中，探测 PC 是否复活")
             got = self._fetch_via_pc(from_city, to_city, date)
@@ -435,12 +556,17 @@ class QunarCrawler(BaseCrawler):
             self.logger.info("[qunar] PC 未命中，回退 httpx")
         else:
             self.logger.info("[qunar] H5 未命中，跳过已停服的 PC，回退 httpx")
+        self._last_challenge = None
         got = self._fetch_via_httpx(from_city, to_city, date)
+        _sig = getattr(self, "_last_challenge", None)
+        _api_status = ("ok" if got else (_sig.status if _sig else
+                        ("login" if QunarCrawler.login_suspect else "empty")))
         self.path_note(
-            "API", "ok" if got else
-            ("login" if QunarCrawler.login_suspect else "empty"),
+            "API", _api_status,
             rows=len(got[1]) if got else 0, date=date,
-            detail="touchInnerList token 直连")
+            detail=(_sig.detail if _sig else "touchInnerList token 直连"))
+        if _sig:
+            self._query_challenge = _sig
         return got
 
     # ==================== PC 版复活探测（默认关闭，wbdflightlist） ====================
@@ -1336,8 +1462,14 @@ class QunarCrawler(BaseCrawler):
         text = r.text
         self._dump_raw_text(text, f"httpx_{from_name}_{to_name}_{date}")
 
-        if self._is_risk_text(text):
-            self.logger.warning("[qunar] httpx 命中风控(1999)，可能是限流或token过期")
+        _sig = self._risk_signal(text)
+        if _sig:
+            self._last_challenge = _sig
+            if _sig.status == "login":
+                QunarCrawler.login_suspect = True
+            self.logger.warning(
+                "[qunar] httpx 命中%s，可能是限流或 token 过期",
+                _sig.detail)
             return None
 
         flights = self._parse_response_flights(text)
@@ -1355,17 +1487,57 @@ class QunarCrawler(BaseCrawler):
         return float(min(prices)), flights
 
     @staticmethod
-    def _is_risk_text(text: str) -> bool:
+    def _risk_signal(text: str) -> Optional[ChallengeSignal]:
+        """Map Qunar's domestic/intl risk state machine to one signal.
+
+        Domestic previously only recognized 1999; the same Judge codes
+        7/8/9/10004 appear on domestic responses too. Recognizing them
+        first keeps a challenge page from being recorded as empty.
+        """
         try:
             obj = json.loads(text)
         except Exception:
-            return False
-        bstatus = obj.get("bstatus") or {}
-        if bstatus.get("code") == QunarCrawler.RISK_CODE:
-            return True
+            return classify_text(text)
+        if not isinstance(obj, dict):
+            return classify_text(text)
+        bstatus = (obj.get("bstatus") or {}).get("code")
+        code = obj.get("code")
+        if bstatus in (1999, 2008) or code == 8:
+            return login_signal("1999/2008")
+        if code == 7:
+            return blocked_signal("slider", "code 7")
+        if code == 9:
+            return blocked_signal("refresh", "code 9")
+        if bstatus == 10004:
+            return blocked_signal("click", "bstatus 10004")
         if obj.get("ret") is False and obj.get("data") is None:
-            return True
-        return False
+            # 软性空列表/风控壳：不是成功空结果，宁可标 blocked。
+            return blocked_signal("waf", "ret=false/data=null")
+        return classify_text(text)
+
+    @staticmethod
+    def _is_risk_text(text: str) -> bool:
+        return QunarCrawler._risk_signal(text) is not None
+
+    @staticmethod
+    def _intl_risk_path(risk: str) -> tuple:
+        """International risk string -> (path status, kind)."""
+        return {
+            "login": ("login", "login"),
+            "slider": ("blocked", "slider"),
+            "captcha": ("blocked", "click"),
+            "refresh": ("blocked", "refresh"),
+        }.get(str(risk or ""), ("empty", ""))
+
+    @staticmethod
+    def _intl_body_risk(text: str) -> str:
+        """HTML/body-only challenge (no JSON envelope) -> intl risk token."""
+        sig = classify_text(text)
+        if not sig:
+            return ""
+        if sig.status == "login":
+            return "login"
+        return "slider" if sig.kind == "slider" else "captcha"
 
     # ==================== 浏览器单条查（兜底 + 刷新 token） ====================
     def _fetch_via_browser(self, from_city: str, to_city: str, date: str) -> Optional[float]:
@@ -1384,6 +1556,7 @@ class QunarCrawler(BaseCrawler):
             date=date,
         )
         self.logger.info("[qunar] 浏览器 GET %s", url)
+        self._last_challenge = None
 
         snap = {
             "headers": None, "body_template": None,
@@ -1449,6 +1622,27 @@ class QunarCrawler(BaseCrawler):
                                          len(flights))
                 except Exception:
                     pass
+
+            # 无明细时先认风控/登录证据，避免把验证页当空结果。
+            if not flights:
+                for t in snap["response_texts"]:
+                    _sig = self._risk_signal(t)
+                    if _sig:
+                        self._last_challenge = _sig
+                        if _sig.status == "login":
+                            QunarCrawler.login_suspect = True
+                        break
+                if getattr(self, "_last_challenge", None) is None:
+                    try:
+                        _body_text = page.inner_text("body")[:1200]
+                    except Exception:
+                        _body_text = ""
+                    _sig = classify_text(
+                        _body_text, url=str(getattr(page, "url", "")))
+                    if _sig:
+                        self._last_challenge = _sig
+                        if _sig.status == "login":
+                            QunarCrawler.login_suspect = True
 
             # 导出 cookies
             try:
@@ -1975,6 +2169,8 @@ class QunarCrawler(BaseCrawler):
                     break
             self._dump_raw_text(bodies[0] if bodies else "",
                                 f"intl_{fc}_{tc}_{date}")
+            if not flights and not risk:
+                risk = self._intl_body_risk(bodies[0] if bodies else "")
             if risk == "login":
                 # 登录态卡片分层「会话可能失效」同款证据（国内 313 同律）
                 QunarCrawler.login_suspect = True
@@ -1991,17 +2187,16 @@ class QunarCrawler(BaseCrawler):
                     "「渠道登录」重登 qunar；本轮放弃不压制", date)
                 self._sleep()
                 continue
-            if risk in ("slider", "captcha"):
+            if risk in ("slider", "captcha", "refresh"):
+                _status, _kind = self._intl_risk_path(risk)
                 self.logger.warning(
-                    "[qunar][intl] %s 风控验证码（%s）——本轮拒采不绕过",
-                    date, risk)
-                self.path_note("H5", "blocked", date=date,
-                               detail="国际列表风控 %s" % risk)
+                    "[qunar][intl] %s 风控%s（%s/%s）——本轮拒采不绕过",
+                    date, "强刷" if risk == "refresh" else "验证码",
+                    risk, _kind)
+                self.path_note("H5", _status, date=date,
+                               detail="国际列表风控 %s（%s）" % (risk, _kind))
                 self._sleep()
                 continue
-            if risk == "refresh":
-                self.logger.warning("[qunar][intl] %s 服务端要求强刷（9）",
-                                    date)
             if flights:
                 self.path_note("H5", "ok", rows=len(flights), date=date,
                                detail="touch.qunar.com 国际列表")

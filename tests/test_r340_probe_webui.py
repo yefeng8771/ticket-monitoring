@@ -23,7 +23,8 @@ def test_search_view_source_contract():
                    '非原站截图', 'srx-rawaudit'):
         assert needle in src, needle
     assert "v==='search'?'searchview':'cfgview'" in src
-    assert "location.hash.slice(1)==='search'" in src and "switchView('search')" in src
+    assert "const _hv=location.hash.slice(1).split('/')[0]" in src
+    assert "switchView('search',false)" in src
 
 
 def test_probe_raw_replays_exact_extra(tmp_path):

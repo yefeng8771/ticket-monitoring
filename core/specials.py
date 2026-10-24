@@ -26,6 +26,7 @@ from datetime import date, timedelta
 from typing import Callable, List, Optional, Tuple
 from urllib.parse import quote
 
+from .citydata import CITY
 from .flightnorm import AIRPORT_NAME_CN
 from .alerter import _dw, _fit_line
 from .models import PRICE_MAX, PRICE_MIN
@@ -40,6 +41,16 @@ _KNOWN_SOURCES = (SRC_TUNIU, SRC_CTRIP, SRC_CTRIP_BD, SRC_FLIGGY)
 # 推送词面：源价口径标注（tuniu/ctripbd/fliggy=榜单裸价 / ctrip=日历价）
 _SRC_LABEL = {SRC_TUNIU: "榜单", SRC_CTRIP: "日历",
               SRC_CTRIP_BD: "主题榜", SRC_FLIGGY: "飞猪榜"}
+
+# 特价雷达渠道能力（只陈述现役发现源，不把未接入写成可用）。
+SPECIAL_CAPABILITY = {
+    "ctrip": {"sources": [SRC_CTRIP_BD, SRC_CTRIP],
+              "note": "主题榜 + 低价日历"},
+    "tuniu": {"sources": [SRC_TUNIU], "note": "特价榜单（无公开特价页）"},
+    "fliggy": {"sources": [SRC_FLIGGY], "note": "PC 特价榜"},
+    "qunar": {"sources": [], "note": "lowFlight 缓采；H5 低价榜"},
+    "tongcheng": {"sources": [], "note": "采集未接入；H5 特价榜"},
+}
 
 # 核实容忍带：核实价 > 源价 ×1.15 判「榜单价虚高/口径差」丢弃
 _VERIFY_TOLERANCE = 1.15
@@ -186,6 +197,24 @@ def ctrip_link(from_code: str, to_code: str, to_name: str, d: str,
             f"&dcityName={quote(from_name or from_code)}"
             f"&acity={to_code}&acityName={quote(to_name or to_code)}"
             f"&ddate={d}")
+
+
+def special_deal_link(src: str, from_name: str, to_name: str,
+                      depart_date: str, ret_date: str = "") -> str:
+    """Verified source-channel deep link for one stored special deal."""
+    fc = CITY.get(str(from_name or "").strip(), "")
+    tc = CITY.get(str(to_name or "").strip(), "")
+    if not fc or not tc or not depart_date:
+        return ""
+    if src == SRC_TUNIU:
+        return tuniu_link(fc, tc, depart_date, ret_date or "")
+    if src in (SRC_CTRIP, SRC_CTRIP_BD):
+        return ctrip_link(fc, tc, to_name, depart_date, from_name)
+    if src == SRC_FLIGGY:
+        return ("https://sjipiao.fliggy.com/flight_search_result.htm"
+                f"?depCity={fc}&arrCity={tc}&tripType=0"
+                f"&depDate={depart_date}&searchBy=1314")
+    return ""
 
 
 def _in_window(d: str, today: date, days: int) -> bool:

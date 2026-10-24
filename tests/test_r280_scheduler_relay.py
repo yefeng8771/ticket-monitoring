@@ -14,6 +14,7 @@ from datetime import datetime
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from core import scheduler as sch
 from core.scheduler import _schedule_next
 
 _TZ = "Asia/Shanghai"
@@ -55,6 +56,24 @@ def test_missing_job_returns_none():
     s = BlockingScheduler(timezone=_TZ)
     assert _schedule_next(s, {"interval_minutes": 5,
                               "jitter_minutes": 0}) is None
+
+
+def test_start_without_immediate_scan_schedules_first_run(monkeypatch):
+    """关闭启动即扫（含首次空配置）只延后首轮，不能永久暂停监控。"""
+    monkeypatch.setattr(BlockingScheduler, "start", lambda self: None)
+    monkeypatch.setattr(sch, "SCHED", None)
+    calls = []
+    sched = sch.run_scheduler(
+        lambda: calls.append("scan"),
+        {"interval_minutes": 5, "jitter_minutes": 0},
+        run_on_start=False)
+
+    assert calls == [], "关闭启动即扫时不应立即采集"
+    job = sched.get_job("price_monitor")
+    assert job.next_run_time is not None, "首轮必须按周期排定，不能永久暂停"
+    gap = (job.next_run_time - datetime.now(job.next_run_time.tzinfo)
+           ).total_seconds()
+    assert 240 <= gap <= 301, f"首轮应在约5分钟后，实测 {gap:.0f}s"
 
 
 def test_relay_call_is_unconditional():

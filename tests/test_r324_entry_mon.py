@@ -1188,12 +1188,13 @@ def test_gl07_hashchange_live_and_guard(page):
 
 
 def test_gl08_user_pills_single_user(page):
-    """用户 pills/吸顶 chip：demo 单用户 → 双双隐藏不占位（多用户入口
-    的 demo 可达面=隐藏钉；越界深链守卫见 gl07）。"""
+    """用户 pills/吸顶 chip：r368 起单用户也常显当前用户范围（监控视图
+    按用户过滤的口径可见；越界深链守卫见 gl07）。"""
     _goto(page)
     assert page.evaluate("(S.users||[]).length") == 1
     assert not page.is_visible("#userPills")
-    assert not page.is_visible("#mtabUser")
+    assert page.is_visible("#mtabUser")
+    assert "👤" in page.inner_text("#mtabUser")
 
 
 def test_gl09_footer_github_and_kbd(page):

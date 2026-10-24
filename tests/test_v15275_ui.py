@@ -29,9 +29,12 @@ def test_calendar_switch_closes_detail():
 
 
 def test_filters_rerender_mirror():
-    assert SRC.count("srxRenderRows();srxRenderMirror()") >= 4
-    seg = SRC[SRC.index("function srxSetFilter"):]
+    assert SRC.count("srxRenderRows();srxRenderMirror()") >= 3
+    assert "function srxApplyFilterChange(" in SRC
+    seg = SRC[SRC.index("function srxApplyFilterChange("):]
     assert "srxRenderMirror()" in seg[:300]
+    sf = SRC[SRC.index("function srxSetFilter"):]
+    assert "srxApplyFilterChange()" in sf[:300]
 
 
 def test_watch_add_rejects_duplicate_instead_of_overwrite():

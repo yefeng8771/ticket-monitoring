@@ -400,7 +400,7 @@ class TestW456DerivedChannels:
                       dot: c.querySelector('.lgdot').classList.contains('on'),
                       muted: c.querySelector('.chhead .muted').textContent,
                       eHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="F"] .gsum').textContent};
             })()""")
             assert out["ay"]["url"] == "https://monitor.aliyun.com/probe", out
             assert out["ay"]["enabled"] is True, out
@@ -416,7 +416,7 @@ class TestW456DerivedChannels:
                       dot: c.querySelector('.lgdot').classList.contains('on'),
                       muted: c.querySelector('.chhead .muted').textContent,
                       eHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="F"] .gsum').textContent};
             })()""")
             assert out["on"] and out["dot"], out
             assert out["muted"] == "已启用", out
@@ -442,7 +442,7 @@ class TestW456DerivedChannels:
               return {nt: CFG[0].notifier.ntfy,
                       on: c.classList.contains('on'),
                       eHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="F"] .gsum').textContent};
             })()""")
             assert out["nt"]["topic"] == "entry-topic-1", out
             assert out["nt"]["enabled"] is True, out
@@ -464,7 +464,7 @@ class TestW456DerivedChannels:
               return {sc: CFG[0].notifier.serverchan,
                       on: c.classList.contains('on'),
                       eHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="F"] .gsum').textContent};
             })()""")
             assert out["sc"]["send_key"] == "SCT-probe-key", out
             assert out["sc"]["enabled"] is True, out
@@ -519,7 +519,7 @@ class TestW7Email:
               return {en: CFG[0].notifier.emails[0].enabled,
                       on: c.classList.contains('on'),
                       eHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="F"] .gsum').textContent};
             })()""")
             assert out["en"] is True and out["on"], out
             assert "邮件✓×1" in out["eHead"], out
@@ -604,7 +604,7 @@ class TestW11Dingtalk:
                       aHead: document.querySelector(
                         '#cfgform .grouplab[data-sec="A"] .gsum').textContent,
                       eHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="F"] .gsum').textContent};
             })()""")
             assert out["model"] is True, out
             # r345：开关打开但 Webhook 空=后端跳过 → 待完善（旧假绿）
@@ -627,7 +627,7 @@ class TestW11Dingtalk:
                       muted: c.querySelector('.chhead .muted').textContent,
                       pill: p.textContent.trim(),
                       eHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="F"] .gsum').textContent};
             })()""")
             assert out["on"] and out["muted"] == "已启用", out
             assert out["pill"] == "推送已就绪", out
@@ -916,11 +916,11 @@ class TestW15Specials:
               return {m: CFG[0].specials[0].enabled,
                       t: p.textContent.trim(), ok: p.classList.contains('ok'),
                       dHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="D"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
             })()""")
             assert out["m"] is False, out
             assert out["t"] == "特价 关" and not out["ok"], out
-            assert out["dHead"] == "未启用", out
+            assert out["dHead"] == "官方特价频道", out
             _click(page, sel)
             out = page.evaluate("""(() => {
               const p = document.querySelectorAll(
@@ -928,11 +928,11 @@ class TestW15Specials:
               return {m: CFG[0].specials[0].enabled,
                       t: p.textContent.trim(), ok: p.classList.contains('ok'),
                       dHead: document.querySelector(
-                        '#cfgform .grouplab[data-sec="D"] .gsum').textContent};
+                        '#cfgform .grouplab[data-sec="E"] .gsum').textContent};
             })()""")
             assert out["m"] is True, out
             assert out["t"] == "特价 开" and out["ok"], out
-            assert out["dHead"] == "已启用", out
+            assert out["dHead"] == "官方特价频道 · 低价提醒开", out
         finally:
             _restore(page, snap)
 
@@ -1246,7 +1246,7 @@ class TestW2627Globals:
               verr: document.getElementById('glbIvErr').textContent,
               glb: GLB.interval_minutes}))()""")
             assert "invalid" in out["cls"], out
-            assert "扫描周期须为 5-720" in out["verr"], out
+            assert "扫描周期须为 5-10080" in out["verr"], out
             assert out["glb"] == 5, out   # onchange 钳位下限兜底
         finally:
             _restore(page, snap)

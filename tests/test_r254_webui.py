@@ -45,13 +45,13 @@ def test_w1_mtabuser_chip_present():
 
 
 def test_w1_mtabuser_sync_with_userpills():
-    """chip 与 userPills 同拍同步：多用户显示+名字刷新，单用户隐藏。"""
+    """chip 与 userPills 同拍同步：单用户也显示当前用户范围（r368 起）。"""
     src = _page_src()
-    i0 = src.index("mtabUserSync()")
-    seg = src[max(0, i0 - 1200):i0 + 1200]
+    i0 = src.index("function mtabUserSync")
+    seg = src[i0:i0 + 1200]
     assert "mtabUserSync" in src, "缺同步函数调用"
-    assert "us.length<2" in seg or "us.length < 2" in seg or \
-        "length>1" in seg.replace(" ", ""), "同步必须按用户数切换显隐"
+    assert "us.length<1" in seg or "us.length < 1" in seg, \
+        "单用户也要显示用户范围；无用户才隐藏"
 
 
 def test_w1_mtabuser_touch_floor():

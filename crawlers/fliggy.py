@@ -21,11 +21,23 @@ from typing import List
 import httpx
 
 from .base import BaseCrawler, iata2
+from .challenge import classify_text
 from .qunar import QunarCrawler as _Q
 from core.intl import airport_city_code, is_intl_route
 from core.models import PRICE_MAX, PRICE_MIN, FlightPrice, price_band_ok
 
 _LOG = logging.getLogger(__name__)
+
+
+class FliggyH5Login(BaseCrawler):
+    """Profile carrier for the independent Taobao H5 login slot."""
+    name = "fliggy_h5"
+    use_mobile = True
+    login_mobile = True
+
+    def login_url(self) -> str:
+        from core.login_slots import FLIGGY_H5_LOGIN_URL
+        return FLIGGY_H5_LOGIN_URL
 
 
 class FliggyCrawler(BaseCrawler):
@@ -198,12 +210,16 @@ class FliggyCrawler(BaseCrawler):
             t0 = time.time()
             flights = self._fetch_pc(fc, tc, date)
             _blocked = bool(getattr(self, "_last_blocked", False))
-            self.path_note("PC", "ok" if flights else
-                           ("blocked" if _blocked else "empty"),
+            _login = bool(getattr(self, "_last_login", False))
+            _status = ("ok" if flights else
+                       ("blocked" if _blocked else
+                        ("login" if _login else "empty")))
+            self.path_note("PC", _status,
                            rows=len(flights), date=date,
                            detail=("人机验证页，需在渠道登录窗口完成验证"
                                    if _blocked else
-                                   "sjipiao.fliggy.com SSR 列表"),
+                                   ("登录墙/请登录" if _login else
+                                    "sjipiao.fliggy.com SSR 列表")),
                            ms=int((time.time() - t0) * 1000))
             if flights:
                 best = min(flights, key=lambda f: f["price"])
@@ -223,7 +239,32 @@ class FliggyCrawler(BaseCrawler):
             else:
                 self.logger.warning("[fliggy] %s PC 页未解析到航班", date)
             self._sleep()
+        if not results:
+            results.extend(self._h5_fallback(from_city, to_city, dates, ret_date))
         return results
+
+    def _h5_fallback(self, from_city: str, to_city: str,
+                     dates: List[str], ret_date: str = "") -> list:
+        """PC 登录/验证失败时，用独立淘宝 H5 槽位再取一次。
+
+        没有 H5 会话或页面仍落登录墙时只记路径，不伪造行。
+        """
+        try:
+            from .fliggy_h5 import FliggyH5Crawler
+            h5 = FliggyH5Crawler(self.config, self.logger)
+            if not os.path.isfile(h5.session_state_path):
+                if any(p.get("status") in ("login", "blocked")
+                       for p in self.paths):
+                    self.path_note("H5", "login", detail="未保存淘宝 H5 会话")
+                return []
+            rows = h5.fetch(from_city, to_city, dates, ret_date)
+            for rec in h5.paths:
+                self.paths.append(dict(rec, path="H5:" + str(rec.get("path") or "")))
+            return rows
+        except Exception as e:
+            self.logger.warning("[fliggy] H5 回退异常: %s", e)
+            self.path_note("H5", "error", detail=str(e)[:140])
+            return []
 
     # ───── 国际支线（r325，调研 _scratch/intl/report_fliggy.md）─────
     # 一期走 A 级日历通道（r.fliggy.com 零 cookie 直连 JSONP，三航线
@@ -392,6 +433,8 @@ class FliggyCrawler(BaseCrawler):
         if missing:
             results.extend(self._fetch_intl_calendar(
                 fc, tc, missing, from_city, to_city, ret_date))
+        if not results:
+            results.extend(self._h5_fallback(from_city, to_city, dates, ret_date))
         return results
 
     def _fetch_intl_pc(self, fc: str, tc: str,
@@ -578,6 +621,7 @@ class FliggyCrawler(BaseCrawler):
     def _fetch_pc(self, fc: str, tc: str, date: str) -> list:
         import urllib.parse
         self._last_blocked = False
+        self._last_login = False
         url = self.URL_TPL.format(
             fc=fc, tc=tc, d=date,
             fn=urllib.parse.quote(_Q.CITY_NAME.get(fc, fc)),
@@ -658,8 +702,10 @@ class FliggyCrawler(BaseCrawler):
             # 产物不在其中，存壳 dump 冻结回放结构性 0 行命中）
             self._debug_snapshot(page, f"pc_{fc}{tc}_{date}",
                                  extra_text=full)
-            self._last_blocked = bool(re.search(
-                r"验证码|人机验证|滑动验证|拖动|安全验证|拼图", full or ""))
+            _sig = classify_text(full or "",
+                                 url=str(getattr(page, "url", "")))
+            self._last_blocked = bool(_sig and _sig.status == "blocked")
+            self._last_login = bool(_sig and _sig.status == "login")
             if not flights:
                 # 未解析到航班时另落 nopx 标记快照（ctrip/tongcheng 同
                 # 目录同名约定）——行状态机失效有据可查

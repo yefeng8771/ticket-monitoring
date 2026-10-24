@@ -117,8 +117,8 @@ def _open_user_card(page):
 
 
 def test_specials_section_renders(page):
-    """配置卡渲染钉：D 区=特价监控、E 区=通知渠道；未配置用户
-    徽标「特价关」+ 启用开关未勾。"""
+    """配置卡渲染钉（r368 IA）：D 区=关注航班、E 区=特价雷达；
+    头部徽标「特价 开」按复合真值显示。"""
     _open_user_card(page)
     d = page.evaluate("""() => {
       const lab = document.querySelector('.grouplab[data-sec="D"]');
@@ -129,8 +129,8 @@ def test_specials_section_renders(page):
               e: e ? e.textContent : null,
               pill: (document.body.textContent.match(/特价\s*[开关]/) || [''])[0]};
     }""")
-    assert "特价监控" in (d["d"] or ""), d
-    assert "通知渠道" in (d["e"] or ""), d
+    assert "关注航班" in (d["d"] or ""), d
+    assert "特价雷达" in (d["e"] or ""), d
     # 演示用户自带展示态订阅（r319 呈现面）：徽标应显「开」
     assert d["pill"] == "特价 开", d
 

@@ -77,7 +77,8 @@ class TestWebuiV1559Pins:
             "aria-modal 与 role=dialog 须逐元素成对"
         # 受控枚举：两真弹层（城市面板 + 推送预览）+ r342 重启中心
         # + r343 统一删除确认层 = 4；r340b 五平台校准册模态 +1 = 5；r348 检索通用弹层 +1 = 6；详情模态 +1 = 7
-        assert n_am == 7
+        # + 飞猪双端登录弹窗 +1 = 8
+        assert n_am == 8
         assert "_m.setAttribute('aria-modal'" not in self._src()
 
     # ---- brief 级孤儿键 date ----------

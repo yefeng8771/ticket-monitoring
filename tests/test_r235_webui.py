@@ -135,7 +135,9 @@ def test_line_ringnote_two_series_note_conditional():
     行情池最低 · 中转不限直挂」按双系列在场条件化（单系列不宣称两线）。
     钉面随环注段序重组改写、语义担保保留（二十八§3）。"""
     src = _src()
-    assert "(hd.length&&ht.length)?'两线均为行情池最低 · 中转不限直挂':" in src
+    assert "(hd.length&&ht.length)?" in src
+    assert "两线均为真实航班日桶最低（不含日历价）" in src
+    assert "两线均为行情池最低（含日历价）" in src
 
 
 def test_push_flight_exits_sanitized():

@@ -21,6 +21,30 @@ _PROFILE_LOCKS = {}
 _PROFILE_LOCKS_GUARD = threading.Lock()
 
 
+# 采集/探针共用：全局最多 2 个渠道浏览器，同渠道串行。调度器与探针
+# 都必须走同一组闸门，否则两边叠加仍会同时开 4-5 个浏览器触发验证。
+CHANNEL_GATE = threading.BoundedSemaphore(2)
+_PLATFORM_LOCKS = {}
+_PLATFORM_LOCKS_GUARD = threading.Lock()
+
+
+def platform_lock(platform: str) -> threading.Lock:
+    key = str(platform or "default")
+    with _PLATFORM_LOCKS_GUARD:
+        lock = _PLATFORM_LOCKS.get(key)
+        if lock is None:
+            lock = _PLATFORM_LOCKS[key] = threading.Lock()
+        return lock
+
+
+@contextmanager
+def channel_slot(platform: str):
+    # 统一 global→platform 顺序，避免与探针的嵌套锁顺序相反造成死锁。
+    with CHANNEL_GATE:
+        with platform_lock(platform):
+            yield
+
+
 class SessionBusyError(RuntimeError):
     """同一渠道资料目录正由登录或采集使用。"""
 
@@ -55,6 +79,11 @@ class BaseCrawler:
     name: str = "base"
     # 子类覆盖：是否使用手机端模拟
     use_mobile: bool = False
+    # 登录窗口是否保留手机模拟（淘宝 H5 等手机域需要；桌面渠道保持
+    # False 以便鼠标操作滑块/点选验证）
+    login_mobile: bool = False
+    # H5 数据路径可复用独立登录槽位的 profile，而平台名仍保持 fliggy
+    profile_name: str = ""
     # 会话失效证据标记（类级：实例每轮新建，实例级存不住）：最近采集
     # 被服务端按未登录处理时置 True，成功拿到数据即清（恢复自愈，
     # 进程重启复位=重启后无失效证据）。控制台登录态卡片读它分层——
@@ -112,14 +141,17 @@ class BaseCrawler:
     # ---------- 浏览器 ----------
     @property
     def user_data_dir(self) -> str:
-        # 不同平台不同目录，避免互相污染
-        path = os.path.join(self.user_data_root, self.name)
+        # 不同平台/登录槽位不同目录，避免互相污染
+        path = os.path.join(self.user_data_root,
+                            self.profile_name or self.name)
         os.makedirs(path, exist_ok=True)
         return path
 
     @property
     def session_state_path(self) -> str:
-        return os.path.join(self.user_data_root, self.name, "session-state.json")
+        return os.path.join(self.user_data_root,
+                            self.profile_name or self.name,
+                            "session-state.json")
 
     def _read_session_state(self) -> dict:
         try:
@@ -428,22 +460,67 @@ class BaseCrawler:
         finally:
             self.use_mobile = bak
 
-    def _login_window(self, done_evt, idx: int = 0):
+    def _login_window(self, done_evt, idx: int = 0, timeout_s: float = 0):
         """并行登录窗口：开登录页保持打开，done_evt 置位后关闭。
-        idx 用于阶梯排布窗口位置避免叠死。"""
+        idx 用于阶梯排布窗口位置避免叠死；timeout_s=0 表示不超时
+        （命令行 --login 由用户决定），Web 登录传 600 秒。"""
         url = self.login_url()
         self.logger.info("[%s] 登录窗口已打开：%s", self.name, url)
         bak = self.use_mobile
-        self.use_mobile = False
+        if not self.login_mobile:
+            self.use_mobile = False
         try:
             with self.browser(headless=False, window_front=True,
                               window_idx=idx, save_session="login") as ctx:
                 page = self.new_page(ctx)
                 page.goto(url, wait_until="domcontentloaded", timeout=40000)
                 import time as _t
+                deadline = (_t.time() + timeout_s) if timeout_s else 0.0
                 while not done_evt.is_set():
+                    if deadline and _t.time() >= deadline:
+                        raise RuntimeError("登录窗口超时，请重新打开")
+                    try:
+                        closed = bool(page.is_closed())
+                    except Exception:
+                        closed = True
+                    if closed:
+                        raise RuntimeError("登录窗口已关闭，未保存会话")
                     _t.sleep(0.5)
             self.logger.info("[%s] 会话已保存到 %s", self.name, self.user_data_dir)
+        finally:
+            self.use_mobile = bak
+
+    def open_challenge_window(self, url: str, done_evt,
+                              timeout_s: float = 300, idx: int = 0):
+        """Open the challenged page in a visible desktop window.
+
+        The operator solves the challenge; this method only waits for the
+        close/verify signal and persists the resulting session. It never
+        drives the challenge. idx staggers multiple windows.
+        """
+        self.logger.info("[%s] 验证窗口已打开：%s", self.name, url)
+        bak = self.use_mobile
+        if not self.login_mobile:
+            self.use_mobile = False
+        try:
+            with self.browser(headless=False, window_front=True,
+                              window_idx=idx, save_session="login") as ctx:
+                page = self.new_page(ctx)
+                page.goto(url, wait_until="domcontentloaded", timeout=40000)
+                import time as _t
+                deadline = (_t.time() + timeout_s) if timeout_s else 0.0
+                while not done_evt.is_set():
+                    if deadline and _t.time() >= deadline:
+                        raise RuntimeError("验证窗口超时，请重新打开")
+                    try:
+                        closed = bool(page.is_closed())
+                    except Exception:
+                        closed = True
+                    if closed:
+                        raise RuntimeError("验证窗口已关闭，未保存会话")
+                    _t.sleep(0.5)
+            self.logger.info("[%s] 验证会话已保存到 %s",
+                             self.name, self.user_data_dir)
         finally:
             self.use_mobile = bak
 

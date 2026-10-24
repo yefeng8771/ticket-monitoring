@@ -44,7 +44,7 @@ def test_p3_1_popstate_deep_link_restored():
     # 原样回写（'#details/u0' 后退恢复主洞），入站裸 tab（无 /uN）时
     # 对齐 showMonTab 写点补用户段——裸回写 '#'+_h 会把 showMonTab
     # 刚写的 '#trend/u2' 洗回 '#trend'（用户段丢失，URL 深链退化）
-    i = src.index("['overview','trend','watch','details','health'].indexOf(_tab)>=0")
+    i = src.index("['overview','specials','trend','watch','details','health'].indexOf(_tab)>=0")
     block = src[i:i + 640]
     assert ("replaceState(null,'',(_s>0?'#'+_h:'#'+_tab+'/u'+U))" in block), block
     # 旧裸回写形态零残留（洗用户段退化面）

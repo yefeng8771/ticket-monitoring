@@ -22,4 +22,5 @@ def test_long_window_empty_copy_is_range_aware():
 
 
 def test_dayk_ring_note_word():
-    assert "日K=当日最低价" in webui.PAGE
+    assert "日K=真实航班当日最低价（不含日历价" in webui.PAGE
+    assert "日K=行情池当日最低价（含日历价" in webui.PAGE

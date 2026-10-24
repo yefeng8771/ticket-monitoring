@@ -33,6 +33,63 @@ _CTRIP_BD_URL = "https://m.ctrip.com/restapi/soa2/19728/fuzzySearch"
 # H5 rx-home 的 mtop 签名闸在 PC 面完全绕开（agent E 实证）；出发地
 # 用城市码（BJS 非 PEK），18 条/请求价格升序
 _FLIGGY_BD_URL = "https://r.fliggy.com/rule/domestic"
+# 飞猪单航线低价日历（r325 国际实证，国内同源）：零 cookie JSONP，
+# 一次请求返回 leaveDate 起的连续日价；Referer 缺失会被 WAF 拒
+_FLIGGY_CAL_URL = "https://r.fliggy.com/cheapestCalendar/pc"
+# 同程 H5 低价日历（r368 实证：POST JSON 无登录/无签名/无验证码；
+# 国际窗口 90 天、国内 180 天；channel=4 国内外通用，10060 国际无数据）
+_TC_CAL_URL = ("https://wx.17u.cn/cheapflights/bffapi/cheapflightapi/"
+               "lowestprice/queryCalendarLowestPrice")
+
+_TUNIU_CAL_URL = "https://flight-api.tuniu.com/query/flight/v1/calendar"
+
+
+def fetch_tuniu_calendar(from_code: str, to_code: str, departure_date: str,
+                         logger: logging.Logger, timeout: float = 15.0,
+                         proxy: str = "") -> Optional[list]:
+    """途牛国内单航线低价日历（官方 H5 同源接口，零登录/零签名）。
+
+    type=1 单程；机场码须先归并为城市码；国际航线该接口无日历。
+    返回逐日 [{date,price}]（裸价，不含税）；渠道明确无日历返回 []。
+    """
+    from core.intl import airport_city_code, is_intl_route
+    if is_intl_route(from_code, to_code):
+        return []
+    fc = airport_city_code(from_code)
+    tc = airport_city_code(to_code)
+    payload = {
+        "orgCityIataCode": fc, "dstCityIataCode": tc,
+        "departureDate": departure_date, "backDate": "",
+        "type": "1", "serverMonth": 12,
+    }
+    try:
+        with httpx.Client(
+                headers={"User-Agent": _UA,
+                         "Accept": "application/json, text/javascript, */*; q=0.01",
+                         "Referer": "https://m.tuniu.com/"},
+                timeout=timeout, trust_env=False,
+                proxy=proxy or None) as c:
+            r = c.get(_TUNIU_CAL_URL, params={
+                "d": json.dumps(payload, separators=(",", ":"))})
+            if r.status_code != 200:
+                logger.warning("[特价·tuniu] 日历 %s→%s HTTP %s",
+                               fc, tc, r.status_code)
+                return None
+            obj = r.json()
+            if not isinstance(obj, dict):
+                return None
+            if not obj.get("success"):
+                if "暂无价格日历" in str(obj.get("msg") or ""):
+                    return []
+                logger.warning("[特价·tuniu] 日历 %s→%s msg=%s",
+                               fc, tc, obj.get("msg"))
+                return None
+            rows = obj.get("data")
+            return rows if isinstance(rows, list) else []
+    except Exception as e:
+        logger.warning("[特价·tuniu] 日历 %s→%s 抓取失败: %s", fc, tc, e)
+        return None
+
 
 
 def _strip_jsonp(text: str) -> Optional[dict]:
@@ -164,6 +221,95 @@ def fetch_ctrip_board(from_code: str, from_name: str, start_date: str,
             return r.json()
     except Exception as e:
         logger.warning("[特价·ctripbd] 主题榜抓取失败: %s", e)
+        return None
+
+
+def fetch_fliggy_calendar(from_code: str, to_code: str, leave_date: str,
+                          logger: logging.Logger, timeout: float = 20.0,
+                          proxy: str = "") -> Optional[list]:
+    """飞猪单航线低价日历（国内/国际同源，含税价）。失败返回 None，
+    无报价返回 []。城市码用 IATA 城市码（机场码先归并）。"""
+    from core.intl import airport_city_code
+    fc = airport_city_code(from_code)
+    tc = airport_city_code(to_code)
+    try:
+        with httpx.Client(
+                headers={"User-Agent": _UA,
+                         "Referer": "https://sijipiao.fliggy.com/ie/"
+                                    "flight_search_result.htm"},
+                timeout=timeout, trust_env=False,
+                proxy=proxy or None, follow_redirects=True) as c:
+            r = c.get(_FLIGGY_CAL_URL, params={
+                "bizType": 1, "depCityCode": fc, "arrCityCode": tc,
+                "leaveDate": leave_date, "calendarType": 0,
+                "tripType": 0, "callback": "cb"})
+            if r.status_code != 200:
+                logger.warning("[特价·fliggy] 日历 %s→%s HTTP %s",
+                               fc, tc, r.status_code)
+                return None
+            obj = _strip_jsonp(r.text)
+            if not isinstance(obj, dict) or not isinstance(
+                    obj.get("result"), list):
+                logger.warning("[特价·fliggy] 日历拒绝/空体 len=%d",
+                               len(r.text or ""))
+                return None
+            return obj["result"]
+    except Exception as e:
+        logger.warning("[特价·fliggy] 日历 %s→%s 抓取失败: %s", fc, tc, e)
+        return None
+
+
+def fetch_tongcheng_calendar(from_code: str, from_name: str, to_code: str,
+                             to_name: str, anchor_date: str,
+                             logger: logging.Logger, timeout: float = 20.0,
+                             proxy: str = "") -> Optional[list]:
+    """同程单航线低价日历（一次返回 90/180 天窗口）。失败 None；
+    渠道明确「无数据」返回 []。anchor_date 不可为今天（code 5）。"""
+    from core.intl import is_intl_city
+    oint = 1 if is_intl_city(from_code) else 0
+    dint = 1 if is_intl_city(to_code) else 0
+    payload = {
+        "dateInfo": {"dateType": 0, "start": anchor_date, "end": anchor_date},
+        "originList": [{"code": from_code, "name": from_name,
+                        "type": oint, "nameType": str(oint)}],
+        "destList": [{"code": to_code, "name": to_name,
+                      "type": dint, "nameType": str(dint)}],
+        "channel": 4,
+    }
+    try:
+        with httpx.Client(
+                headers={"User-Agent": ("Mozilla/5.0 (iPhone; CPU iPhone OS "
+                                        "17_0 like Mac OS X) AppleWebKit/605.1.15"
+                                        " (KHTML, like Gecko) Version/17.0 "
+                                        "Mobile/15E148 Safari/604.1"),
+                         "Content-Type": "application/json"},
+                timeout=timeout, trust_env=False,
+                proxy=proxy or None, follow_redirects=True) as c:
+            r = c.post(_TC_CAL_URL, json=payload)
+            if r.status_code != 200:
+                logger.warning("[特价·tongcheng] 日历 %s→%s HTTP %s",
+                               from_code, to_code, r.status_code)
+                return None
+            obj = r.json()
+            if not isinstance(obj, dict):
+                return None
+            if not obj.get("success"):
+                # code 5 = 渠道无数据（非法航线/超出窗口），不是网络失败
+                if obj.get("code") == 5:
+                    return []
+                logger.warning("[特价·tongcheng] 日历 %s→%s code=%s",
+                               from_code, to_code, obj.get("code"))
+                return None
+            data = obj.get("data") or {}
+            table = data.get("flightCalendarPriceMap") or {}
+            key = "%s-%s" % (from_code, to_code)
+            rows = table.get(key)
+            if rows is None and table:
+                rows = next(iter(table.values()))
+            return rows if isinstance(rows, list) else []
+    except Exception as e:
+        logger.warning("[特价·tongcheng] 日历 %s→%s 抓取失败: %s",
+                       from_code, to_code, e)
         return None
 
 

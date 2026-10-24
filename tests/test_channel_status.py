@@ -112,7 +112,7 @@ def test_finish_only_acknowledges_save_request_until_worker_completes(channels):
 
 
 def test_login_worker_failure_is_reported_instead_of_saved(channels, monkeypatch):
-    def fail(self, event, timeout):
+    def fail(self, event, *args, **kwargs):
         raise OSError("profile save failed")
     monkeypatch.setattr(channels, "_login_window", fail, raising=False)
     assert webui._start_login("fliggy")["ok"] is True
@@ -136,7 +136,7 @@ def test_new_rejection_allows_relogin_during_previous_pending_window(channels, m
     monkeypatch.setattr(webui, "_health_state", lambda hours: {
         "evidence": {"fliggy": {"international": {
             "auth_at": stamp(1100), "detail_at": "", "auth_reason": "需要登录"}}}})
-    monkeypatch.setattr(channels, "_login_window", lambda self, evt, timeout: evt.wait(2), raising=False)
+    monkeypatch.setattr(channels, "_login_window", lambda self, evt, *args, **kwargs: evt.wait(2), raising=False)
     result = webui._start_login("fliggy")
     session = webui._State.login_sessions.get("fliggy")
     try:
@@ -148,7 +148,7 @@ def test_new_rejection_allows_relogin_during_previous_pending_window(channels, m
 
 
 def test_saved_session_stays_saved_if_cache_callback_fails(channels, monkeypatch):
-    monkeypatch.setattr(channels, "_login_window", lambda self, evt, timeout: evt.wait(2), raising=False)
+    monkeypatch.setattr(channels, "_login_window", lambda self, evt, *args, **kwargs: evt.wait(2), raising=False)
     def failed_callback(platform):
         raise RuntimeError("cache reset failed")
     monkeypatch.setattr(webui._State, "login_saved_cb", failed_callback)

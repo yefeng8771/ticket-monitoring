@@ -36,7 +36,7 @@ def test_showmontab_hash_keeps_user_segment():
     与回访者 localStorage 态（Soldier P0）。"""
     src = _src()
     assert re.search(
-        r"if\(!silent\)\{try\{history\.replaceState\(null,'','#'\+t\+'/u'\+U\)",
+        r"if\(!silent\)\{try\{const _u='#'\+t\+'/u'\+U;if\(hist===false\)history\.replaceState",
         src), "showMonTab 尾部 replaceState 未带 /uN 用户段或缺 !silent 门"
 
 

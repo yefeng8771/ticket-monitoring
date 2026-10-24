@@ -98,7 +98,7 @@ def test_start_login_rejected_within_pending_window(monkeypatch):
     # 防真弹窗：_login_window 类级 no-op（RED 态 _start_login 仍会起
     # 线程——不 patch 会真开 Playwright 有头窗口）
     monkeypatch.setattr(REGISTRY[_PLAT], "_login_window",
-                        lambda self, evt, t: None)
+                        lambda self, evt, *args, **kwargs: None)
     webui._State.login_sessions.pop(_PLAT, None)
     webui._State.login_pending[_PLAT] = time.time()
     try:

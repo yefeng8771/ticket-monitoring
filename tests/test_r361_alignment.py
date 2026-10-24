@@ -39,7 +39,7 @@ def test_chart_extreme_tags_have_a_dedicated_top_band():
     assert "const L=58,R=18,T=W>=560?36:18,B=40" in SRC
     assert "let focusTarget=null;" in SRC
     assert "const placeTop=(text,x,color,align)=>" in SRC
-    assert "focusTarget={v:tgt,color:s.color}" in SRC
+    assert "focusTarget={v:tgt,color:cssv('--red')||'#c22a2e'}" in SRC
 
 
 def test_icon_rows_keep_legible_tiles_and_explicit_gaps():

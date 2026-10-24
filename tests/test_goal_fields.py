@@ -196,13 +196,13 @@ def test_build_view_url_intl_same_source():
     assert "m.tuniu.com/flight/domestic" in u3, u3
     uq2 = Alerter._build_view_url(None, r_dom, "2026-10-20", "qunar")
     assert "m.flight.qunar.com/ncs/page/flightlist" in uq2, uq2
-    # fliggy 国际（r326 A1 收口）：ie/ 国际壳+城市码——渠道日历 url
-    # 字段同形实证（depCityCode/arrCityCode+searchBy=1281）；国内壳喂
-    # 机场码=isValid=false 静默空数据死形（report_fliggy.md §2/§3）
+    # fliggy 国际（r326 A1 收口）：ie/ 国际壳+城市码；2026-10-23 原站
+    # 复核旧 searchBy/arrDate 参数页 404，最小 crawler 同参页 200 且同航班可搜。
     uf = Alerter._build_view_url(None, r, "2026-10-20", "fliggy")
-    assert "sjipiao.fliggy.com/ie/flight_search_result.htm" in uf, uf
-    assert "depCityCode=SHA" in uf and "arrCityCode=TYO" in uf, uf
-    assert "searchBy=1281" in uf and "tripType=0" in uf, uf
+    assert "sijipiao.fliggy.com/ie/flight_search_result.htm" in uf, uf
+    assert "depCity=SHA" in uf and "arrCity=TYO" in uf, uf
+    assert "depDate=2026-10-20" in uf, uf
+    assert "searchBy=" not in uf and "arrDate=" not in uf, uf
     # 同程国际：国际面独立前后端+列表双端登录墙（report_tongcheng.md
     # 实证）——按途牛先例宁缺链接（消费端剥壳只出文本）
     assert Alerter._build_view_url(None, r, "2026-10-20", "tongcheng") == ""

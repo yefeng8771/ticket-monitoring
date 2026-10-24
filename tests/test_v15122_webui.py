@@ -89,8 +89,10 @@ def test_p2e_tile_radius_token():
     assert s.count("border-radius:0 10px 10px 10px") == 0
     # 主站 7 处 + notify 2 处 + .pldesp 单角变体 1 处 + r340 检索浮层 1 处
     # + r340b 详情抽屉/校准册 2 处 + r357 配置表面 4 处
-    # + 检索台 srx-mxcard/srx-hero-act 2 处 = 18
-    assert s.count("border-radius:var(--r10)") == 18
+    # + 检索台 srx-mxcard/srx-hero-act 2 处 + srf-card 1 处 + 特价面板 1 处
+    # + 渠道台 chband 1 处 + 检索浮层 r10 1 处 = 22
+    # + 登录双端弹窗 lgmodal 1 处 = 23
+    assert s.count("border-radius:var(--r10)") == 23
     assert "border-radius:0 var(--r10) var(--r10) var(--r10)" in s
     # --r3=9px 值不动（uitest 在案钉：notify logo 9px）
     assert "--r3:9px" in s
