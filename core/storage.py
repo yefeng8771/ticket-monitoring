@@ -44,6 +44,86 @@ CREATE TABLE IF NOT EXISTS special_deals (
 CREATE INDEX IF NOT EXISTS idx_special_deals_at
     ON special_deals (fetched_at);
 
+-- 特价雷达监控快照：用户配置的航线/日期范围内，每次官方渠道低价
+-- 日历/榜单的逐日价。用于日历走势、低价日与历史回放；不是飞行明细。
+CREATE TABLE IF NOT EXISTS radar_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user TEXT NOT NULL,
+    from_city TEXT NOT NULL,
+    to_city TEXT NOT NULL,
+    nationwide INTEGER NOT NULL DEFAULT 0,
+    depart_date TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    price REAL NOT NULL,
+    tax_included INTEGER NOT NULL DEFAULT -1,
+    basis TEXT,
+    kind TEXT,
+    link TEXT,
+    query_start TEXT,
+    query_end TEXT,
+    query_key TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_radar_user_at
+    ON radar_snapshots (user, fetched_at);
+CREATE INDEX IF NOT EXISTS idx_radar_user_date
+    ON radar_snapshots (user, depart_date);
+
+-- 每次雷达运行（含缓存/回退/失败）都留一条；价格快照只收 ok，
+-- 失败不污染历史，也不重置提醒基线。
+CREATE TABLE IF NOT EXISTS radar_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user TEXT NOT NULL,
+    query_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    note TEXT,
+    rows INTEGER NOT NULL DEFAULT 0,
+    query_json TEXT,
+    started_at TEXT,
+    finished_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_radar_runs_user
+    ON radar_runs (user, finished_at);
+
+CREATE TABLE IF NOT EXISTS radar_alert_state (
+    user TEXT NOT NULL,
+    query_key TEXT NOT NULL,
+    depart_date TEXT NOT NULL,
+    low_price REAL NOT NULL,
+    low_at TEXT,
+    low_channel TEXT,
+    low_basis TEXT,
+    last_alert_price REAL,
+    last_alert_at TEXT,
+    armed INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user, query_key, depart_date)
+);
+CREATE TABLE IF NOT EXISTS radar_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user TEXT NOT NULL,
+    query_key TEXT NOT NULL,
+    depart_date TEXT NOT NULL,
+    price REAL NOT NULL,
+    prev_low REAL,
+    channel TEXT,
+    basis TEXT,
+    kind TEXT,
+    link TEXT,
+    flights_json TEXT,
+    status TEXT,
+    err TEXT,
+    sent_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_radar_alerts_user
+    ON radar_alerts (user, sent_at);
+CREATE TABLE IF NOT EXISTS radar_alert_cfg (
+    user TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    drop_min REAL NOT NULL DEFAULT 50,
+    threshold REAL NOT NULL DEFAULT 0,
+    cooldown_h REAL NOT NULL DEFAULT 12
+);
+
 CREATE TABLE IF NOT EXISTS alert_state (
     route_key TEXT PRIMARY KEY, -- from-to-date 组合
     last_price REAL NOT NULL,
@@ -105,17 +185,53 @@ class PriceStorage:
     def _init_schema(self):
         with self._conn() as c:
             c.executescript(SCHEMA)
+            cols = {r[1] for r in c.execute(
+                "PRAGMA table_info(radar_snapshots)")}
+            if "query_key" not in cols:
+                c.execute("ALTER TABLE radar_snapshots ADD COLUMN "
+                          "query_key TEXT NOT NULL DEFAULT ''")
+                c.execute(
+                    "UPDATE radar_snapshots SET query_key="
+                    "'legacy|'||from_city||'|'||to_city||'|'||nationwide||'|'||"
+                    "COALESCE(query_start,'')||'|'||COALESCE(query_end,'')")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_radar_user_qat "
+                      "ON radar_snapshots(user, query_key, fetched_at)")
+            fcols = {r[1] for r in c.execute(
+                "PRAGMA table_info(flight_prices)")}
+            if "prov" not in fcols:
+                c.execute("ALTER TABLE flight_prices ADD COLUMN "
+                          "prov TEXT NOT NULL DEFAULT ''")
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS fetch_paths ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "fetched_at TEXT NOT NULL, platform TEXT NOT NULL,"
+                "from_city TEXT NOT NULL, to_city TEXT NOT NULL,"
+                "depart_date TEXT NOT NULL, entry_path TEXT,"
+                "path_status TEXT, request_url TEXT,"
+                "http_status INTEGER DEFAULT 0, rows INTEGER DEFAULT 0,"
+                "note TEXT, evidence_level TEXT)")
+
+    @staticmethod
+    def radar_query_key(query):
+        return "|".join([
+            str(query.get("from") or ""), str(query.get("to") or ""),
+            "1" if query.get("nationwide") else "0",
+            str(query.get("start") or ""), str(query.get("end") or ""),
+            ",".join(sorted(str(x) for x in (query.get("channels") or []))),
+        ])
 
     def save(self, fp: FlightPrice):
         with self._conn() as c:
             c.execute(
                 """INSERT INTO flight_prices
                 (platform, from_city, to_city, depart_date, price,
-                 airline, flight_no, depart_time, arrive_time, fetched_at, extra)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (fp.platform, fp.from_city, fp.to_city, fp.depart_date, fp.price,
-                 fp.airline, fp.flight_no, fp.depart_time, fp.arrive_time,
-                 fp.fetched_at, fp.extra),
+                 airline, flight_no, depart_time, arrive_time, fetched_at,
+                 extra, prov)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (fp.platform, fp.from_city, fp.to_city, fp.depart_date,
+                 fp.price, fp.airline, fp.flight_no, fp.depart_time,
+                 fp.arrive_time, fp.fetched_at, fp.extra,
+                 getattr(fp, "prov", "") or ""),
             )
 
     def save_many(self, prices: List[FlightPrice]):
@@ -126,12 +242,45 @@ class PriceStorage:
             c.executemany(
                 """INSERT INTO flight_prices
                 (platform, from_city, to_city, depart_date, price,
-                 airline, flight_no, depart_time, arrive_time, fetched_at, extra)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                [(p.platform, p.from_city, p.to_city, p.depart_date, p.price,
-                  p.airline, p.flight_no, p.depart_time, p.arrive_time,
-                  p.fetched_at, p.extra) for p in prices],
+                 airline, flight_no, depart_time, arrive_time, fetched_at,
+                 extra, prov)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                [(p.platform, p.from_city, p.to_city, p.depart_date,
+                  p.price, p.airline, p.flight_no, p.depart_time,
+                  p.arrive_time, p.fetched_at, p.extra,
+                  getattr(p, "prov", "") or "") for p in prices],
             )
+
+    def save_fetch_path(self, platform, from_city, to_city, depart_date,
+                        entry_path, path_status, request_url="",
+                        http_status=0, rows=0, note="",
+                        evidence_level="path"):
+        from datetime import datetime
+        with self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO fetch_paths (fetched_at,platform,from_city,"
+                "to_city,depart_date,entry_path,path_status,request_url,"
+                "http_status,rows,note,evidence_level) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                 str(platform or ""), str(from_city or ""),
+                 str(to_city or ""), str(depart_date or ""),
+                 str(entry_path or ""), str(path_status or ""),
+                 str(request_url or ""), int(http_status or 0),
+                 int(rows or 0), str(note or ""),
+                 str(evidence_level or "path")))
+            c.execute("DELETE FROM fetch_paths WHERE fetched_at < "
+                      "datetime('now','localtime','-90 days')")
+            return int(cur.lastrowid)
+
+    def fetch_paths(self, from_city, to_city, depart_date, limit=100):
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM fetch_paths WHERE from_city=? AND to_city=? "
+                "AND depart_date=? ORDER BY id DESC LIMIT ?",
+                (str(from_city or ""), str(to_city or ""),
+                 str(depart_date or ""), int(limit))).fetchall()
+        return [dict(r) for r in rows]
 
     def purge(self, days: int = 14) -> int:
         """删除 N 天前的价格明细（extra 大 JSON 是增长主体）与特价
@@ -361,6 +510,305 @@ class PriceStorage:
                 "SELECT src,from_city,to_city,depart_date,ret_date,"
                 "ret_price,src_price,price,fetched_at FROM special_deals "
                 "ORDER BY id DESC LIMIT ?", (int(limit),))]
+
+    def save_radar_run(self, user, query_key, status, note="", rows=0,
+                       query=None, started_at="", finished_at=""):
+        from datetime import datetime
+        ts = finished_at or datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S")
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO radar_runs (user,query_key,status,note,rows,"
+                "query_json,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?)",
+                (str(user or ""), str(query_key or ""), str(status or ""),
+                 str(note or ""), int(rows or 0),
+                 json.dumps(query or {}, ensure_ascii=False),
+                 str(started_at or ""), ts))
+            c.execute("DELETE FROM radar_runs WHERE finished_at < "
+                      "datetime('now','localtime','-400 days')")
+
+    def save_radar_snapshot(self, user: str, query: dict, result: dict,
+                            run_status: str = "ok", note: str = ""):
+        """Persist one successful radar run; failures only hit radar_runs."""
+        from datetime import datetime
+        # 毫秒级：连续两次监控不能因同一秒而合并成一条走势点
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        qkey = self.radar_query_key(query)
+        rows = []
+        if run_status == "ok":
+            for d in result.get("dates") or []:
+                day = str(d.get("date") or "")[:10]
+                if not day:
+                    continue
+                for ch, rec in (d.get("by_channel") or {}).items():
+                    try:
+                        price = float(rec.get("price"))
+                    except (TypeError, ValueError):
+                        continue
+                    if price <= 0:
+                        continue
+                    ti = rec.get("tax_included")
+                    rows.append((
+                        str(user or ""), str(query.get("from") or ""),
+                        str(rec.get("to") or query.get("to") or ""),
+                        1 if query.get("nationwide") else 0,
+                        day, str(ch), price,
+                        -1 if ti is None else (1 if ti else 0),
+                        str(rec.get("basis") or ""),
+                        str(rec.get("kind") or ""),
+                        str(rec.get("link") or ""),
+                        str(query.get("start") or ""),
+                        str(query.get("end") or ""), qkey, now))
+        self.save_radar_run(user, qkey, run_status, note,
+                            len(rows), query=query, finished_at=now)
+        if not rows:
+            return 0
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO radar_snapshots (user,from_city,to_city,"
+                "nationwide,depart_date,channel,price,tax_included,basis,"
+                "kind,link,query_start,query_end,query_key,fetched_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+            c.execute("DELETE FROM radar_snapshots WHERE fetched_at < "
+                      "datetime('now','localtime','-180 days')")
+        return len(rows)
+
+    def radar_history(self, user: str, days: int = 120,
+                      query_key: str = "") -> dict:
+        """Latest calendar + trend inside one query domain."""
+        days = max(1, min(int(days or 120), 180))
+        with self._conn() as c:
+            if not query_key:
+                r = c.execute(
+                    "SELECT query_key FROM radar_runs WHERE user=? AND "
+                    "status='ok' ORDER BY finished_at DESC,id DESC LIMIT 1",
+                    (str(user or ""),)).fetchone()
+                query_key = r[0] if r else ""
+            if not query_key:
+                r = c.execute(
+                    "SELECT query_key FROM radar_snapshots WHERE user=? "
+                    "AND query_key!='' ORDER BY fetched_at DESC,id DESC "
+                    "LIMIT 1", (str(user or ""),)).fetchone()
+                query_key = r[0] if r else ""
+            if not query_key:
+                r = c.execute(
+                    "SELECT query_key FROM radar_runs WHERE user=? "
+                    "ORDER BY finished_at DESC,id DESC LIMIT 1",
+                    (str(user or ""),)).fetchone()
+                query_key = r[0] if r else ""
+            run = c.execute(
+                "SELECT status,note,rows,query_json,finished_at "
+                "FROM radar_runs WHERE user=? AND query_key=? "
+                "ORDER BY finished_at DESC,id DESC LIMIT 1",
+                (str(user or ""), query_key)).fetchone()
+            runs = [dict(r) for r in c.execute(
+                "SELECT status,note,rows,started_at,finished_at "
+                "FROM radar_runs WHERE user=? AND query_key=? "
+                "ORDER BY finished_at DESC,id DESC LIMIT 8",
+                (str(user or ""), query_key))]
+            rows = [dict(r) for r in c.execute(
+                "SELECT * FROM radar_snapshots WHERE user=? AND query_key=? "
+                "AND fetched_at >= datetime('now','localtime',?) "
+                "ORDER BY fetched_at, id",
+                (str(user or ""), query_key, "-%d days" % days))]
+        last_run = (dict(run) if run else None)
+        if last_run and last_run.get("query_json"):
+            try:
+                last_run["query"] = json.loads(last_run["query_json"])
+            except ValueError:
+                last_run["query"] = {}
+        if not rows:
+            q = (last_run or {}).get("query") or {}
+            return {"ok": True, "user": user, "dates": [], "series": [],
+                    "date_series": [], "channels_status": {},
+                    "snapshots": 0, "last_at": "", "query": q,
+                    "query_key": query_key, "last_run": last_run,
+                    "runs": runs}
+        by_at = {}
+        for r in rows:
+            by_at.setdefault(r["fetched_at"], []).append(r)
+        latest = {}
+        prev = {}
+        for at in sorted(by_at):
+            for r in by_at[at]:
+                key = (r["depart_date"], r["channel"])
+                if key in latest:
+                    prev[key] = latest[key]
+                latest[key] = r
+        dates = {}
+        for (day, _ch), r in latest.items():
+            cur = dates.get(day)
+            if cur is None or float(r["price"]) < float(cur["price"]):
+                dates[day] = r
+        date_rows = []
+        for day in sorted(dates):
+            r = dates[day]
+            _p = prev.get((day, r["channel"]))
+            date_rows.append({
+                "date": day, "price": float(r["price"]),
+                "prev_price": (float(_p["price"]) if _p else None),
+                "channel": r["channel"], "to": r["to_city"],
+                "nationwide": bool(r["nationwide"]),
+                "tax_included": (None if int(r["tax_included"]) < 0
+                                 else bool(r["tax_included"])),
+                "basis": r["basis"] or "", "kind": r["kind"] or "",
+                "link": r["link"] or "", "fetched_at": r["fetched_at"]})
+        series = []
+        for at in sorted(by_at):
+            best = min(by_at[at], key=lambda r: float(r["price"]))
+            series.append({"at": at, "price": float(best["price"]),
+                           "date": best["depart_date"],
+                           "channel": best["channel"]})
+        # 每个出发日自己的监控曲线：只画全日期最低价会把“最低日切换”
+        # 伪装成一次涨跌，且三两次快照会画成一条假平线。
+        date_series = []
+        for day in sorted(dates):
+            pts = []
+            for at in sorted(by_at):
+                cands = [r for r in by_at[at]
+                         if r["depart_date"] == day]
+                if not cands:
+                    continue
+                b = min(cands, key=lambda r: float(r["price"]))
+                ti = int(b["tax_included"])
+                pts.append({
+                    "at": at, "price": float(b["price"]),
+                    "channel": b["channel"], "basis": b["basis"] or "",
+                    "tax_included": None if ti < 0 else bool(ti),
+                    "kind": b["kind"] or "", "to": b["to_city"],
+                    "link": b["link"] or "",
+                })
+            if not pts:
+                continue
+            last = pts[-1]
+            prevp = pts[-2] if len(pts) > 1 else None
+            delta = (last["price"] - prevp["price"]) if prevp else None
+            date_series.append({
+                "date": day, "to": last["to"], "points": pts,
+                "prev": prevp, "delta": delta,
+                "delta_pct": (round(delta / prevp["price"] * 100, 1)
+                              if prevp and prevp["price"] else None),
+                "basis_changed": bool(
+                    prevp and prevp["basis"] != last["basis"]),
+            })
+        channels_status = {}
+        for r in rows:
+            ch = r["channel"]
+            st = channels_status.setdefault(
+                ch, {"rows": 0, "days": set(), "last_at": "",
+                     "bases": set()})
+            st["rows"] += 1
+            st["days"].add(r["depart_date"])
+            st["last_at"] = max(st["last_at"], r["fetched_at"])
+            if r["basis"]:
+                st["bases"].add(r["basis"])
+        channels_status = {
+            ch: {"rows": st["rows"], "days": len(st["days"]),
+                 "last_at": st["last_at"],
+                 "bases": sorted(st["bases"])}
+            for ch, st in channels_status.items()}
+        low = min(date_rows, key=lambda r: r["price"]) if date_rows else None
+        first = rows[0]
+        return {
+            "ok": True, "user": user, "dates": date_rows,
+            "series": series, "date_series": date_series,
+            "channels_status": channels_status, "lowest": low,
+            "snapshots": len(by_at), "last_at": rows[-1]["fetched_at"],
+            "query_key": query_key, "last_run": last_run, "runs": runs,
+            "query": {"from": first["from_city"], "to": first["to_city"],
+                      "nationwide": bool(first["nationwide"]),
+                      "start": first["query_start"],
+                      "end": first["query_end"],
+                      "channels": sorted({r["channel"] for r in rows})},
+        }
+
+    def radar_alert_config(self, user):
+        with self._conn() as c:
+            r = c.execute(
+                "SELECT enabled,drop_min,threshold,cooldown_h "
+                "FROM radar_alert_cfg WHERE user=?", (str(user or ""),)
+            ).fetchone()
+        if not r:
+            # 提醒是主动推送，默认关闭；用户在监控条件区显式开启。
+            return {"enabled": False, "drop_min": 50.0,
+                    "threshold": 0.0, "cooldown_h": 12.0}
+        return {"enabled": bool(r[0]), "drop_min": float(r[1]),
+                "threshold": float(r[2]), "cooldown_h": float(r[3])}
+
+    def set_radar_alert_config(self, user, cfg):
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO radar_alert_cfg "
+                "(user,enabled,drop_min,threshold,cooldown_h) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(user) DO UPDATE SET "
+                "enabled=excluded.enabled,drop_min=excluded.drop_min,"
+                "threshold=excluded.threshold,cooldown_h=excluded.cooldown_h",
+                (str(user or ""), 1 if cfg.get("enabled") else 0,
+                 float(cfg.get("drop_min") or 0),
+                 float(cfg.get("threshold") or 0),
+                 float(cfg.get("cooldown_h") or 12)))
+
+    def get_radar_alert_state(self, user, query_key, depart_date):
+        with self._conn() as c:
+            r = c.execute(
+                "SELECT * FROM radar_alert_state WHERE user=? AND "
+                "query_key=? AND depart_date=?",
+                (str(user or ""), str(query_key or ""),
+                 str(depart_date or ""))).fetchone()
+        return dict(r) if r else None
+
+    def save_radar_alert_state(self, user, query_key, depart_date,
+                               low_price, low_at, low_channel, low_basis,
+                               last_alert_price=None, last_alert_at="",
+                               armed=1):
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO radar_alert_state "
+                "(user,query_key,depart_date,low_price,low_at,low_channel,"
+                "low_basis,last_alert_price,last_alert_at,armed) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT"
+                "(user,query_key,depart_date) DO UPDATE SET "
+                "low_price=excluded.low_price,low_at=excluded.low_at,"
+                "low_channel=excluded.low_channel,"
+                "low_basis=excluded.low_basis,"
+                "last_alert_price=excluded.last_alert_price,"
+                "last_alert_at=excluded.last_alert_at,"
+                "armed=excluded.armed",
+                (str(user or ""), str(query_key or ""),
+                 str(depart_date or ""), float(low_price),
+                 str(low_at or ""), str(low_channel or ""),
+                 str(low_basis or ""),
+                 (None if last_alert_price is None
+                  else float(last_alert_price)),
+                 str(last_alert_at or ""), 1 if armed else 0))
+
+    def record_radar_alert(self, user, query_key, depart_date, price,
+                           prev_low, channel, basis, kind, link,
+                           flights_json, status, err=""):
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO radar_alerts (user,query_key,depart_date,price,"
+                "prev_low,channel,basis,kind,link,flights_json,status,err,"
+                "sent_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (str(user or ""), str(query_key or ""),
+                 str(depart_date or ""), float(price),
+                 (None if prev_low is None else float(prev_low)),
+                 str(channel or ""), str(basis or ""), str(kind or ""),
+                 str(link or ""), str(flights_json or ""),
+                 str(status or ""), str(err or ""), now))
+            c.execute("DELETE FROM radar_alerts WHERE sent_at < "
+                      "datetime('now','localtime','-180 days')")
+            return int(cur.lastrowid)
+
+    def radar_alerts(self, user, days=30):
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM radar_alerts WHERE user=? AND sent_at >= "
+                "datetime('now','localtime',?) ORDER BY id DESC",
+                (str(user or ""), "-%d days" % max(1, int(days)))).fetchall()
+        return [dict(r) for r in rows]
 
     def last_lowest(self, from_city: str, to_city: str, depart_date: str,
                     platform: Optional[str] = None) -> Optional[sqlite3.Row]:

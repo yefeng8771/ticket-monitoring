@@ -81,7 +81,7 @@ def test_search_render_avoids_megabyte_inline_logo_html():
 
 
 def test_search_poll_uses_etag_304():
-    assert "let LOADN=false,LASTETAG='';" in SRC
+    assert "let LOADN=false,LASTETAG='',STATE_ERR='';" in SRC
     assert "If-None-Match" in SRC and "if(r.status===304){health();pulse();return;}" in SRC
     assert "const _et=r.headers.get('ETag');if(_et)LASTETAG=_et;" in SRC
 

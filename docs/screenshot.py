@@ -87,6 +87,35 @@ def main():
         pg.screenshot(path=os.path.join(OUT, "console-watch-kline.png"))
         pg.click('#wsModes [data-wsmode="line"]')
         pg.wait_for_timeout(300)
+        # 特价监控（v1.5.294）：逐日低价日历 + 监控时间轴 + 低价日真实航班。
+        # 演示库预置 3 次合成快照，页面必须落到日历而不是空态。
+        pg.evaluate("showMonTab('specials')")
+        pg.wait_for_function(
+            "() => document.querySelectorAll('#spMonCal .spmon-day').length > 0",
+            timeout=15000)
+        pg.wait_for_timeout(700)
+        pg.screenshot(path=os.path.join(OUT, "console-specials.png"))
+        # 渠道健康诊断：按最近一轮证据区分登录/验证码/IP 风控/超时。
+        pg.evaluate("showMonTab('health')")
+        pg.wait_for_function(
+            "() => document.querySelectorAll('#healthDiagBody .hdiag-card')"
+            ".length >= 5", timeout=15000)
+        pg.wait_for_timeout(500)
+        pg.evaluate("""() => {
+          const d = document.getElementById('healthDiag');
+          if (d) window.scrollTo(0, Math.max(0,
+            d.getBoundingClientRect().top + window.scrollY - 96));
+        }""")
+        pg.wait_for_timeout(250)
+        pg.screenshot(path=os.path.join(OUT, "console-health.png"))
+        # 检索首屏：去阴影/厚边框后的层次，以及说明/价带/五源折叠入口。
+        pg.click("#navSearch")
+        pg.wait_for_timeout(1200)
+        pg.evaluate("window.scrollTo(0,0)")
+        pg.wait_for_timeout(250)
+        pg.screenshot(path=os.path.join(OUT, "console-search.png"))
+        pg.click("#navMon")
+        pg.wait_for_timeout(500)
         # 航班明细子视图（工作台表格）：筛国际航线片（SHA→东京成田——
         # 国际紫标+含税小字+机场对行形态主秀）
         pg.click('.mtab[data-t="details"]')
@@ -181,9 +210,16 @@ def main():
         pg.wait_for_timeout(500)
         pg.evaluate("cityPanelClose&&cityPanelClose()")
         pg.wait_for_timeout(200)
-        # 配置台「航班监控」分区：独立添加/编辑关注、渠道与目标
-        pg.click('#cfgnav .cnav[data-p="watch"]')
-        pg.wait_for_timeout(900)
+        # 配置台「关注航班」：v1.5.292 起内联在用户卡 D 区，不再有独立
+        # 导航分区；滚到 D 区截图（旧 data-p="watch" 已不存在）。
+        pg.click('#cfgnav .cnav[data-p="users"]')
+        pg.wait_for_timeout(800)
+        pg.evaluate("""() => {
+          const d = document.querySelector('.grouplab[data-sec="D"]');
+          if (d) window.scrollTo(0, Math.max(0,
+            d.getBoundingClientRect().top + window.scrollY - 76));
+        }""")
+        pg.wait_for_timeout(500)
         pg.screenshot(path=os.path.join(OUT, "console-config-watch.png"))
         # 全局配置中心：先丢弃演示脏改动，避免浮动保存条压住启动级路径卡
         pg.evaluate("if(typeof loadCfg==='function')loadCfg()")

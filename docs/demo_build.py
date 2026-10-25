@@ -7,8 +7,11 @@
 
 用法：python docs/demo_build.py        # 产出 docs/site/index.html
 """
+import datetime
+import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -19,6 +22,7 @@ from core.demo import build_demo_db, demo_cfg, demo_health, demo_routes  # noqa:
 from core.models import Route  # noqa: E402
 from wizard import CITY as _wCITY  # noqa: E402
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                    "site", "index.html")
 
@@ -57,6 +61,16 @@ window.__BAKED__=%s;
     return Promise.resolve(J({ok:false,demo:true,
      err:'在线演示为静态站：添加/调整关注请在本机控制台使用'}));
    return Promise.resolve(J(B.watch||{ok:true,demo:true,watches:[]}));
+  }
+  if(u.indexOf('/api/radar/history')===0)
+   return Promise.resolve(J(B.radarHistory||{ok:true,dates:[],series:[],
+    snapshots:0,query:{}}));
+  if(u.indexOf('/api/radar/flights')===0){
+   const q=new URLSearchParams(u.split('?')[1]||'');
+   const k=q.get('from')+'|'+q.get('to')+'|'+q.get('date');
+   return Promise.resolve(J((B.radarFlights||{})[k]
+    ||{ok:true,found:false,flights:[],
+       note:'演示库该日期没有已采集的真实明细'}));
   }
   if(u.indexOf('/api/srx/calendar')===0){
    const q=new URLSearchParams(u.split('?')[1]||'');
@@ -136,6 +150,20 @@ def build():
                     "from": [_r["from"]], "to": [_r["to"]],
                     "date": [_r["dates"][0]], "days": [str(_days)],
                     "th": [str(_r["alert_direct"] or 0)]})
+    # 特价监控历史与低价日明细：与 --demo 同源（build_demo_db 写入
+    # 3 次合成快照）；静态站不再落到空态。
+    radar_history = webui._radar_history("演示用户")
+    radar_flights = {}
+    _rq = radar_history.get("query") or {}
+    for _d in radar_history.get("dates") or []:
+        _k = "%s|%s|%s" % (_rq.get("from", ""),
+                           _d.get("to") or _rq.get("to", ""), _d.get("date", ""))
+        try:
+            radar_flights[_k] = webui._radar_low_flights(
+                _rq.get("from", ""), _d.get("to") or _rq.get("to", ""),
+                _d.get("date", ""))
+        except Exception:
+            pass
     # 检索页价带/深链/字段健康同样烘焙：shim 按 14 天窗口切片，
     # 静态站进页即 14 格价带，不再走真实 API 的 demo 兜底错误体。
     calendar, links, srchealth = {}, {}, {}
@@ -166,6 +194,8 @@ def build():
         "watch": watch,
         "watchTrends": watch_trends,
         "health": demo_health(),
+        "radarHistory": radar_history,
+        "radarFlights": radar_flights,
         "calendar": calendar,
         "links": links,
         "srchealth": srchealth,
@@ -195,6 +225,22 @@ def build():
         '<meta property="og:title" content="机票监控台 · 在线演示">'
         '<meta property="og:description" content="五渠道机票监控、达标强提醒与全量配置可视化。">'
         '<meta property="og:type" content="website">')
+    try:
+        with open(os.path.join(ROOT, "main.py"), encoding="utf-8") as f:
+            m = re.search(r'^__version__\s*=\s*"([^"]+)"', f.read(), re.M)
+        version = m.group(1) if m else "unknown"
+    except Exception:
+        version = "unknown"
+    # 源码指纹而非提交 SHA：单根提交的 SHA 会因站点内容自引用而循环。
+    # 以主站源码内容哈希给站点打戳，发布后仍可逐字节复核。
+    try:
+        sha = hashlib.sha256(
+            open(os.path.join(ROOT, "webui.py"), "rb").read()).hexdigest()[:12]
+    except Exception:
+        sha = "unknown"
+    stamp = ('<meta name="tm-build" content="%s code:%s %s">'
+             % (version, sha, datetime.date.today().isoformat()))
+    page = page.replace("</head>", stamp + "</head>", 1)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(page)

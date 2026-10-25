@@ -43,6 +43,16 @@ _LCC_CODES = {"9C", "KN", "AQ", "GX", "DZ", "EU", "8L", "PN", "QW",
               "G5", "BK", "KY"}
 
 
+def _is_timeout_failure(exc) -> bool:
+    """请求/加载超时判定（含 http 库与 Playwright 的 Timeout 族）。
+
+    超时是基础设施失败，不是「服务端按未登录处理」的证据——不得据此
+    置 login_suspect。类型名覆盖 httpx.ConnectTimeout/ReadTimeout 与
+    playwright TimeoutError（均非内建 TimeoutError 子类）。"""
+    return isinstance(exc, TimeoutError) \
+        or "timeout" in type(exc).__name__.lower()
+
+
 def _odd_code_shapes(rows) -> list:
     """非标准航班号形态观测哨（dbobs W1）：渠道经停伪码族
     （G581O1J/G583F6C，源报文 binfo.airCode 同串）每轮在产——渠道
@@ -234,51 +244,6 @@ class QunarCrawler(BaseCrawler):
         if _c not in CITY_NAME:
             CITY_NAME[_c] = _n
 
-    # 反自动化指纹脚本：让设备指纹与 iPhone UA 自洽，骗过 chloroFp 服务端校验
-    # 关键：Ctrip 风控发现「iPhone UA + Win32/NVIDIA WebGL」矛盾会拒发指纹 token
-    _STEALTH_JS = r"""
-    (function(){
-      const define = (obj, prop, val) => {
-        try { Object.defineProperty(obj, prop, {get: () => val, configurable: true}); } catch(e){}
-      };
-      // 基础导航器：对齐 iPhone Safari
-      define(navigator, 'webdriver', undefined);
-      define(navigator, 'languages', ['zh-CN','zh']);
-      define(navigator, 'platform', 'iPhone');
-      define(navigator, 'maxTouchPoints', 5);
-      define(navigator, 'hardwareConcurrency', 6);
-      define(navigator, 'vendor', 'Apple Computer, Inc.');
-      try { delete navigator.deviceMemory; } catch(e){}
-      // plugins 真机 Safari 为空
-      define(navigator, 'plugins', []);
-      window.chrome = undefined;
-
-      // WebGL：把 NVIDIA/ANGLE 伪装成 Apple GPU
-      const APPLE_VENDOR = 'Apple Inc.';
-      const APPLE_RENDERER = 'Apple GPU';
-      const patchGL = (proto) => {
-        if (!proto || !proto.getParameter) return;
-        const orig = proto.getParameter;
-        proto.getParameter = function(p){
-          // UNMASKED_VENDOR_WEBGL=37445, UNMASKED_RENDERER_WEBGL=37446
-          if (p === 37445) return APPLE_VENDOR;
-          if (p === 37446) return APPLE_RENDERER;
-          // VENDOR=7936, RENDERER=7937
-          if (p === 7936) return 'WebKit';
-          if (p === 7937) return 'WebKit WebGL';
-          return orig.call(this, p);
-        };
-      };
-      try { patchGL(WebGLRenderingContext.prototype); } catch(e){}
-      try { patchGL(WebGL2RenderingContext.prototype); } catch(e){}
-
-      // 触摸事件支持标记
-      try {
-        define(window, 'ontouchstart', null);
-      } catch(e){}
-    })();
-    """
-
     # 去哪儿单程列表真实数据接口
     API_URL = "https://touch.qunar.com/flight/api/touchInnerList"
 
@@ -316,7 +281,9 @@ class QunarCrawler(BaseCrawler):
 
         页面 JS 自行生成 bella/june 签名；本函数只加载官方页面并读取
         getFlightCalendar 的真实响应，不逆向签名、不绕过验证码/风控。
-        返回响应 dict（bstatus=0 且含 lowPriceList）或 None。"""
+        成功返回响应 dict；观测到页面风控证据返回 None（调用方进入长
+        冷却）；加载超时/浏览器不可用则抛 TimeoutError/RuntimeError，
+        由调用方按失败如实上报，不冒充风控冷却。"""
         from urllib.parse import quote
         log = logger or _LOG
         prof = tempfile.mkdtemp(prefix="qn_radar_")
@@ -348,8 +315,9 @@ class QunarCrawler(BaseCrawler):
         except Exception as e:
             log.warning("[特价·qunar] Playwright 不可用: %s", e)
             shutil.rmtree(prof, ignore_errors=True)
-            return None
+            raise RuntimeError("去哪儿低价页 Playwright 不可用: %s" % e)
         obj = {}
+        load_errors = []
         try:
             with sync_playwright() as pw:
                 ctx = pw.chromium.launch_persistent_context(
@@ -367,6 +335,7 @@ class QunarCrawler(BaseCrawler):
                 def _on_resp(r):
                     if "getFlightCalendar" not in r.url:
                         return
+                    obj["resp_seen"] = True
                     try:
                         j = r.json()
                     except Exception:
@@ -374,8 +343,13 @@ class QunarCrawler(BaseCrawler):
                     if not isinstance(j, dict):
                         return
                     st = j.get("bstatus")
-                    ok = (st == 0 or (isinstance(st, dict)
-                                      and st.get("code") == 0))
+                    bcode = st.get("code") if isinstance(st, dict) else st
+                    # 页面侧风控/人机码（10003 通用风控、1999/2008 登录、
+                    # 10004 点选、code 7/8/9 同族）——只识别不绕过。
+                    if bcode in (1999, 2008, 10003, 10004) \
+                            or j.get("code") in (7, 8, 9):
+                        obj["risk"] = str(bcode or j.get("code"))
+                    ok = (st == 0 or bcode == 0)
                     lp = j.get("lowPriceList") or (
                         (j.get("data") or {}).get("lowPriceList")
                         if isinstance(j.get("data"), dict) else None)
@@ -383,26 +357,53 @@ class QunarCrawler(BaseCrawler):
                         obj["data"] = {"lowPriceList": lp,
                                        "bstatus": 0}
                 page.on("response", _on_resp)
-                deadline = time.time() + max(8.0, timeout - 8)
+                # 总预算以调用方 timeout 为上限；每次尝试另给独立窗口，
+                # 避免首个 deadline 耗尽后第二次尝试立即空转。
+                total = max(8.0, float(timeout))
+                overall_deadline = time.time() + total
                 for attempt in range(2):
+                    remaining = overall_deadline - time.time()
+                    if remaining <= 0:
+                        break
+                    attempt_deadline = min(
+                        overall_deadline,
+                        time.time() + max(4.0, min(remaining, total / 2.0)))
                     try:
-                        page.goto(url, wait_until="domcontentloaded",
-                                  timeout=int(timeout * 1000))
+                        page.goto(
+                            url, wait_until="domcontentloaded",
+                            timeout=max(1000, int(min(remaining, total)
+                                                  * 1000)))
                     except Exception as e:
+                        load_errors.append(str(e)[:120])
                         log.warning("[特价·qunar] 页面加载失败(第%d次): %s",
                                     attempt + 1, str(e)[:120])
-                    while time.time() < deadline and not obj.get("data"):
+                    while time.time() < attempt_deadline \
+                            and not obj.get("data"):
                         page.wait_for_timeout(500)
                     if obj.get("data"):
                         break
                     # 10003 为页面侧通用风控失败，按页面正常重试一次
                     url += ("&_r=" + str(int(time.time())))
-                ctx.close()
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
         except Exception as e:
             log.warning("[特价·qunar] 低价页异常: %s", str(e)[:160])
+            shutil.rmtree(prof, ignore_errors=True)
+            raise RuntimeError("去哪儿低价页加载失败: %s" % str(e)[:160])
         finally:
             shutil.rmtree(prof, ignore_errors=True)
-        return obj.get("data")
+        if obj.get("data"):
+            return obj["data"]
+        if obj.get("risk"):
+            log.warning("[特价·qunar] 页面风控证据 %s，按风控进入冷却",
+                        obj["risk"])
+            return None
+        if obj.get("resp_seen") and not load_errors:
+            # 页面已正常响应日历接口但无有效行：原站真实空档，非风控。
+            return {"bstatus": 0, "lowPriceList": []}
+        raise TimeoutError("去哪儿低价页加载超时或无响应")
 
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
@@ -410,20 +411,42 @@ class QunarCrawler(BaseCrawler):
         self.path_reset()
         self._last_challenge = None
         self._query_challenge = None
+        self._last_no_result = False
+        self._last_failure_status = ""
+        # 往返诚实（§5/§10）：qunar 未实现回程查询，忽略 ret_date 返回
+        # 单程价会被告警/走势当成往返总价。不发单程查询，unsupported 落账。
+        if ret_date:
+            self.logger.warning(
+                "[qunar] 往返明细暂不支持（返程 %s），未发起单程查询",
+                ret_date)
+            self.path_note(
+                "TRIP", "unsupported",
+                detail="往返明细暂不支持，未发起单程查询")
+            return []
         for attempt in range(len(self._BACKOFF_S) + 1):
             wait = max(QunarCrawler._cooldown_until - _t.time(),
                        self._MIN_GAP_S - (_t.time() - QunarCrawler._last_done_ts))
             if wait > 0:
                 self.logger.info("[qunar] 错峰等待 %ds", int(wait))
                 _t.sleep(wait)
+            fail_status = ""
             try:
                 res = self._fetch_inner(from_city, to_city, dates)
+                fail_status = getattr(self, "_last_failure_status", "") or ""
             except Exception as e:
                 self.logger.warning("[qunar] 抓取异常: %s", e)
                 res = []
+                fail_status = ("timeout" if _is_timeout_failure(e)
+                               else "error")
+                for _d in dates:
+                    self.path_note(
+                        "QUERY", fail_status, date=_d,
+                        detail="%s: %s" % (type(e).__name__, str(e)[:120]))
+            self._last_failure_status = ""
             QunarCrawler._last_done_ts = _t.time()
             if res:
                 QunarCrawler._cooldown_until = 0.0
+                self._last_no_result = False
                 # 服务端重新承认会话：清失效证据，登录态卡片退回「已有
                 # 登录态」。复位判据与 webui cal 行判定同构（flight_no/
                 # depart_time 至少一者在场=明细行）：日历价查询不需要
@@ -444,6 +467,21 @@ class QunarCrawler(BaseCrawler):
                 # 人机/访问验证不是会话失效，也不该按限流退避连打。
                 self.logger.warning(
                     "[qunar] %s 在案，跳过退避重试", _ch.detail)
+                return []
+            if getattr(self, "_last_no_result", False) and not fail_status:
+                # 原站明确返回“没有符合条件的航班”：不是登录失效，也不是
+                # 网络失败；不置 login_suspect、不进入限流退避链。
+                self.logger.warning(
+                    "[qunar] 原站明确返回无符合条件的航班"
+                    "（1999/no-result）——按空结果记录，不冒充会话失效")
+                return []
+            if fail_status:
+                # 超时/网络/异常是基础设施失败，不冒充「会话失效」，
+                # 也不进入空结果的限流退避链（路径账已按 timeout/error
+                # 逐日落账，UI 不再显示为 empty）。
+                self.logger.warning(
+                    "[qunar] 本轮按 %s 记录（非会话失效证据），"
+                    "不置 login_suspect、不进入空结果退避链", fail_status)
                 return []
             if attempt >= len(self._BACKOFF_S):
                 self.logger.warning("[qunar] 阶梯重试耗尽（%d 次），本轮放弃",
@@ -475,12 +513,18 @@ class QunarCrawler(BaseCrawler):
         # 国际分流（r325）：core.intl 自动判定，错峰/退避外壳与国内共用
         if is_intl_route(from_city, to_city):
             return self._fetch_intl(from_city, to_city, dates)
+        self._last_failure_status = ""
         results: List[FlightPrice] = []
         for date in dates:
             got = None
             try:
                 got = self._fetch_one(from_city, to_city, date)
             except Exception as e:
+                _fail = ("timeout" if _is_timeout_failure(e) else "error")
+                self._last_failure_status = _fail
+                self.path_note(
+                    "H5", _fail, date=date,
+                    detail="%s: %s" % (type(e).__name__, str(e)[:120]))
                 self.logger.exception("[qunar] %s 抓取异常: %s", date, e)
             if got is not None:
                 price, flights = got
@@ -533,7 +577,10 @@ class QunarCrawler(BaseCrawler):
         self.path_note(
             "H5", _h5_status,
             rows=len(got[1]) if got else 0, date=date,
-            detail=(_sig.detail if _sig else "touch.qunar.com H5 列表"))
+            detail=(_sig.detail if _sig else
+                    ("原站返回无符合条件的航班（可能受指纹 SDK/风控环境影响）"
+                     if getattr(self, "_last_no_result", False)
+                     else "touch.qunar.com H5 列表")))
         if got is not None:
             self.logger.info("[qunar] H5 浏览器命中（完整明细）")
             return got
@@ -564,7 +611,10 @@ class QunarCrawler(BaseCrawler):
         self.path_note(
             "API", _api_status,
             rows=len(got[1]) if got else 0, date=date,
-            detail=(_sig.detail if _sig else "touchInnerList token 直连"))
+            detail=(_sig.detail if _sig else
+                    ("原站返回无符合条件的航班（可能受指纹 SDK/风控环境影响）"
+                     if getattr(self, "_last_no_result", False)
+                     else "touchInnerList token 直连")))
         if _sig:
             self._query_challenge = _sig
         return got
@@ -1487,6 +1537,29 @@ class QunarCrawler(BaseCrawler):
         return float(min(prices)), flights
 
     @staticmethod
+    def _no_result_text(text: str) -> bool:
+        """Qunar overloads 1999: login walls AND “no matching flights”.
+
+        The 200 + `bstatus 1999` + data null shape is not enough; only the
+        message distinguishes them. Treat explicit “no flights” wording as
+        an empty result, never as a login failure.
+        """
+        try:
+            obj = json.loads(text)
+        except Exception:
+            return False
+        if not isinstance(obj, dict):
+            return False
+        msgs = []
+        b = obj.get("bstatus")
+        if isinstance(b, dict):
+            msgs.append(str(b.get("msg") or ""))
+        msgs.append(str(obj.get("msg") or ""))
+        s = " ".join(msgs).lower()
+        return any(x in s for x in (
+            "没有查询到", "未查询到", "无航班", "no flight", "no matching"))
+
+    @staticmethod
     def _risk_signal(text: str) -> Optional[ChallengeSignal]:
         """Map Qunar's domestic/intl risk state machine to one signal.
 
@@ -1500,6 +1573,8 @@ class QunarCrawler(BaseCrawler):
             return classify_text(text)
         if not isinstance(obj, dict):
             return classify_text(text)
+        if QunarCrawler._no_result_text(text):
+            return None
         bstatus = (obj.get("bstatus") or {}).get("code")
         code = obj.get("code")
         if bstatus in (1999, 2008) or code == 8:
@@ -1564,10 +1639,6 @@ class QunarCrawler(BaseCrawler):
         }
 
         with self.browser() as ctx:
-            try:
-                ctx.add_init_script(self._STEALTH_JS)
-            except Exception:
-                pass
             page = self.new_page(ctx)
 
             def on_request(req):
@@ -1626,6 +1697,9 @@ class QunarCrawler(BaseCrawler):
             # 无明细时先认风控/登录证据，避免把验证页当空结果。
             if not flights:
                 for t in snap["response_texts"]:
+                    if self._no_result_text(t):
+                        self._last_no_result = True
+                        continue
                     _sig = self._risk_signal(t)
                     if _sig:
                         self._last_challenge = _sig
@@ -1767,6 +1841,8 @@ class QunarCrawler(BaseCrawler):
             return [], ""
         if not isinstance(outer, dict):
             return [], ""
+        if cls._no_result_text(text):
+            return [], "empty"
         bcode = (outer.get("bstatus") or {}).get("code")
         code = outer.get("code")
         risk = ""
@@ -2076,10 +2152,6 @@ class QunarCrawler(BaseCrawler):
                         pass
 
             with self.browser() as ctx:
-                try:
-                    ctx.add_init_script(self._STEALTH_JS)
-                except Exception:
-                    pass
                 page = self.new_page(ctx)
                 page.route("**/*touchInterList*", _cap)
                 try:
@@ -2171,6 +2243,12 @@ class QunarCrawler(BaseCrawler):
                                 f"intl_{fc}_{tc}_{date}")
             if not flights and not risk:
                 risk = self._intl_body_risk(bodies[0] if bodies else "")
+            if risk == "empty":
+                self._last_no_result = True
+                self.path_note("H5", "empty", date=date,
+                               detail="原站明确返回无符合条件的航班")
+                self._sleep()
+                continue
             if risk == "login":
                 # 登录态卡片分层「会话可能失效」同款证据（国内 313 同律）
                 QunarCrawler.login_suspect = True

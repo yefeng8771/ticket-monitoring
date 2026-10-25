@@ -21,8 +21,14 @@
 
 ![Flight watch studio (demo synthetic data, not live quotes): real collection points, target line and channel coverage in one view](docs/screenshots/console-watch-studio.png)
 
+![Specials monitoring (demo synthetic data): daily low-price calendar, monitored trend and real flights on the lowest day in one view](docs/screenshots/console-specials.png)
+
 <details>
-<summary>More screenshots: panel-based settings / flight watch config / date modes / global config center / restart &amp; migration / flight details / K-line / watch K-line / push preview / mobile</summary>
+<summary>More screenshots: panel-based settings / flight watch config / date modes / global config center / restart &amp; migration / flight details / K-line / watch K-line / push preview / channel diagnosis / search first paint / mobile</summary>
+
+![Channel diagnosis: latest-round evidence separates login expiry, CAPTCHA, IP/rate risk control and timeouts.](docs/screenshots/console-health.png)
+
+![Search first paint: intro, price band, five sources and mirror are collapsible; flat depth without heavy borders.](docs/screenshots/console-search.png)
 
 ![Panel-based settings: date mode switch, channel readiness and save bar in one view.](docs/screenshots/console-config.png)
 
@@ -63,11 +69,11 @@
 
 A zero-dependency single-page console served on `127.0.0.1:8765`, designed like an airline dispatch board: monospace digits, numbered section labels, hairline dividers.
 
-**Main view = tabbed workspace** (Overview / Trend·Calendar / Watch / Flight details / Channel health — one screen per session, remembers your last tab). The trend tab carries a **14-day price calendar** (cheapest day badged 「★ 最低」, every other day shows a +￥ delta) plus 7-day insights. Detail rows carry an inline **📈 jump that opens that route's trend** (paired with the ↗ outbound link, anchoring route and date), and clicking any trend data point (or pressing Enter on the focused chart) opens that round's route details with the route and departure date locked — the in-page jump graph is closed both ways. **Settings = panel-based** (left rail switches between Channel login / Users & routes / Flight watch / Global params — one panel at a time, no endless scrolling).
+**Main view = tabbed workspace** (Overview / Special fares / Route trend / Watch trend / Watch details / Channel health — one screen per session, remembers your last tab). The trend tab carries a **14-day price calendar** (cheapest day badged 「★ 最低」, every other day shows a +￥ delta) plus 7-day insights. Detail rows carry an inline **📈 jump that opens that route's trend** (paired with the ↗ outbound link, anchoring route and date), and clicking any trend data point (or pressing Enter on the focused chart) opens that round's route details with the route and departure date locked — the in-page jump graph is closed both ways. **Settings = panel-based** (left rail switches between Channel login / Users & routes / Flight watch / Global params — one panel at a time, no endless scrolling).
 
 **Official brand layer**: the five OTAs and 87 airlines use locally embedded official app/site marks where verified — channels are square app tiles, airlines are circular carrier avatars — across search rows, mirrors, details, matrices, the watch studio and every config surface. Unlisted carriers fall back to an IATA circular code; no runtime external requests and no borrowed logos.
 
-**Watch-flight studio** adds a fifth monitor tab: watched flights are a subset of a configured route + date detail set from the same locally stored rows; a route rail filters them and a full-width line/K-line chart replays only real observations (48h/7/30/90/180d), and a focus strip shows target gap, channel coverage and source freshness. The same route rail drives a filterable flight roster (status, target, airline, direct/transfer, departure window, cabin, channel, price); the overview also mounts watch cards with a 7-day mini trend, channel coverage and a 30-day jump. Every flight seen during a normal route scan is persisted to a flight-level daily OHLC table, so any search row can preview its real history without being watched; target-hit alerts are sent by the scan pipeline with dedupe. All watch settings (cities with autocomplete, date, live candidate flights, channels, target, alert toggle, note) are editable independently in Settings → Flight watch. Mini trends and overview cards aggregate by calendar day and use one red target token; route and flight charts are point-to-point polylines, and the route chart has an “outliers” toggle (IQR extremes hidden by default with a note).
+**Watch-flight studio** is one of six monitor tabs: watched flights are a subset of a configured route + date detail set from the same locally stored rows; a route rail filters them and a full-width line/K-line chart replays only real observations (48h/7/30/90/180d), and a focus strip shows target gap, channel coverage and source freshness. The same route rail drives a filterable flight roster (status, target, airline, direct/transfer, departure window, cabin, channel, price); the overview also mounts watch cards with a 7-day mini trend, channel coverage and a 30-day jump. Every flight seen during a normal route scan is persisted to a flight-level daily OHLC table, so any search row can preview its real history without being watched; target-hit alerts are sent by the scan pipeline with dedupe. All watch settings (cities with autocomplete, date, live candidate flights, channels, target, alert toggle, note) are editable independently in Settings → Flight watch. Mini trends and overview cards aggregate by calendar day and use one red target token; route and flight charts are point-to-point polylines, and the route chart has an “outliers” toggle (IQR extremes hidden by default with a note).
 
 Run pulse: per-round per-channel row counts & latency in a ring buffer — a 4-cell mono statline plus stacked pulse bars (red cap = some channel failed), so collection health is visible at a glance. DingTalk pushes carry a "full details" link; on Windows, target-hit toasts jump straight to the same single-alert page. Keyboard: `1`/`2` switch console/settings, `S` open the realtime search view, `M` toggle list / flight × channel matrix, `J`/`K` step through detail differences, `3`/`4`/`5`/`6`/`7` jump straight to Overview / Trend / Watch / Details / Health, `Ctrl/⌘+S` save settings, `R` run a sweep now (press twice to confirm), `/` focus search, `↑`/`↓` step through probe rows, `Esc` close overlays.
 
@@ -161,7 +167,7 @@ The capability map follows **collect → push → visualize → configure**. Eac
 
 | Capability | What it does |
 |---|---|
-| **Special-fare discovery** | Departure city + target price only: four sources (Tuniu list, Ctrip search list, Ctrip low-price calendar, Fliggy list) feed a **cross-channel verification** step; only real purchasable prices are pushed (lure prices blocked), round trips pair and one-way results auto-pair back. |
+| **Special-fare discovery** | Search five official sources by departure, destination and date range: Ctrip low-price calendar + national board, Qunar official H5 deals (page-generated signature), Fliggy cheapestCalendar (fallback board on soft refusal), Tongcheng low-price calendar, and Tuniu's domestic H5 calendar. Every price carries its tax basis. The radar persists each monitored date/range, shows a calendar and monitoring trend, and links the low-price date to already-collected real flights (or a one-click detail probe); calendar/board prices remain discovery only. |
 | **International monitoring** | Still only IATA codes: any endpoint outside the mainland set switches to international automatically (five continents, zero config); price is always **tax-inclusive**, tax shown separately; cross-day allows 0–7 days and duration is timezone-corrected; the city panel has a 🌐 international tab grouped by region (272 cities / 33 hot) with three search paths. |
 | **Price guards** | Outlier/low-lure guards scale with the international range; calendar/thin rows never qualify or enter same-flight comparison. |
 
@@ -183,7 +189,7 @@ The capability map follows **collect → push → visualize → configure**. Eac
 | **Official brand layer** | Five channels and 87 airlines use locally embedded official app/site icons where verified: square app tiles for channels, circular carrier avatars for airlines, across search/mirror/detail/matrix/watch/config; unknown carriers fall back to a circular IATA code, with zero runtime external links. |
 | **Flight-level history** | Every full route scan writes each collected flight into `flight_daily` day buckets (platform/cabin × daily OHLC), independent of watch config; long windows survive raw cleanup; `/api/srx/flight/trend` works for any flight. |
 | **Four-tier rings** | ● deep green = real hit / ○ thin green = break-line / ○ amber = near / ▼ red = hit released — the same language as push copy, details 🔥 and calendar colors. |
-| **Calendar, table, health** | 14-day lowest-price heat cards + 7-day insight; 20+ filter dimensions, CSV export and per-row booking links; channel health shows per-round stripes/logs and push-channel health; the pulse card keeps a persisted ring buffer; five sub-views keep one session each; browser notifications for hits. |
+| **Calendar, table, health** | 14-day lowest-price heat cards + 7-day insight; 20+ filter dimensions, CSV export and per-row booking links; channel health shows per-round stripes/logs and push-channel health; the pulse card keeps a persisted ring buffer; six monitor views (overview, specials, route trend, watch trend, watch details, channel health) keep one session each; browser notifications for hits. |
 
 ### Configuration & reliability
 
@@ -220,7 +226,7 @@ Open `http://NAS_IP:8765`. Config, the price database (`data/`), browser session
 
 Don't want to pin fixed routes? The special-fares watch takes just **departure city + target price** and discovers deals on its own:
 
-- **Quad-source discovery**: the Tuniu cheap-tickets board (login-free direct API, round-trip deals arrive pre-paired), the Ctrip special-fares search board (departure-configurable, one request covers discounted routes nationwide), the Ctrip low-price calendar (44 popular destinations polled per city; one-way deals are automatically paired with a return leg via the reverse calendar), and the Fliggy PC specials board (signature-free JSONP, 18 deals per request, price-ascending).
+- **Five-source discovery**: Ctrip low-price calendar and national board, Qunar's official H5 deal deep-link (the page generates its own signature; saved sessions read the real response), Fliggy cheapestCalendar (tax-inclusive, 7-day window; a soft refusal falls back to the domestic departure board with a cooldown), Tongcheng `queryCalendarLowestPrice` (login/signature-free; 90 days international, 180 domestic), and Tuniu's domestic H5 same-origin daily calendar (bare price; international stays honestly empty when the source has no official calendar). Each price is labelled with its tax basis and any cache/fallback state; a mixed-basis minimum is marked, never passed off as a like-for-like cheapest.
 - **Cross-channel verification**: board/calendar prices alone never trigger a push — on a new low, the live channel crawlers verify the lowest bookable price for that route & date, and **only the verified, actually-purchasable price gets pushed** (bait prices and bare-fare mismatches are filtered out).
 - **Direct booking links**: every deal carries the platform's official deep link (round trips get both dates), delivered through all push channels.
 - **Spam-free**: the same deal pushes once; a further drop re-pushes; at most 3 verifications per round; quiet hours defer instead of dropping.
@@ -349,8 +355,8 @@ while all other channels stay available. All assets attach to one Release and a
 ## Development
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 3606 tests — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate
-python docs/uitest.py             # full UI self-test (619 assertions, self-hosted demo, zero-JS-error hard gate)
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 3709 tests — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate
+python docs/uitest.py             # full UI self-test (651 assertions, self-hosted demo, zero-JS-error hard gate)
 python docs/screenshot.py         # regenerate README screenshots (start the demo first: python webui.py --demo --port 8799)
 python docs/demo_build.py         # rebake the static demo site (docs/site)
 ```

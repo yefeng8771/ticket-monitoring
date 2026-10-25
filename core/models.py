@@ -25,6 +25,7 @@ class FlightPrice:
     arrive_time: str = ""   # HH:MM
     fetched_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     extra: str = ""         # 备用字段（JSON 字符串等）
+    prov: str = ""          # 入口/路径级证据 JSON；空=未记录
 
 
 @dataclass

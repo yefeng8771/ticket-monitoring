@@ -70,7 +70,7 @@ def test_calendar_row_key_includes_price_to_avoid_collision():
 def test_trusted_icons_are_direct_img_bic():
     src = _src()
     assert "<img class=\"'+c+'\" data-plat=\"" in src
-    assert "<img class=\"bic bic-air '+(cls||'')+'\" src=\"" in src
+    assert "<img class=\"bic bic-air '+(cls||'')+'\" data-code=\"" in src
 
 
 def test_css_no_clipping_and_short_desktop_note():

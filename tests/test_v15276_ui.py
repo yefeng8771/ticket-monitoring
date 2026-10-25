@@ -28,7 +28,7 @@ def test_demo_probe_entry_is_disabled():
 def test_srx_watch_get_has_inflight_guard():
     assert "pending:false" in SRC
     assert "if(SRX_WATCH.pending)return;" in SRC
-    assert "finally{SRX_WATCH.pending=false}" in SRC
+    assert "finally{if(seq===SRX_WATCH.seq)SRX_WATCH.pending=false}" in SRC
 
 
 def test_large_json_responses_gzip():

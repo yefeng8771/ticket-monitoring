@@ -461,6 +461,14 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
        --warn-rgb:138,108,0;   /* 琥珀 RGB 令牌（随 C_NEAR 加深过 AA）：rgba(var(--warn-rgb),α) 消费，暗色随 #d9b34a 换谱 */
        --warnbd:rgba(var(--warn-rgb),.45);--warnbg:rgba(var(--warn-rgb),.10);--xzone:rgba(var(--warn-rgb),.13);
        --redbd:rgba(194,42,46,.32);--redbdh:rgba(194,42,46,.55);--redbg:rgba(194,42,46,.08);
+       /* 状态语义别名：搜索任务/通道/登录各处曾裸引 --ok/--bad/--okbd/
+          --badbd/--badbg/--bad-txt/--bg2/--soft，令牌区未定义导致整条
+          声明在计算值阶段失效（错误徽标退回中性、运行点恒蓝）。单源
+          别名随亮暗根换谱，不在消费点各写一份。 */
+       --ok:var(--green);--bad:var(--red);--ok-strong:var(--green);
+       --okbd:rgba(var(--okrgb),.35);--badbd:var(--redbd);
+       --badbg:var(--redbg);--bad-txt:var(--red);
+       --bg2:var(--headbg);--soft:var(--headbg);
        --thline:#8a6d1f;   /* 中转达标虚线：与 --orange 曲线异色可分（图例同源） */
        --cal-best-stroke:rgba(255,255,255,.8);   /* 日历「近期最低」描边在真达标绿底格上的配色（同绿=零对比隐形）；暗色随块换深墨 */
        --fill:#0b62d6;--fill2:#1d6fd8;          /* 实心选中底：暗色换深蓝保白字对比；P2-1 顶带收深（#2f83ea 渐变顶带白字 4.25 欠 → #1d6fd8 全带 ≥4.86） */
@@ -817,6 +825,18 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .ws-lg b{font-family:var(--num);font-size:10px;color:var(--tx)}
  .ws-lg em{font-style:normal;color:var(--mut)}
  .ws-lg .ok{color:var(--ok-txt)}
+/* 关注台图例：两行网格（代码/价格/目标/状态），不再单行挤压叠字 */
+.ws-legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:6px}
+.ws-lg-lab{grid-column:1/-1}
+.ws-lg{display:grid;grid-template-columns:14px 7px minmax(0,1fr) auto;
+ grid-template-areas:"ic dot code st" "ic . price tgt";column-gap:6px;row-gap:1px;
+ height:auto;min-height:40px;padding:4px 8px;white-space:normal;align-content:center}
+.ws-lg>img,.ws-lg>.bic{grid-area:ic;width:14px;height:14px}
+.ws-lg>i{grid-area:dot}
+.ws-lg>b{grid-area:code;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:11px}
+.ws-lg>span:nth-of-type(1){grid-area:price;font-family:var(--num);font-size:13px;font-weight:650}
+.ws-lg>em{grid-area:tgt;font-size:11px;color:var(--mut)}
+.ws-lg>span:nth-of-type(2){grid-area:st;justify-self:end;font-size:10px}
  .ws-focus{margin:0 var(--ws-pad) 10px;border-top:1px solid var(--line);padding-top:10px;padding-bottom:26px}
  .ws-focus-main{display:grid;grid-template-columns:minmax(220px,1.35fr) repeat(5,minmax(92px,1fr));gap:0;border:1px solid var(--line);border-radius:8px;background:var(--headbg);overflow:hidden}
  .ws-fcell{padding:8px 10px;min-width:0;border-right:1px solid var(--line)}
@@ -1533,10 +1553,14 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .hcells .hc{pointer-events:auto}   /* 容器穿透后格本体恢复命中 */
  .hc{width:6px;height:15px;border-radius:var(--r-xs);flex:none;cursor:pointer;
    transition:transform .12s ease}/* hover 放大平滑过渡（RM 全局禁动兜底）；pointer=：点击开日志弹层，help 与真实点击动作失配 */
- .hc.ok{background:var(--green)}.hc.part{background:var(--orange)}.hc.fail{background:var(--red)}
+ /* 状态不能只靠色相：绿=实心、部分=斜纹、失败=反向斜纹、未采=描边
+    空心、维护=紫纹——灰度/色盲下仍可分；图例用同一编码。 */
+ .hc.ok{background:var(--green)}
+ .hc.part{background:repeating-linear-gradient(135deg,var(--orange) 0 3px,var(--warnbg) 3px 5px)}
+ .hc.fail{background:repeating-linear-gradient(45deg,var(--red) 0 2px,var(--redbg) 2px 4px)}
  .hc.cal{background:var(--warn);opacity:.55}   /* 仅日历价轮：不算航班级成功，琥珀弱化区别于 part */
  .hc.maint{background:repeating-linear-gradient(45deg,var(--maint) 0 2px,var(--maint-soft) 2px 4px)}
- .hc.none{background:var(--line2)}
+ .hc.none{background:transparent;box-shadow:inset 0 0 0 1px var(--line2)}
  .hc:hover{transform:scaleY(1.35)}
  .hbadge{flex:none;font-size:11px;font-weight:700;min-width:52px;text-align:center;font-family:var(--num);
    padding:2px 8px;border-radius:var(--pill);border:1px solid var(--line);
@@ -1741,7 +1765,7 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
     特异性档变体） */
  .rngchip.on:focus-visible{box-shadow:0 0 0 2px var(--blue)}
  /* ===== toast 通知（右下角堆叠，非阻断；替代原生 alert） ===== */
- #toasts{position:fixed;bottom:78px;right:18px;z-index:170;display:flex;
+ #toasts{position:fixed;bottom:78px;right:18px;z-index:300;display:flex;
         flex-direction:column;gap:8px;align-items:flex-end}
  .toast{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--blue);
         border-radius:var(--r3);padding:10px 16px;font-size:13px;color:var(--tx);
@@ -2746,21 +2770,25 @@ overflow-wrap:anywhere;margin-top:2px;opacity:.95}   /* r342：未定义的 --tx
      ~830px）：单行横滚锁高 --mtabsh，明细筛选条 top 以 calc 联动
      让位（吸顶双条不重叠，高度改动一处变量全联动）；锚点补偿
      同步过吸顶双条总高 */
-  :root{--mtabsh:52px}
+  /* 两行 3×2：六视图中文标签在 320-540 宽度下单行无论如何压缩都会
+     互相压字/最后两格出画（实测 320 内容宽 300，六片需 ~356）。网格
+     给出稳定等分与完整可点区，--mtabsh 同步两行实高供吸顶补偿。 */
+  :root{--mtabsh:78px}
   /* top 动态贴 header 实高（--hdh 单源）：固定 134px 按无倒计时态
      校准，生产 ⏱ 倒计时 chip 折行使实高 105~134 漂移——固定值与
      header 间透缝 18-29px 且随文案漂移（内容从缝中滚过） */
-  #montabs{position:sticky;top:var(--hdh,134px);z-index:6;display:flex;gap:4px;
-    height:var(--mtabsh);box-sizing:border-box;align-items:center;
-    background:var(--card);margin:0 -12px;padding:0 12px;
+  #montabs{position:sticky;top:var(--hdh,134px);z-index:6;display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));gap:2px 4px;
+    height:auto;min-height:var(--mtabsh);box-sizing:border-box;align-items:center;
+    background:var(--card);margin:0 -12px;padding:3px 12px;
     border-bottom:1px solid var(--line);overflow:visible;
-    flex-wrap:nowrap;scrollbar-width:none}
+    scrollbar-width:none}
   #montabs::-webkit-scrollbar{display:none}
   /* 五视图等分：active 徽标（关注数/异常点）不得把单格撑宽造成
      非对称贴线；用户切换 chip 另占内容宽（flex:0 0 auto）。 */
-  #montabs .mtab{flex:1 1 0;min-width:0;text-align:center;white-space:nowrap;
-    justify-content:center;
-    padding:9px 10px;
+  #montabs .mtab{flex:none;min-width:0;height:34px;text-align:center;white-space:nowrap;
+    justify-content:center;overflow:hidden;
+    padding:0 4px;
     /* 竖向 9px=触控 36px 地板：本条 ID 特异性 (1,1,0) 恒压
        .tabs .mtab 触控增强块 (0,2,0)，7px 曾把触控高压到 32px */}
   #montab-details .tabs{position:sticky;
@@ -2799,14 +2827,12 @@ overflow-wrap:anywhere;margin-top:2px;opacity:.95}   /* r342：未定义的 --tx
   html{scroll-padding-top:calc(var(--hdh,134px) + var(--mtabsh) + var(--tabsh,0px) + 4px)}}
  /* 390 档 wrap padding 收窄 10px 后吸顶条负 margin 联动（追加块置尾
     纪律：≤540 块在源码更后，同特异性覆写必须在其后再声明） */
- @media(max-width:390px){#montabs{margin:0 -10px;padding:0 10px}
- /* 390 档（r304 审计实测：当前件集 sw=cw 零溢出）：padding 收窄
-    保留为防回溢档——窄字体环境 3px 隐藏溢出低于 xhint 判定阈值(+4)
-    （test_webui_fixes F3 钉在案）；真溢出场景由 xhint 渐隐暗示兜底
-    （末件裁窄仍可点、触屏可滑、滚轮转写可滚）。须用 ID 特异性覆写
-    ——基础块 #montabs .mtab (1,1,0) 恒压类选择器 (0,2,0)，声明序
-    在后同特异性胜出 */
- #montabs .mtab{padding:9px 8px}}
+ @media(max-width:390px){#montabs{margin:0 -10px;padding:3px 10px}
+ /* 320 档：3×2 网格内再收字号/图标，用户切换 chip 独行居中；
+    不再依赖隐藏溢出或横滚（末格必须可见可点）。 */
+ #montabs .mtab{height:32px;padding:0 2px;font-size:11px;gap:4px}
+ #montabs .mtab .ic{width:12px;height:12px}
+ #montabs .uchip{grid-column:1/-1;justify-self:center;margin:0}}
  /* 桌面视图切换器吸顶：深滚切视图不回滚 ~830px（≤540 同款能力；
     top 贴 header 底，背景衬底防透行、底边线与 ≤540 形制一致；
     锚点补偿同步过 header+吸顶条总高）。追加块置尾纪律：与 ≤540/
@@ -3536,7 +3562,8 @@ overflow-wrap:anywhere;margin-top:2px;opacity:.95}   /* r342：未定义的 --tx
 /* 价带 */
 #searchview .srx-band{background:var(--card);border:1px solid var(--line);border-radius:var(--srx-r);padding:4px 11px;margin:0 0 7px}
 #searchview .srx-band-empty{display:flex;align-items:center;gap:8px;flex-wrap:wrap;grid-column:1/-1;width:100%;min-height:24px;font-size:11px;color:var(--tx2)}
-#searchview .srx-band-empty button{height:26px;padding:0 9px;border:1px solid var(--ctlbd);border-radius:6px;background:var(--card);color:var(--blue);font-size:11px;cursor:pointer;white-space:nowrap}
+#searchview .srx-band-empty button,#searchview .srx-band-collapse{height:26px;padding:0 9px;border:1px solid var(--ctlbd);border-radius:6px;background:var(--card);color:var(--blue);font-size:11px;cursor:pointer;white-space:nowrap}
+#searchview .srx-band-collapse{grid-column:1/-1;justify-self:start;margin-top:2px}
 #searchview.srx-probe-on .srx-brief,#searchview.srx-probe-on .srx-band{display:none!important}
 @media(max-height:980px){#searchview.srx-probe-on .srx-audit,#searchview.srx-probe-on .srx-capbar{display:none!important}}
 #searchview .srx-probe.has-task .srx-probestatus{display:none}
@@ -4180,7 +4207,7 @@ overflow-wrap:anywhere;margin-top:2px;opacity:.95}   /* r342：未定义的 --tx
 html[data-density="compact"] #searchview .srx-row{padding:5px 11px}
 html[data-density="compact"] #searchview .srx-fl .sub{display:none}
 html[data-density="compact"] #searchview .srx-ticks{display:none}
-html[data-density="compact"] #searchview .srx-badges{max-height:16px;overflow:hidden;flex-wrap:nowrap}
+html[data-density="compact"] #searchview .srx-badges{max-height:none;overflow:visible;flex-wrap:wrap;row-gap:2px}
 html[data-density="compact"] #searchview .srx-exp{display:none}
 /* 深色主题令牌 */
 :root[data-theme="dark"] #searchview .srx-b.intl{color:#c9b3ff;background:rgba(177,140,255,.14);border-color:rgba(177,140,255,.35)}
@@ -4757,6 +4784,13 @@ body:has(#restartCenter.on) .savebar{opacity:0;visibility:hidden;pointer-events:
  padding-left:10px;padding-right:4px}
 .fld>.fx.chev{padding:0 9px;background:transparent;cursor:pointer}
 .fld-city{width:190px}.fld-city>input{text-align:left!important}
+.rad-pair{display:inline-flex;align-items:center;gap:6px;flex-wrap:nowrap}
+@media(max-width:600px){
+ .rad-pair{flex-wrap:wrap;width:100%;gap:6px 8px}
+ .rad-pair .fld-city{flex:1 1 calc(50% - 20px);width:auto;min-width:0}
+ .rad-pair .fld-city>input{width:100%;min-width:0}
+ .rad-pair>label.sunit{flex:0 0 100%}
+}
 .fld-num{width:132px}.fld-sm{width:110px}
 .cfgtoolbar-act .btn2{height:32px}
 .chgrid>button.chemadd{min-height:36px}
@@ -4882,7 +4916,7 @@ body:has(#restartCenter.on) .savebar{opacity:0;visibility:hidden;pointer-events:
 #searchview .srx-gallery{z-index:138}
 #searchview #srxModalmask{z-index:139}
 #searchview .srx-modal{z-index:140}
-#toasts{z-index:170}
+#toasts{z-index:300}
 .cmcard{max-height:86vh;display:flex;flex-direction:column}
 .cmhead,.cmfoot{flex:none}
 .cmbody{overflow:auto;min-height:0}
@@ -6095,7 +6129,11 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
  #hdcard .logo{width:26px;height:26px;border-radius:8px}
  .hdx{gap:2px}
  .hbtn{width:30px;height:30px}
- .pill{height:28px;font-size:12px;padding:0 9px;max-width:118px;overflow:hidden;text-overflow:ellipsis}
+ /* 窄屏不裁字：文本节点在 inline-flex 里 text-overflow 不生效，曾
+    把「仅观察 · 未设心理线」切成半字并吞掉尾部 ▸。允许两行、高度
+    自适应（--hdh 由脚本量实高），完整语义另在 title 暴露。 */
+ .pill{height:auto;min-height:36px;font-size:12px;padding:4px 9px;max-width:126px;
+   white-space:normal;line-height:1.2;text-align:left;overflow:visible;text-overflow:clip}
  .hdmeta{display:inline-flex;flex-wrap:wrap;justify-content:flex-end;margin-left:2px;font-size:11px;gap:4px}
  #mainnav{display:flex;width:100%;margin:10px 0 0}
  #mainnav span{flex:1 1 0;justify-content:center;padding:0 8px;height:34px;font-size:13px}
@@ -6199,7 +6237,7 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
 @media(max-width:380px){
  #denBtn{display:none}
  #hdcard h1{font-size:13px}
- .pill{max-width:100px;font-size:11px}
+ .pill{max-width:104px;font-size:11px;padding:3px 7px}
  #mainnav span{font-size:12px}
 }
 @media(prefers-reduced-motion:reduce){
@@ -6389,6 +6427,308 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
 @media(max-width:1199px){#loginRows .lggrid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:700px){#loginRows .lggrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:460px){#loginRows .lggrid{grid-template-columns:1fr}}
+/* 最终窄档覆盖（须在全部 #montabs 规则之后）：六视图在 ≤540 以 3×2
+   网格完整呈现，旧 5 列/横滚规则只适用于五视图时代。 */
+@media(max-width:540px){
+ html #montabs{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;
+  height:auto!important;min-height:var(--mtabsh,78px)!important;overflow:visible!important;
+  flex-wrap:wrap!important;padding:3px 12px!important;gap:2px 4px!important;align-items:center!important}
+ html #montabs .mtab{height:34px!important;padding:0 4px!important;font-size:11px!important;
+  min-width:0!important;flex:none!important;gap:4px!important;overflow:hidden!important;justify-content:center!important}
+ html #montabs .mtab .ic{display:inline-block!important;width:12px;height:12px;flex:none}
+ html #montabs .uchip{grid-column:1/-1;justify-self:center;margin:0}
+}
+@media(max-width:390px){
+ html #montabs{padding:3px 10px!important}
+ html #montabs .mtab{height:32px!important;padding:0 2px!important}
+}
+/* ===== 2026 扁平化收口：去厚边框/重复阴影，用底色层次、留白与字重建立深度 ===== */
+:root{--r-card:14px;--r-container:12px;--r-ctl:8px;--price-lg:24px;
+ --price-md:19px;--price-sm:16px;--r-signal:var(--r-red)}
+.ucard.mon-card,#montab-watch .ws-card,#searchview .srx-list,
+#searchview .srx-mirror,#cfgview .ucard{border-radius:var(--r-card)!important;
+ box-shadow:none!important;border-color:transparent!important}
+.ws-card{border-radius:var(--r-card)!important;box-shadow:none!important}
+.kpi .num{font-size:var(--price-lg)!important}
+.srx-price b{font-size:var(--price-md)!important}
+.spmon-lowday .p{font-size:var(--price-lg)!important}
+#loginRows .lgcard{box-shadow:none!important;border-color:transparent!important;
+ background:var(--r-surface-2)!important;padding:12px!important}
+#loginRows .lgslot{background:transparent!important;border-top:0!important;
+ padding-top:0!important}
+.ucard{box-shadow:none!important;border-color:transparent!important}
+/* Sector Strip：签派航线轨，目标价作缺口，价格戳在右；只用于概览
+   关注卡、关注台焦点轨与特价低日卡三处，不铺满全站。 */
+.sector-strip{display:flex;align-items:center;gap:10px;min-height:44px;
+ padding:4px 10px;border-radius:var(--r-container);background:var(--r-surface-2);
+ font-family:var(--num);color:var(--r-ink);min-width:0}
+.ss-route{font-size:12px;font-weight:700;letter-spacing:.4px;white-space:nowrap}
+.ss-rail{position:relative;flex:1 1 auto;min-width:36px;height:2px;background:var(--r-hair)}
+.ss-notch{position:absolute;top:-3px;width:8px;height:8px;border-radius:50%;
+ background:var(--r-signal);box-shadow:0 0 0 2px var(--r-surface-2)}
+.ss-price{font-size:var(--price-md);font-weight:700;white-space:nowrap}
+.ss-state{font-size:10px;font-weight:700;white-space:nowrap;color:var(--r-ink-3);
+ max-width:132px;overflow:hidden;text-overflow:ellipsis}
+.sector-strip.hit .ss-state{color:var(--r-signal)}
+.monwatch-diff{font-size:10px;color:var(--r-ink-3);margin-top:-2px;
+ white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.monwatch-diff.ok{color:var(--r-green)}.monwatch-diff.warn{color:var(--amber,#b26a00)}
+.spmon-day{position:relative}
+.spmon-day .lowtag{position:absolute;right:5px;top:5px;padding:0 4px;border-radius:var(--pill);
+ background:var(--r-red-soft);color:var(--r-red);font-size:9px;font-weight:700;line-height:14px}
+.spmon-day .b.down{color:var(--r-green)}
+.spmon-day .b.up{color:var(--r-red)}
+.spmon-lowdate{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.spmon-lowdate b{font-size:20px;line-height:1.1}
+.spmon-lowdate .lowtag{position:static;padding:0 5px}
+.spmon-lowdate .seltag{font-size:10px;font-weight:600;color:var(--r-blue);background:var(--r-blue-soft);
+ border-radius:var(--pill);padding:0 5px;line-height:16px}
+.spmon-missing{margin-left:6px;color:var(--r-amber);font-size:10px}
+.spmon-hist{margin-top:6px;border-top:1px solid var(--r-hair);padding-top:4px}
+.spmon-hist>summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;
+ padding:4px 2px;font-size:11px;color:var(--r-ink-2)}
+.spmon-hist>summary::-webkit-details-marker{display:none}
+.spmon-hist>summary b{font-family:var(--num);font-weight:600}
+.spmon-hist>summary::after{content:'▸';margin-left:auto;font-size:10px;color:var(--r-ink-3);
+ transition:transform .15s}
+.spmon-hist[open]>summary::after{transform:rotate(90deg)}
+.spmon-histhint{color:var(--r-ink-3);font-size:10px}
+.spmon-run{display:grid;grid-template-columns:104px 56px 48px minmax(0,1fr);gap:8px;
+ align-items:center;padding:4px 2px;border-top:1px dashed var(--r-hair);
+ font-size:10px;color:var(--r-ink-3)}
+.spmon-run.head{border-top:0;padding-bottom:2px;font-size:9px}
+.spmon-run.head b{font-weight:400;text-align:right}
+.spmon-run time{font-family:var(--num);color:var(--r-ink-2)}
+.spmon-run .st{display:inline-flex;align-items:center;justify-content:center;height:16px;
+ border-radius:var(--pill);background:var(--r-surface-2);font-size:9px;font-weight:600}
+.spmon-run .st.ok{color:var(--r-green);background:var(--r-green-soft)}
+.spmon-run .st.cache_hit{color:var(--r-blue);background:var(--r-blue-soft)}
+.spmon-run .st.fallback,.spmon-run .st.partial{color:var(--r-amber);background:var(--r-amber-soft)}
+.spmon-run .st.error{color:var(--r-red);background:var(--r-red-soft)}
+.spmon-run b{font-family:var(--num);font-weight:600;color:var(--r-ink-2);text-align:right}
+.spmon-run .note{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spmon-histempty{padding:5px 2px;border-top:1px dashed var(--r-hair);
+ font-size:10px;color:var(--r-ink-3)}
+@media(max-width:600px){
+ .spmon-run{grid-template-columns:92px 50px 36px minmax(0,1fr);gap:6px;align-items:start}
+ .spmon-run .note{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+ .spmon-histhint{display:none}
+}
+.spmon-lowmeta{font-size:10px;color:var(--r-ink-3)}
+.spmon-basiswarn{color:var(--r-amber);font-weight:600}
+.spmon,.spmon-body,.spmon-main,.spmon-cal{min-width:0;max-width:100%}
+.spmon.is-empty .spmon-main,.spmon.is-empty #spMonSources{display:none!important}
+.spmon.is-empty #spMonCal{display:block}
+.spmon.is-empty #spMonCal>.spmon-empty{width:100%;max-width:none}
+@media(max-width:900px){
+ .srx-hero-copy .srx-foldbtn{position:static!important;display:inline-flex!important;
+  margin:6px 0 0 auto!important}
+}
+#searchview .srx-grid:has(.srx-mirror.srx-folded){grid-template-columns:1fr}
+@media(min-width:901px) and (max-width:1100px){
+ #searchview .srx-brief{display:flex!important;overflow-x:auto}
+ #searchview .srx-brief .srx-src{flex:0 0 220px!important}
+}
+#searchview .srx-src-h{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spmon-cal.xhint{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 24px),transparent);
+ mask-image:linear-gradient(to right,#000 calc(100% - 24px),transparent)}
+@media(max-width:360px){
+ .spmon-flight{grid-template-columns:1fr auto;grid-template-areas:"fid fpr" "ftime ftime"}
+ .spmon-flight .fid{grid-area:fid}.spmon-flight .ftime{grid-area:ftime;white-space:normal}
+ .spmon-flight .fpr{grid-area:fpr}
+}
+#searchview .srx-hero,#searchview .srx-probe,#searchview .srx-band,
+#searchview .srx-brief,#searchview .srx-context,#searchview .srx-mirror{
+ box-shadow:none!important;border-color:transparent!important;background:var(--r-surface)!important}
+#searchview .srx-hero{padding:16px 18px!important}
+#searchview .srx-probe{border-radius:14px!important}
+#searchview .srx-band,#searchview .srx-brief,#searchview .srx-context{
+ border-radius:14px!important;padding-top:8px!important;padding-bottom:8px!important}
+/* 900 高桌面首屏要露出首行：控制条内边距只留必需的呼吸感 */
+#searchview .srx-band{padding-top:3px!important;padding-bottom:3px!important}
+#searchview .srx-context{padding-top:2px!important;padding-bottom:2px!important}
+#searchview .srx-sp{margin-top:3px!important;padding:4px 10px!important}
+#searchview .srx-kpi{padding:4px 9px 5px!important}
+@media(min-width:901px){
+ #searchview .srx-hero{padding-top:8px!important;padding-bottom:8px!important}
+ #searchview .srx-hero h1{margin:3px 0 2px!important}
+ #searchview .srx-band-h{margin-bottom:3px!important}
+ #searchview .srx-band .srx-day{min-height:34px!important}
+ #searchview .srx-band-note{margin-top:2px!important}
+ #searchview .srx-brief .srx-src{min-height:50px}
+ #searchview .srx-kpi .v{font-size:18px;margin-top:0}
+}
+/* 五源条是五列网格：折叠按钮若作为普通格项会把第 5 张卡挤到第二行
+   （1360 首屏列表被推下、五源 tops 分裂）。桌面改为同排弹性，按钮
+   排尾；窄屏仍走既有横向滚动。 */
+@media(min-width:901px){
+ #searchview .srx-brief{display:flex!important;align-items:stretch}
+ #searchview .srx-brief .srx-src{flex:1 1 0;min-width:0}
+ #searchview .srx-brief .srx-brieffold{order:9;align-self:flex-start;margin:0}
+}
+#loginRows .lggrid{gap:0 14px!important}
+#loginRows .lgcard{box-shadow:none!important;border:0!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;background:transparent!important;padding:10px 2px!important;min-height:0!important}
+#loginRows .lgslot{background:transparent!important;border:0!important;box-shadow:none!important;
+ border-radius:0!important;padding:0!important}
+/* 渠道入口：一块表面 + 行 + 文本入口；去掉 30 个嵌套边框盒与重复按钮 */
+.chboard{display:flex;flex-direction:column}
+.chband{grid-template-columns:148px minmax(0,1fr)!important;gap:8px!important;
+ padding:10px 2px!important;border:0!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;background:transparent!important}
+.chband:last-child{border-bottom:0!important}
+.chband-body{gap:2px!important}
+.chband-row{grid-template-columns:26px minmax(0,1fr);gap:4px!important;align-items:center!important}
+.chband-k{padding-top:2px!important;font-size:11px!important}
+.chband-links{gap:2px 10px!important}
+.chband-links.search{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+.chband-links.spec{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.chlink{display:flex!important;align-items:center;gap:5px!important;min-height:26px;
+ padding:2px 0!important;border:0!important;border-radius:0!important;background:transparent!important;
+ font-size:11px!important;color:var(--r-ink-2)!important;white-space:nowrap}
+.chlink-top{gap:4px!important;min-width:0}
+.chlink-top b{font-size:11px!important}
+.chlink-note{flex:1 1 auto!important;min-width:0!important;white-space:nowrap!important;
+ overflow:hidden!important;text-overflow:ellipsis!important;font-size:10px!important}
+.chlink-go{margin-left:auto!important;color:var(--r-blue)!important;font-size:10px!important}
+.chlink-auth{height:16px!important;padding:0 5px!important;font-size:9px!important;border:0!important;
+ background:var(--r-surface-2)!important}
+.chlink-auth.req{background:var(--r-amber-soft)!important;color:var(--r-amber)!important}
+.chlink.off{background:transparent!important;color:var(--r-ink-3)!important;border:0!important}
+.chband-login-note{border-top:0!important;padding-top:0!important;margin-top:0!important}
+@media(max-width:1100px){.chband-links.search{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media(pointer:coarse){
+ .btn2,.srx-btn,.srx-foldbtn,.srx-mbtn,.ws-btn,.ws-filterbar button,
+ .ws-seg button,.spcfg input,.chlink,.lgcard .btn2{min-height:36px!important}
+ .chlink{padding-top:5px!important;padding-bottom:5px!important}
+ #srxChLinks summary,#srxSp summary{min-height:36px;display:flex;align-items:center}
+}
+.ws-filterbar button:focus-visible,.ws-seg button:focus-visible,
+.ws-btn:focus-visible,.srx-foldbtn:focus-visible,.srx-more-btn:focus-visible,
+.chlink:focus-visible,summary:focus-visible{outline:2px solid var(--r-blue)!important;outline-offset:1px!important}
+@media(max-width:600px){.chband{grid-template-columns:1fr!important}.chband-id{flex-direction:row!important;align-items:center!important;flex-wrap:wrap!important}.chband-links.search,.chband-links.spec{grid-template-columns:1fr!important}.chlink{min-height:34px}.chlink-note{white-space:normal!important;overflow:visible!important;text-overflow:clip!important}}
+@media(max-width:600px){
+ #searchview .srx-probefoot{grid-template-columns:1fr;gap:4px 0}
+ #searchview .srx-probefoot .srx-chlinks{grid-column:1}
+}
+#cfgview .ucard,#cfgview .cw-item{box-shadow:none!important;border-color:var(--r-hair)!important}
+#cfgview .cw-item{border-radius:12px!important}
+/* 检索大块折叠 */
+.srx-foldbtn{margin-left:auto;height:24px;padding:0 8px;border:0;border-radius:7px;
+ background:var(--r-surface-2);color:var(--r-ink-3);font-size:11px;font-weight:600;cursor:pointer}
+.srx-foldbtn:hover{background:var(--r-surface-3);color:var(--r-ink)}
+.srx-hero-copy{position:relative}
+.srx-hero-copy .srx-foldbtn{position:absolute;right:0;top:0}
+.srx-hero-copy.srx-folded h1,.srx-hero-copy.srx-folded p{display:none}
+.srx-folded .srx-foldbody{display:none!important}
+.srx-mirror.srx-folded .srx-mchrome,.srx-mirror.srx-folded .srx-mbody{display:none!important}
+/* 特价监控走势 */
+.spmon-body{display:flex;flex-direction:column;gap:14px;padding:4px 2px 10px}
+.spmon-cal{display:flex;gap:8px;overflow-x:auto;padding:2px 0 4px;scrollbar-width:thin}
+.spmon-day{flex:0 0 auto;min-width:108px;display:flex;flex-direction:column;gap:2px;
+ align-items:flex-start;padding:8px 10px;border:0;border-radius:var(--r10);
+ background:var(--r-surface-2);color:var(--r-ink);cursor:pointer;text-align:left}
+.spmon-day:hover{background:var(--r-surface-3)}
+.spmon-day.low{background:var(--r-blue-soft);color:var(--r-blue)}
+.spmon-day.sel{box-shadow:inset 0 0 0 2px var(--r-blue)}
+.spmon-day .d{font-size:10px;color:var(--r-ink-3)}
+.spmon-day .p{font-family:var(--num);font-size:16px;line-height:1.1}
+.spmon-day .ch{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--r-ink-3)}
+.spmon-day .ch .bic{width:14px;height:14px}
+.spmon-day .b{font-size:9px;color:var(--r-ink-3)}
+.spmon-main{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(270px,1fr);gap:14px;align-items:stretch}
+.spmon-chartwrap{background:var(--r-surface-2);border-radius:12px;padding:10px 10px 6px;min-height:210px;min-width:0;overflow:hidden}
+.spmon-tip{position:fixed;z-index:40;pointer-events:none;background:var(--r-surface);
+ border:1px solid var(--r-hair);border-radius:8px;padding:6px 8px;font-size:10px;line-height:1.5;
+ color:var(--r-ink-2);white-space:nowrap;max-width:calc(100vw - 16px)}
+.spmon-tip b{font-family:var(--num);color:var(--r-ink)}
+#spMonChart{display:block;width:100%;max-width:100%;height:178px}
+.spmon-note{font-size:10px;color:var(--r-ink-3);margin-top:4px;line-height:1.4}
+.spmon-low{background:var(--r-surface-2);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:7px}
+.spmon-lowh{font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--r-ink-3)}
+.spmon-lowday{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.spmon-lowday b{font-size:14px}
+.spmon-lowday .p{font-family:var(--num);font-size:20px;color:var(--r-blue);font-weight:700}
+.spmon-flight{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;
+ align-items:center;padding:5px 0;border-top:1px solid var(--r-hair);font-size:11px}
+.spmon-flight .fid{display:inline-flex;align-items:center;gap:5px;min-width:0}
+.spmon-flight .ftime{color:var(--r-ink-3);white-space:nowrap}
+.spmon-flight .fpr{font-family:var(--num);font-weight:700;color:var(--r-ink);white-space:nowrap}
+.spmon-flight .fpr span{font-weight:400;color:var(--r-ink-3);font-size:9px}
+.spmon-probe{align-self:flex-start;margin-top:2px}
+.spmon-src{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:10px;color:var(--r-ink-3)}
+.spmon-srclab{font-weight:700}
+.spmon-srcchip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:var(--pill);background:var(--r-surface-2)}
+.spmon-srcchip .bic{width:14px;height:14px}
+.spmon-srcnote{margin-left:auto;color:var(--r-ink-3)}
+.spmon-empty{display:flex;flex-direction:column;gap:7px;align-items:flex-start;
+ padding:16px;border-radius:var(--r10);background:var(--r-surface-2);font-size:12px;color:var(--r-ink-3)}
+.spcfg summary{cursor:pointer;list-style:none;padding:9px 2px;font-size:12px;font-weight:600;color:var(--r-ink-2)}
+.spcfg summary::-webkit-details-marker{display:none}
+.sprad-fld{display:inline-flex;align-items:center;gap:4px;font-size:11px;
+ color:var(--r-ink-3);white-space:nowrap}
+.spcfg summary:before{content:'▸';display:inline-block;margin-right:5px;color:var(--r-ink-3)}
+.spcfg[open] summary:before{content:'▾'}
+#searchview .srx-brief .srx-brieffold{flex:0 0 auto;align-self:flex-start;margin:0 4px 0 0}
+#searchview .srx-brief.srx-folded .srx-src{display:none!important}
+@media(max-width:900px){.spmon-main{grid-template-columns:1fr}}
+/* 采集入口可溯源徽标 */
+.srx-entry{display:inline-flex;align-items:center;height:16px;padding:0 6px;margin-left:4px;
+ border-radius:var(--pill);background:var(--r-blue-soft);color:var(--r-blue);font-size:9px;font-weight:700;white-space:nowrap}
+/* 渠道诊断 */
+.hdiag{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;padding:2px 2px 10px}
+.hdiag-card{display:flex;flex-direction:column;gap:4px;padding:10px 11px;border-radius:var(--r10);
+ background:var(--r-surface-2);font-size:11px;line-height:1.45}
+.hdiag-h{display:flex;align-items:center;gap:6px;font-size:12px}
+.hdiag-h .bic{width:16px;height:16px}
+.hdiag-st{margin-left:auto;padding:1px 7px;border-radius:var(--pill);background:var(--r-surface);color:var(--r-ink-3);font-size:10px;font-weight:700;white-space:nowrap}
+.hdiag-card.ip .hdiag-st{background:var(--r-red-soft);color:var(--r-red)}
+.hdiag-card.captcha .hdiag-st,.hdiag-card.login .hdiag-st{background:var(--r-amber-soft);color:var(--r-amber)}
+.hdiag-card.timeout .hdiag-st,.hdiag-card.unknown .hdiag-st{background:var(--r-amber-soft);color:var(--r-amber)}
+.hdiag-card.ok .hdiag-st{background:var(--r-green-soft);color:var(--r-green)}
+.hdiag-l,.hdiag-e{font-size:10px;color:var(--r-ink-3)}
+.hdiag-l{display:flex;flex-wrap:wrap;gap:2px 8px}
+.hdiag-l span{white-space:nowrap}
+.hdiag-l span:not(:last-child)::after{content:'·';margin-left:6px;color:var(--r-ink-3)}
+.hdiag-l b{font-weight:600;color:var(--r-ink-2)}
+.hdiag-a{color:var(--r-ink-2)}
+.hdiag-card .btn2{align-self:flex-start;margin-top:2px}
+/* 关注航线 / 关注航班共用设计语言：同一卡片、卡头、范围控件、图表容器、
+   图例与指标排版。页面差异只保留业务内容，不再出现两套皮。 */
+.mon-card{background:var(--r-surface)!important;border:0!important;border-radius:14px!important;
+ box-shadow:none!important;padding:14px 16px!important;margin:0 0 14px!important}
+.mon-cardhead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;
+ flex-wrap:wrap;padding:0 0 10px!important;border-bottom:1px solid var(--r-hair)!important}
+.mon-chartwrap{background:var(--r-surface-2)!important;border:0!important;border-radius:12px!important;
+ box-shadow:none!important;padding:10px!important}
+.mon-legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:6px!important;
+ padding:8px 2px 0!important;border-top:1px solid var(--r-hair);font-size:11px;color:var(--r-ink-3)!important}
+.mon-legend>span>b{width:16px!important;height:3px!important;border-radius:2px}
+.mon-kpis{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px!important;padding:10px 0 4px!important}
+.ws-kpi{background:var(--r-surface-2)!important;border:0!important;border-radius:var(--r10)!important;
+ box-shadow:none!important;padding:10px 12px!important}
+.ws-kpi .k{font-size:10px!important;letter-spacing:.3px;color:var(--r-ink-3)!important}
+.ws-kpi .v b{font-family:var(--num);font-size:20px!important}
+.ws-kpi .f{font-size:10px!important;color:var(--r-ink-3)!important}
+.mon-range button,.rngchip{height:26px!important;padding:0 10px!important;border:0!important;
+ border-radius:8px!important;background:var(--r-surface-2)!important;color:var(--r-ink-3)!important;
+ font-size:11px!important;font-weight:600!important;line-height:26px!important;cursor:pointer}
+.mon-range button.on,.rngchip.on{background:var(--r-blue-soft)!important;color:var(--r-blue)!important}
+.ws-head.mon-cardhead{align-items:flex-start}
+.ws-title{font-size:14px!important;font-weight:700!important;margin:2px 0 0!important;letter-spacing:0!important}
+.ws-sub{font-size:11px!important;color:var(--r-ink-3)!important;margin:2px 0 0!important;line-height:1.5}
+.ws-btn{height:28px!important;padding:0 10px!important;border:0!important;border-radius:8px!important;
+ background:var(--r-surface-2)!important;color:var(--r-ink-2)!important;font-size:12px!important;font-weight:600!important}
+.ws-btn.primary{background:var(--r-blue)!important;color:#fff!important}
+.ws-btn:hover{background:var(--r-surface-3)!important;color:var(--r-ink)!important}
+.ws-chart-h.mon-cardhead{gap:10px}
+.ws-chart-title b{font-size:14px!important}
+.ws-chart-title span{font-size:11px!important;color:var(--r-ink-3)!important}
+.ws-routebar{border-top:1px solid var(--r-hair);padding-top:10px;margin-top:4px}
+.ws-routebar-h b{font-size:12px!important}
+.ws-routebar-h span{font-size:11px!important;color:var(--r-ink-3)!important}
+.ws-focus,.ws-roster{background:var(--r-surface-2)!important;border:0!important;border-radius:var(--r10)!important;box-shadow:none!important}
+.ws-ranges{gap:4px!important}
 </style></head><body><div class="wrap">
 <svg class="svgdefs" aria-hidden="true" focusable="false"><defs>
  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M2 20h20"/></symbol>
@@ -6511,9 +6851,28 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
 </div><!-- /montab-overview -->
 
 <div id="montab-specials" role="tabpanel" style="display:none">
+<div class="ucard spmon" id="spRadarMonitor">
+ <div class="uhead">
+  <span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">01</span><span class="zh">特价监控</span><span class="en">RADAR TREND</span></span><span class="muted" id="spMonMeta">读取监控记录…</span></span>
+  <span class="muted"><button class="btn2" type="button" onclick="spMonRefresh()">刷新监控</button></span>
+ </div>
+ <div class="spmon-body">
+  <div id="spMonCal" class="spmon-cal" aria-label="特价日历"></div>
+  <div class="spmon-main">
+   <div class="spmon-chartwrap"><canvas id="spMonChart" role="img" aria-label="特价监控走势"></canvas><div id="spMonTip" class="spmon-tip" aria-hidden="true" hidden></div><div id="spMonTable" class="sr-only"><table><caption>特价监控时间轴数据</caption><thead><tr><th>采集时间</th><th>最低价</th><th>低价日</th><th>渠道</th><th>标记</th></tr></thead><tbody></tbody></table></div><div id="spMonChartNote" class="spmon-note"></div></div>
+   <div id="spMonLow" class="spmon-low"></div>
+  </div>
+  <div id="spMonSources" class="spmon-src"></div>
+  <details id="spMonHist" class="spmon-hist">
+   <summary><span>采集记录</span><b id="spMonHistN">—</b><span class="spmon-histhint">每次运行的状态与写入行数</span></summary>
+   <div id="spMonHistBody" class="spmon-histbody"></div>
+  </details>
+ </div>
+</div>
 <div class="ucard" id="spRadarCard"><div class="uhead">
- <span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">01</span><span class="zh">特价雷达</span><span class="en">LOW-PRICE RADAR</span></span><span class="muted" id="spRadarMeta">按当前用户的航线与日期范围查五渠道低价</span></span>
+ <span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">02</span><span class="zh">查询与提醒</span><span class="en">QUERY &amp; ALERTS</span></span><span class="muted" id="spRadarMeta">手动查价与提醒配置；走势由上方自动积累</span></span>
  <span class="muted"><button class="btn2" type="button" onclick="srxRadarLoadFromUser(true)">载入用户条件</button></span></div>
+ <details id="spRadarCfg" class="spcfg"><summary>手动查价与提醒条件 · <span id="spRadarCfgSum">航线/日期范围/渠道</span></summary>
  <div id="spRadarForm" style="display:flex;flex-wrap:wrap;gap:7px;align-items:center;padding:10px 2px">
   <input id="spRadarFrom" placeholder="出发城市 / SHA" aria-label="雷达出发城市" style="width:132px" onchange="srxRadarSyncForm()">
   <span class="muted">→</span>
@@ -6523,19 +6882,25 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
   <span class="muted">→</span>
   <input type="date" id="spRadarEnd" aria-label="雷达结束日期">
   <span id="spRadarChannels" style="display:inline-flex;flex-wrap:wrap;gap:5px"></span>
+  <label class="muted" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="spRadarAlertOn">降价提醒</label>
+  <label class="sprad-fld">降幅 <input id="spRadarDrop" type="number" min="0" step="10" aria-label="降价提醒最小降幅" style="width:64px"> 元</label>
+  <label class="sprad-fld">阈值 <input id="spRadarTh" type="number" min="0" step="50" aria-label="降价提醒阈值" style="width:84px"> 元 <span class="muted">0=关</span></label>
+  <label class="sprad-fld">冷却 <input id="spRadarCool" type="number" min="1" max="168" step="1" aria-label="降价提醒冷却小时" style="width:56px"> 小时</label>
+  <button class="btn2" type="button" id="spRadarAlertSave" onclick="spAlertSave()">保存提醒</button>
   <button class="btn2 primary" type="button" id="spRadarGo" onclick="srxRadarRun(this)">查低价</button>
  </div>
  <div id="spRadarStatus" class="muted" role="status" aria-live="polite" style="padding:2px 2px 8px"></div>
  <div id="spRadarResults" style="padding:2px 2px 10px"></div>
+ </details>
 </div>
 <div class="ucard" id="spfullcard"><div class="uhead">
- <span class="muted" style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">01</span><span class="zh">特价雷达</span><span class="en">SPECIALS</span></span><span class="muted">最近核实通过的特价 · 每条附源渠道直达</span></span></div>
+ <span class="muted" style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">03</span><span class="zh">官方特价来源</span><span class="en">SOURCES</span></span><span class="muted">最近核实通过的特价 · 每条附源渠道直达</span></span></div>
  <div id="spentryboard" style="padding:2px 2px 8px"><span class="muted">渠道入口加载中…</span></div>
  <div id="spfullbody" style="padding:10px 2px"><span class="muted">加载中…</span></div></div>
 </div>
 
 <div id="montab-trend" role="tabpanel" style="display:none">
-<div class="ucard" id="chartcard"><div class="uhead"><span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">01</span><span class="zh">关注航线走势</span><span class="en">ROUTE TREND</span></span><span id="chartTitle" style="font-weight:700;font-size:14px"></span></span>
+<div class="ucard mon-card" id="chartcard"><div class="uhead mon-cardhead"><span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">01</span><span class="zh">关注航线走势</span><span class="en">ROUTE TREND</span></span><span id="chartTitle" style="font-weight:700;font-size:14px"></span></span>
  <span style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="mdgrp"><span class="rngchip on" id="mdLine" onclick="setMode('line')">折线</span>
  <span class="rngchip" id="mdK" onclick="setMode('kline')">K线</span></span>
  <span class="mdgrp"><span class="rngchip on" id="rng48" onclick="setRange('48h')">48h</span>
@@ -6544,26 +6909,26 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
  <span class="rngchip" id="rng90" onclick="setRange('90d')">90 天</span>
  <span class="rngchip" id="rng180" onclick="setRange('180d')">半年</span></span><span class="mdgrp"><span class="rngchip" id="mdOut" onclick="toggleOutliers()" title="默认隐藏极端离群价，避免一个异常点压扁整条曲线；点击显示原值">极值</span></span></span></div>
  <div class="frow" id="chartRoutes"></div>
- <div class="chartwrap"><canvas id="chart" tabindex="0" role="img" aria-label="价格走势图：聚焦后按左右方向键逐点读数，Home/End 跳首尾，Enter 看该轮明细"></canvas>
+ <div class="chartwrap mon-chartwrap"><canvas id="chart" tabindex="0" role="img" aria-label="价格走势图：聚焦后按左右方向键逐点读数，Home/End 跳首尾，Enter 看该轮明细"></canvas>
   <div class="chart-empty" id="chartEmpty" style="display:flex">数据加载中…</div></div>
- <div class="legend"><span id="lgDirect"><b style="background:var(--blue)"></b>直飞最低</span>
+ <div class="legend mon-legend"><span id="lgDirect"><b style="background:var(--blue)"></b>直飞最低</span>
   <span id="lgTrans"><b style="background:var(--orange)"></b>中转最低</span>
   <span id="lgZone" title="行情价低于达标线的区间；未必可出手（达标以环标为准）"><b style="background:var(--okzone)"></b>线内区间</span><span id="lgThD"><b style="background:var(--red)"></b>直飞达标线</span><span id="lgThT"><b style="background:var(--thline)"></b>中转达标线</span>
   <div class="muted" id="ringNote" style="flex-basis:100%;font-size:11px;margin-top:2px"></div></div></div>
 
-<div class="ucard" id="calcard" style="display:none"><div class="uhead"><span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">02</span><span class="zh">价格日历</span><span class="en">CALENDAR</span></span><span id="calTitle" style="font-weight:700;font-size:14px"></span></span>
+<div class="ucard mon-card" id="calcard" style="display:none"><div class="uhead mon-cardhead"><span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">02</span><span class="zh">价格日历</span><span class="en">CALENDAR</span></span><span id="calTitle" style="font-weight:700;font-size:14px"></span></span>
  <span class="muted" id="calStats"></span></div>
  <div class="calgrid" id="calgrid"></div></div>
 </div><!-- /montab-trend -->
 
 <div id="montab-watch" role="tabpanel" style="display:none">
-<section class="wstudio" id="watchStudio" aria-labelledby="wsTitle">
- <div class="ws-card">
-  <header class="ws-head">
+<section class="wstudio" id="watchStudio" aria-label="关注航班">
+ <div class="ws-card mon-card">
+  <header class="ws-head mon-cardhead">
    <div class="ws-head-copy">
     <div class="ws-eyebrow"><span class="seclab inline"><span class="no">01</span><span class="zh">关注航班</span><span class="en">WATCH</span></span>
      <span class="ws-live" id="wsLive"><i></i>真实落库回放</span></div>
-    <h2 class="ws-title" id="wsTitle">关注航班</h2>
+    <h2 class="ws-title sr-only" id="wsTitle">关注航班</h2>
     <p class="ws-sub">关注航班是配置关注航线+日期明细集合中的指定航班子集；日期/渠道/目标独立保存，走势只画该航线的真实采集点。</p>
     <div class="ws-previewbar" id="wsPreviewBar" hidden><b>试看航班</b><span id="wsPreviewTxt">数据来自全航线采集，不依赖关注配置，也未写入关注清单。</span><span class="sp"></span><button class="ws-btn" type="button" data-wsact="previewwatch">去配置关注</button><button class="ws-btn" type="button" data-wsact="previewexit">返回关注清单</button></div>
    </div>
@@ -6573,7 +6938,7 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
     <button class="ws-btn primary" type="button" data-wsact="add"><svg class="ic" aria-hidden="true"><use href="#i-plus"></use></svg>添加关注航班</button>
    </div>
   </header>
-  <div class="ws-kpis" id="wsKpis"></div>
+  <div class="ws-kpis mon-kpis" id="wsKpis"></div>
   <div class="ws-routebar">
    <div class="ws-routebar-h"><b>航线</b><span id="wsRouteMeta">按航线切换关注航班；点击航线后，下方名册与走势同时切换。</span></div>
    <div class="ws-routewatch" id="wsRouteWatch" hidden></div>
@@ -6581,26 +6946,26 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
    <div class="ws-empty-hero" id="wsEmptyHero" hidden><b>还没有关注航班</b><p>关注航班是配置关注航线+日期明细集合中的指定航班子集：先在配置页添加关注航线与日期，再从该航线/日期的采集明细中选择航班。</p><div class="acts"><button class="ws-btn primary" type="button" data-wsact="add"><svg class="ic" aria-hidden="true"><use href="#i-plus"></use></svg>添加关注航班</button><button class="ws-btn" type="button" data-wsact="search">去检索列表</button></div></div>
   </div>
  </div>
- <div class="ws-card">
+ <div class="ws-card mon-card">
   <div class="ws-chartcard">
-   <div class="ws-chart-h">
+   <div class="ws-chart-h mon-cardhead">
     <div class="ws-chart-title"><b id="wsChartTitle">关注航班价格走势</b><span id="wsChartSub">读取关注清单…</span></div>
-    <div class="ws-ranges" id="wsRanges" role="group" aria-label="走势时间范围">
+    <div class="ws-ranges mon-range" id="wsRanges" role="group" aria-label="走势时间范围">
      <button type="button" data-wsrange="2">48h</button><button type="button" data-wsrange="7">7 天</button><button type="button" data-wsrange="30" class="on">30 天</button><button type="button" data-wsrange="90">90 天</button><button type="button" data-wsrange="180">半年</button>
     </div>
-    <div class="ws-ranges" id="wsModes" role="group" aria-label="走势模式"><button type="button" data-wsmode="line" class="on">折线</button><button type="button" data-wsmode="kline">K线</button></div>
+    <div class="ws-ranges mon-range" id="wsModes" role="group" aria-label="走势模式"><button type="button" data-wsmode="line" class="on">折线</button><button type="button" data-wsmode="kline">K线</button></div>
    </div>
    <div class="ws-chart-foot" id="wsChartFoot"><span>正在读取真实采集点…</span></div>
-   <div class="ws-chartwrap" id="wsChartWrap">
+   <div class="ws-chartwrap mon-chartwrap" id="wsChartWrap">
     <canvas id="wsChart" tabindex="0" role="img" aria-label="关注航班价格走势：真实采集点、目标线与最新价；聚焦后按左右方向键逐点读数"></canvas>
     <div class="ws-empty" id="wsChartEmpty"><b>正在读取关注清单</b><span>走势只使用真实落库行，不用日历价补点。</span></div>
     <div class="ws-tip" id="wsTip" role="status" aria-live="polite"></div>
    </div>
-   <div class="ws-legend" id="wsLegend"></div>
+   <div class="ws-legend mon-legend" id="wsLegend"></div>
   </div>
   <div class="ws-focus" id="wsFocus"></div>
  </div>
- <div class="ws-card">
+ <div class="ws-card mon-card">
   <div class="ws-roster">
    <div class="ws-roster-h"><b>航班名册</b><span id="wsRosterMeta">按当前航线筛选</span><span class="sp"></span><span id="wsSortInfo" style="font-size:10px;color:var(--mut)"></span></div>
    <div class="ws-filterbar" id="wsFilters"></div>
@@ -6716,25 +7081,29 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
 </div>
 <div class="muted" id="healthEmpty" style="display:none;padding:34px 0;text-align:center">
  暂无扫描记录——完成一轮采集后，这里会出现 24h 渠道健康时间线</div>
+<div class="ucard" id="healthDiag"><div class="uhead">
+ <span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="zh">渠道诊断</span><span class="en">DIAGNOSIS</span></span><span class="muted" id="healthDiagMeta">按最近一轮证据区分登录/验证码/IP 风控/超时</span></span></div>
+ <div id="healthDiagBody" class="hdiag"><span class="muted">读取中…</span></div></div>
 <div class="ucard" id="healthcard" style="display:none"><div class="uhead"><span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">01</span><span class="zh">渠道健康</span><span class="en">HEALTH</span></span><span class="muted">近 24h · 每格一轮扫描 · 点击格子看该轮日志</span></span>
  <span class="muted"><span id="hroundcnt"></span><span id="hsrcNote"></span><button id="hauthact" class="hact" type="button" hidden data-p="" onclick="srxGoLogin(this.dataset.p)">需登录 · 去登录</button></span></div>
  <div id="hbody"></div>
  <div id="pushhl"></div>
  <div class="legend">
   <span><b style="background:var(--green)"></b>成功</span>
-  <span><b style="background:var(--orange)"></b>部分/降级</span>
-  <span><b style="background:var(--red)"></b>失败</span>
+  <span><b style="background:repeating-linear-gradient(135deg,var(--orange) 0 3px,var(--warnbg) 3px 5px)"></b>部分/降级</span>
+  <span><b style="background:repeating-linear-gradient(45deg,var(--red) 0 2px,var(--redbg) 2px 4px)"></b>失败</span>
   <span><b class="hlh"></b>维护</span>
-  <span><b style="background:var(--line)"></b>未扫描</span></div></div>
+  <span><b style="background:transparent;box-shadow:inset 0 0 0 1px var(--line2)"></b>未扫描</span></div></div>
 </div><!-- /montab-health -->
 </div><!-- /monview -->
 
 <div id="searchview" role="main" style="display:none">
  <section class="srx-hero" aria-label="检索台">
-  <div class="srx-hero-copy">
+  <div class="srx-hero-copy" id="srxHeroCopy">
    <div class="srx-eyebrow"><span class="srx-live" id="srxLiveTag"><i></i>LIVE</span><span id="srxModeLabel">监控数据</span><span>·</span><span id="srxHeroMeta">等待真实数据</span></div>
    <h1>多平台实时检索</h1>
    <p id="srxHeroSub">五渠道真实采集行 · 解析 ⇄ 镜像 ⇄ RAW 三重对齐 · 缺失一律标未供/未采，不伪造截图与同班。</p>
+   <button type="button" class="srx-foldbtn" onclick="srxFold('srxHeroCopy',this)" aria-expanded="true">收起说明</button>
   </div>
   <div class="srx-hero-act">
    <label for="srxUser">用户</label><select id="srxUser" onchange="srxSwitchUser(this.value)" aria-label="切换检索用户"></select>
@@ -6871,9 +7240,12 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
     <button type="button" data-axis="departure" class="on" onclick="srxAxis('departure')">出发日</button>
     <button type="button" data-axis="observation" onclick="srxAxis('observation')">采集日</button>
    </span>
-   <button type="button" class="srx-bandreset" id="srxBandReset" onclick="srxBandReset()" hidden>回到所选日</button></div>
+   <button type="button" class="srx-bandreset" id="srxBandReset" onclick="srxBandReset()" hidden>回到所选日</button>
+   <button type="button" class="srx-foldbtn" style="margin-left:6px" onclick="srxFold('srxBand',this)" aria-expanded="true">收起价带</button></div>
+  <div id="srxBandBody" class="srx-foldbody">
   <div class="srx-band-days" id="srxBandDays"><div class="srx-skel" style="height:48px;margin:0"></div></div>
   <div class="srx-band-note" id="srxBandNote">正在读取真实日桶…</div>
+  </div>
  </section>
 
  <section class="srx-brief" id="srxBrief" aria-label="五源现势"><div class="srx-skel" style="height:76px;margin:0"></div></section>
@@ -7052,7 +7424,7 @@ const cssv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).tri
 /* 智能刷新：响应逐字不变则跳过重渲染（悬停/展开/滚动不被打断）；
    页面不可见时不轮询，切回立即拉一次；上一笔未回不叠发
    （服务端重建期间叠发会触发并发重建，越等越慢） */
-let LOADN=false,LASTETAG='';
+let LOADN=false,LASTETAG='',STATE_ERR='';
 function _markStale(svc){/* fetch 失败时七处静态「加载中…」/空骨架同步置错误态：
    pill 已明说服务异常/未启动而表体/配置区/概览骨架仍「加载中…」=永不到达
    的假等待；svc=服务在线的失败形态传「服务异常」（500 错误体与 pill 同轨），
@@ -7064,6 +7436,7 @@ function _markStale(svc){/* fetch 失败时七处静态「加载中…」/空骨
    render() 重写，自愈路径已有 */
   const msg=(svc||'服务未启动')+'，恢复后自动刷新';
   const msgCfg=(svc||'服务未启动')+'，恢复后刷新页面';
+  STATE_ERR=msg;
   _ROWS=null;_CHUNKS=[];_NDRAW=0;   /* 失败骨架上滚动续载只出陈旧行 */
   $('ftable').innerHTML='<tr class="erow"><td colspan="9">'+msg+'</td></tr>';
   const cg=$('cfgglobals');if(cg)cg.innerHTML='<span class="muted">'+msgCfg+'</span>';
@@ -7096,7 +7469,7 @@ async function load(){if(document.hidden||LOADN)return;
    if(S){$('updated').textContent='（数据刷新失败：保留上次结果）';}
    else{$('updated').textContent='';_markStale('服务异常');}}
   else if(t!==LASTTXT){LASTTXT=t;
-   if(j&&j.users){const _hadS=!!S;S=j;
+   if(j&&j.users){const _hadS=!!S;S=j;STATE_ERR='';
     try{render();}
     catch(e){console.error('render:',e);
      LASTTXT='';/* 渲染异常拍失效签名（r324 穷举审计 F4）：自愈从
@@ -7109,7 +7482,10 @@ async function load(){if(document.hidden||LOADN)return;
      else renderSearch();
     }
     else if(typeof srxPrefetchBand==='function')setTimeout(()=>{try{srxPrefetchBand()}catch(e){}},0);
-    if(VIEW==='mon'&&typeof MONTAB!=='undefined'&&MONTAB==='watch'&&typeof wsLoad==='function')wsLoad(false);}
+    if(VIEW==='mon'&&typeof MONTAB!=='undefined'&&MONTAB==='watch'&&typeof wsLoad==='function')wsLoad(false);
+    /* 恢复的「只看关注」在刷新后必须先取回有效关注集合，再按它过滤；
+       keys 未到时旧实现直接放行全部行，界面状态与实际筛选不一致。 */
+    if(WATCH_ONLY&&!WATCH_KEYS&&typeof srxWatchLoad==='function')srxWatchLoad(true);}
    else{/* 错误体分支：HTTP 500 的 {"err":...} 走过成功解析路径，
       服务在线——两个终点各有落点：有旧数据→保旧不 clobber（交互
       不失效，pill 落「服务异常」失败档（bad 旗标，jumpQual 词面
@@ -7359,7 +7735,11 @@ function countUps(){document.querySelectorAll('a.numlink').forEach(el=>{
   el.textContent='￥'+Math.round(from+(to-from)*e);
   if(p<1)requestAnimationFrame(step);};
  requestAnimationFrame(step);});}
-function pickUser(i){WATCH_ONLY=false;WATCH_KEYS=null;const _wb=document.getElementById('watchOnlyBtn');if(_wb){_wb.textContent='只看关注';_wb.setAttribute('aria-pressed','false');}U=i;saveUI();render();if(VIEW==='search')renderSearch();
+function pickUser(i){WATCH_ONLY=false;WATCH_KEYS=null;const _wb=document.getElementById('watchOnlyBtn');if(_wb){_wb.textContent='只看关注';_wb.setAttribute('aria-pressed','false');}
+ /* 用户切换同样隔离关注/雷达：旧用户列表在旧请求晚到时不得渲染到新用户。 */
+ SRX_WATCH.list=[];SRX_WATCH.loadedFor='';SRX_WATCH.pending=false;SRX_WATCH.seq=(SRX_WATCH.seq||0)+1;
+ SRX_RADAR.data=null;SRX_RADAR.user='';SRX_RADAR.loaded=false;SRX_RADAR.seq=(SRX_RADAR.seq||0)+1;
+ U=i;saveUI();render();if(VIEW==='search')renderSearch();
  /* URL 深链同步（用户维度，与 showMonTab 的 tab 维度并存：
     #details/u1 形态可分享/收藏——曾只有 tab 级，航线选择不可分享） */
  try{history.replaceState(null,'','#'+MONTAB+'/u'+i)}catch(e){}}
@@ -7400,6 +7780,50 @@ function _hfit(x){
 /* 页面代际（服务端把 demo 替换成运行版本）：load() 轮询比对
    state.version，失配亮刷新横幅——跨重启的旧标签页不再无声跑旧代码 */
 const PGVER='__PAGEVER__';
+/* 切换器实高单源：六视图在窄档为 3×2 网格，多用户时用户 chip 另占
+   一行，固定 --mtabsh 会小于真实高度，明细筛选条吸顶时会压住最后
+   一行 tab。用 ResizeObserver 把实际高度写回根变量，吸顶层同步。 */
+let _MTABH=0;
+function syncMtabH(){
+ const m=document.getElementById('montabs');if(!m)return;
+ const h=Math.round(m.getBoundingClientRect().height||0);
+ if(h>0&&h!==_MTABH){_MTABH=h;document.documentElement.style.setProperty('--mtabsh',h+'px')}
+}
+if(window.ResizeObserver){const _mm=document.getElementById('montabs');if(_mm)new ResizeObserver(syncMtabH).observe(_mm)}
+window.addEventListener('resize',syncMtabH);
+/* 检索大块折叠：首屏保留任务入口/反馈，说明/价带/镜像可收起。
+   折叠态按块持久化，刷新后仍保持；展开后必须真正减少高度。 */
+function srxSetFold(id,folded){
+ const el=$(id);if(!el)return;
+ el.classList.toggle('srx-folded',!!folded);
+ document.querySelectorAll('[onclick*="'+id+'"]').forEach(btn=>{
+  if(!btn.classList.contains('srx-foldbtn'))return;
+  const base=String(btn.textContent||'').trim().replace(/^(收起|展开)/,'')||'详情';
+  btn.textContent=(folded?'展开':'收起')+base;
+  btn.setAttribute('aria-expanded',folded?'false':'true');
+  btn.setAttribute('aria-controls',id);
+ });
+}
+function srxFold(id,btn){
+ const el=$(id);if(!el)return;
+ const folded=!el.classList.contains('srx-folded');
+ srxSetFold(id,folded);
+ try{
+  const m=JSON.parse(localStorage.getItem('jpsrx_folds')||'{}');
+  m[id]=folded;localStorage.setItem('jpsrx_folds',JSON.stringify(m));
+ }catch(e){}
+}
+try{
+ const _fm=JSON.parse(localStorage.getItem('jpsrx_folds')||'{}');
+ Object.keys(_fm).forEach(id=>{if(_fm[id])srxSetFold(id,true)});
+}catch(e){}
+try{
+ document.querySelectorAll('.srx-foldbtn,.srx-more-btn,.srx-probe-toggle,.srx-batchtoggle').forEach(btn=>{
+  if(btn.getAttribute('aria-controls'))return;
+  const m=(btn.getAttribute('onclick')||'').match(/srxFold\('([^']+)'/);
+  if(m)btn.setAttribute('aria-controls',m[1]);
+ });
+}catch(e){}
 function showMonTab(t,silent,hist){
  /* 空态收敛：明细/走势/健康在 users 空时无渲染面（render 空态已藏
     三卡），键盘数字/深链切过去只会落空白 pane——前置收敛回 overview
@@ -7413,8 +7837,10 @@ function showMonTab(t,silent,hist){
   const el=$('montab-'+k);if(el)el.style.display=(k===t)?'':'none';});
  if(!silent){const el=$('montab-'+t);
   if(el){el.classList.remove('viewin');void el.offsetWidth;el.classList.add('viewin');}}
+ syncMtabH();
  if(t==='overview')renderMonWatch();
- if(t==='specials'){spCard(true);try{srxRadarLoadFromUser()}catch(e){}}
+ if(t==='specials'){spCard(true);try{srxRadarLoadFromUser()}catch(e){};try{spMonLoad()}catch(e){}}
+ if(t==='health'){try{renderHealthDiag()}catch(e){}}
  if(t==='trend'&&!silent){chart();renderMonWatch(true);}
  if(t==='watch'&&!silent){wsLoad(false);}
  if(t==='details'&&!silent)table();   /* render 在非明细视图跳过了重建，切回补一拍（S 未到时自身有守卫） */
@@ -7599,9 +8025,18 @@ function togChip(el){const p=el.dataset.p;if(FLT.plats.has(p))FLT.plats.delete(p
  el.classList.toggle('on');el.setAttribute('aria-pressed',el.classList.contains('on')?'true':'false');saveUI();table();}
 /* ===== 筛选/排序状态持久化（刷新不丢） ===== */
 function saveUI(){try{localStorage.setItem('jpui',JSON.stringify(
- {F:F,U:U,sk:SORT.k,sd:SORT.dir,plats:[...FLT.plats],routes:[...FLT.routes],dates:[...FLT.dates],dep:FLT.dep,arr:FLT.arr,no:FLT.no,q:FLT.q,chr:CHR,exp:EXP,tg:TGOPEN,pmin:FLT.pmin||0,pmax:FLT.pmax||0,airlines:[...FLT.airlines],ps:[...FLT.ps],cabins:[...FLT.cabins],depA:[...FLT.depA],arrA:[...FLT.arrA],few:FLT.few,nostop:FLT.nostop,noshare:FLT.noshare,safe:FLT.safe,lmin:FLT.laymin||0,lmax:FLT.laymax||0,dmin:FLT.durmin||0,dmax:FLT.durmax||0,pr:FLT.prate||0,ag:FLT.age||0,bg:FLT.bag,ml:FLT.meal,nl:FLT.nolcc,cr:FLT.cross,ch:FLT.child,bkg:FLT.bagkg||0,wb:FLT.wb}));}catch(e){}}
+ {F:F,U:U,sk:SORT.k,sd:SORT.dir,plats:[...FLT.plats],routes:[...FLT.routes],dates:[...FLT.dates],dep:FLT.dep,arr:FLT.arr,no:FLT.no,q:FLT.q,chr:CHR,exp:EXP,tg:TGOPEN,pmin:FLT.pmin||0,pmax:FLT.pmax||0,airlines:[...FLT.airlines],ps:[...FLT.ps],cabins:[...FLT.cabins],depA:[...FLT.depA],arrA:[...FLT.arrA],few:FLT.few,nostop:FLT.nostop,noshare:FLT.noshare,safe:FLT.safe,lmin:FLT.laymin||0,lmax:FLT.laymax||0,dmin:FLT.durmin||0,dmax:FLT.durmax||0,pr:FLT.prate||0,ag:FLT.age||0,bg:FLT.bag,ml:FLT.meal,nl:FLT.nolcc,cr:FLT.cross,ch:FLT.child,bkg:FLT.bagkg||0,wb:FLT.wb,so:FLT.shareOnly,st:FLT.stopOnly,ro:FLT.riskOnly,hc:FLT.hideCal,oq:FLT.onlyQual,wo:WATCH_ONLY}));}catch(e){}}
 function restoreUI(){try{const j=JSON.parse(localStorage.getItem('jpui')||'{}');
  if(j.F)F=j.F;if(j.sk)SORT={k:j.sk,dir:j.sd||1};
+ /* 影响结果集的开关必须全量持久化：仅共享/仅经停/仅风险/隐藏日历/
+    仅达标五项曾不存档，刷新后勾选态消失而结果集复原——界面与真实
+    筛选不一致。 */
+ if(j.so){FLT.shareOnly=true;const el=$('fshareonly');if(el)el.checked=true;}
+ if(j.st){FLT.stopOnly=true;const el=$('fstoponly');if(el)el.checked=true;}
+ if(j.ro){FLT.riskOnly=true;const el=$('friskonly');if(el)el.checked=true;}
+ if(j.hc){FLT.hideCal=true;const el=$('fhidecal');if(el)el.checked=true;}
+ if(j.oq){FLT.onlyQual=true;const el=$('fonlyqual');if(el)el.checked=true;}
+ if(j.wo){WATCH_ONLY=true;const wb=$('watchOnlyBtn');if(wb){wb.textContent='取消关注筛选';wb.setAttribute('aria-pressed','true')}}
  if(Array.isArray(j.plats)&&j.plats.length){FLT.plats=new Set(j.plats);FLT._platsInit=true;}
  if(Array.isArray(j.dates)&&j.dates.length)FLT.dates=new Set(j.dates);
  if(Array.isArray(j.dep)&&j.dep.length===2)FLT.dep=j.dep;
@@ -7746,6 +8181,7 @@ function resetFlt(){if(SORT.k!=='price'||SORT.dir!==1){SORT={k:'price',dir:1};}
  FLT.bagkg=0;FLT.wb=false;   /* r345：两项曾在重置清单缺席——片仍亮、结果集残留 */
  FLT.nolcc=false;FLT.cross=false;FLT.child=false;
  FLT.shareOnly=false;FLT.stopOnly=false;FLT.riskOnly=false;FLT.hideCal=false;FLT.onlyQual=false;setCatAll();
+ WATCH_ONLY=false;WATCH_KEYS=null;const _wb=$('watchOnlyBtn');if(_wb){_wb.textContent='只看关注';_wb.setAttribute('aria-pressed','false')}
  buildWinSel();
  $('fpmin').value='';$('fpmax').value='';$('fnostale').checked=false;$('fq').value='';
  $('ffew').checked=false;$('fnostop').checked=false;$('fnoshare').checked=false;
@@ -8034,7 +8470,8 @@ function togMoreFlt(){
 function moreFltActive(){return (FLT.durmin||FLT.durmax?1:0)+(FLT.prate?1:0)
  +(FLT.age?1:0)+(FLT.bag?1:0)+(FLT.bagkg?1:0)+(FLT.meal?1:0)+(FLT.nolcc?1:0)
  +(FLT.wb?1:0)+(FLT.cross?1:0)+(FLT.child?1:0)
- +(FLT.shareOnly?1:0)+(FLT.stopOnly?1:0)+(FLT.riskOnly?1:0)+(FLT.hideCal?1:0)+(FLT.onlyQual?1:0);}
+ +(FLT.shareOnly?1:0)+(FLT.stopOnly?1:0)+(FLT.riskOnly?1:0)+(FLT.hideCal?1:0)+(FLT.onlyQual?1:0)
+ +(WATCH_ONLY?1:0);}
 /* ===== r342 明细筛选摘要 / 智能预设（配置页同一套语义，明细可读可撤） ===== */
 function _fltCatLabel(k){return {d:srxGlyph('takeoff')+' 直飞',tq:srxGlyph('transfer')+' 中转·达标',t:srxGlyph('transfer')+' 中转·全部',
  q:srxGlyph('flame')+' 仅达标',bag:srxGlyph('bag')+' 直挂'}[k]||k;}
@@ -8144,9 +8581,11 @@ function filteredRows(){const u=S.users[U];
   if(F==='tq'&&!(f.transfer&&f.qual))return false;
   if(F==='q'&&!f.qual)return false;
   if(F==='bag'&&!(f.transfer&&f.bag))return false;
-  if(WATCH_ONLY&&WATCH_KEYS&&!WATCH_KEYS.has(
-    String(f.code||'').toUpperCase()+'|'+(f.from||'')+'|'+(f.to||'')+'|'+(f.date||'')))
-   return false;
+  if(WATCH_ONLY){
+   const base=srxFlightKey(f)+'|'+srxWatchCabin(f);
+   if(!WATCH_KEYS||(!WATCH_KEYS.all.has(base)
+     &&!WATCH_KEYS.ch.has(base+'|'+srxPlatKey(f.platKey||f.plat))))return false;
+  }
   if(FLT.plats.size&&!FLT.plats.has(f.plat))return false;
   if(FLT.routes.size&&f.route&&!FLT.routes.has(f.route))return false;
   if(FLT.dates.size&&!FLT.dates.has(f.date))return false;
@@ -8163,10 +8602,13 @@ function filteredRows(){const u=S.users[U];
   if(FLT.depA.size&&!(FLT.depA.has(f.depAirportCode)||FLT.depA.has((f.depAirport||'').replace(/国际机场$/,'').replace(/机场$/,''))))return false;
   if(FLT.arrA.size&&!(FLT.arrA.has(f.arrAirportCode)||FLT.arrA.has((f.arrAirport||'').replace(/国际机场$/,'').replace(/机场$/,''))))return false;
   if(FLT.ps.size&&(!f.planeSize||!FLT.ps.has(f.planeSize)))return false;
+  /* 舱位口径与检索台一致：缺舱位维度的行不被指定舱位档静默滤除
+     （渠道不下发舱位≠不属于该舱；与 layover/widebody 缺维度不静默
+     滤除同律）。检索台同步放行缺失维度。 */
   if(FLT.cabins.size&&cabinOf(f)&&!FLT.cabins.has(cabinOf(f)))return false;
   if(FLT.few&&!(f.fewTicket||(f.leftTickets>0&&f.leftTickets<10)))return false;
   if(FLT.nostop&&f.stop)return false;
-  if(FLT.noshare&&f.shareCarrier)return false;
+  if(FLT.noshare&&(f.shareCarrier||f.shareAirline))return false;
   /* r345：safe 词面承诺「隐藏限购/高风险价」——只判 age/risk 曾漏掉
      诱饵价（lurePrice）与票规风险（ticketRisk），title 与结果双源矛盾 */
   if(FLT.safe&&(f.agePolicy||f.riskPolicy||f.lurePrice!=null||f.ticketRisk))return false;
@@ -8198,10 +8640,10 @@ function filteredRows(){const u=S.users[U];
      不满足（浏览语境直观语义；航线门 widebody_only 的 fail-open
      是监控语境防整渠道误杀——两语境语义分立各安其位） */
   if(FLT.wb&&String(f.planeSize||'').indexOf('大型机')<0)return false;
-  if(FLT.cross&&!(Number(f.crossDayN)>0))return false;
+  if(FLT.cross&&!(Number(f.crossDayN)>0)&&!String(f.cross||'').trim())return false;
   if(FLT.child&&f.childPrice==null)return false;
   if(FLT.q){const q=FLT.q.toLowerCase();
-   const hay=(f.name+' '+(f.code||'')+' '+(f.trans||'')+' '+f.plat+' '+(f.depAirportCode||'')+' '+(f.arrAirportCode||'')+' '+(f.depAirport||'')+' '+(f.arrAirport||'')+' '+(f.airlineCode||'')+' '+(f.plane||'')+' '+(f.plane2||'')).toLowerCase();
+   const hay=(f.name+' '+(f.code||'')+' '+(f.trans||'')+' '+f.plat+' '+(f.depAirportCode||'')+' '+(f.arrAirportCode||'')+' '+(f.depAirport||'')+' '+(f.arrAirport||'')+' '+(f.airlineCode||'')+' '+(f.shareAirline||'')+' '+(f.cabinT||'')+' '+(f.labels||'')+' '+(f.plane||'')+' '+(f.plane2||'')).toLowerCase();
    if(!hay.includes(q))return false;}
   return true;});
  rows.sort((a,b)=>{const x=sval(a,SORT.k),y=sval(b,SORT.k);
@@ -8278,14 +8720,14 @@ function expCsv(){if(!S||!S.users.length){toast('数据加载中，请稍候再�
  const rows=filteredRows();
  if(!rows.length){toast('当前筛选无数据，先调整筛选条件');return;}
  const e2=v=>{let t=String(v==null?'':v);if(t&&("=+-@".indexOf(t[0])>=0||t.charCodeAt(0)===9||t.charCodeAt(0)===13))t="'"+t;return '"'+t.replace(/"/g,'""')+'"'};
- const head=['价格','税费','类别','日期','航班','航班号','出发','到达','机场/航站楼','跨天','时长','均延','准点率','取消率','中转','衔接','直挂','托运额','手提额','经停','舱位','舱位码','座椅倾斜','机型体量','廊桥率','机建燃油','高档舱','退改','廉航','权益标签','标签说明','中转服务','航司中转','渠道','数据时效','状态','孤低价','改期最低','改期公务','儿童/婴儿','航程','航司码','公布运价','实际承运','周边特价','往返推荐'];
+ const head=['价格','税费','类别','日期','航班','航班号','出发','到达','机场/航站楼','跨天','时长','均延','准点率','取消率','中转','衔接','直挂','托运额','手提额','经停','舱位','舱位码','座椅倾斜','机型体量','廊桥率','机建燃油','高档舱','退改','廉航','权益标签','标签说明','中转服务','航司中转','渠道','采集入口','证据级别','数据时效','状态','孤低价','改期最低','改期公务','儿童/婴儿','航程','航司码','公布运价','实际承运','周边特价','往返推荐'];
  const lines=[head.map(e2).join(',')];
  for(const f of rows)lines.push([
   f.price,(f.tax!=null?f.tax:''),f.cal?'日历':(f.transfer?'中转':'直飞'),f.date||'',f.name,f.code||'',f.depTime||'',f.arrTime||'',
   ((_ttc(f.depAirport,f.depTerminal,f.depAirportCode))&&(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode))&&_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)!==_ttc(f.depAirport,f.depTerminal,f.depAirportCode))?(_ttc(f.depAirport,f.depTerminal,f.depAirportCode)+'→'+_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)):(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)||_ttc(f.depAirport,f.depTerminal,f.depAirportCode)||''),
   f.cross||'',f.dur||'',_ad_txt(f.avgDelay),(f.prate?f.prate+'%':''),(f.cancelRate!=null?f.cancelRate+'%':''),f.trans||'',
   (f.layoverT||'')+(f.layMin?(f.layoverM>=f.layMin?'✓':(f.layoverM?'⚠':'')):''),
-  (f.bagState==='direct'?'是':(f.bagState==='recheck'?'需转运':'')),f.baggage||'',f.carryon||'',f.stop?('是'+(f.stopWin?'('+f.stopWin+')':'')):'',(f.cabin||'').replace(/<[^>]*>/g,''),f.cabinCode||'',(f.seatTilt!=null?f.seatTilt+'°':''),[f.planeSize,f.planeSize2,f.plane].filter(Boolean).join('·'),(f.bridgeRate!=null?f.bridgeRate+'%':''),(f.transferTax!=null?f.transferTax:''),(f.bizPrice!=null?((f.price!=null&&f.bizPrice>f.price)?'+￥'+(f.bizPrice-f.price):(f.bizCabin||'公务')+'￥'+f.bizPrice):''),_rc_txt(f),(f.lcc?'是':''),f.labels||'',f.labelNote||'',f.transferService||'',f.airlineTransfer||'',f.plat,
+  (f.bagState==='direct'?'是':(f.bagState==='recheck'?'需转运':'')),f.baggage||'',f.carryon||'',f.stop?('是'+(f.stopWin?'('+f.stopWin+')':'')):'',(f.cabin||'').replace(/<[^>]*>/g,''),f.cabinCode||'',(f.seatTilt!=null?f.seatTilt+'°':''),[f.planeSize,f.planeSize2,f.plane].filter(Boolean).join('·'),(f.bridgeRate!=null?f.bridgeRate+'%':''),(f.transferTax!=null?f.transferTax:''),(f.bizPrice!=null?((f.price!=null&&f.bizPrice>f.price)?'+￥'+(f.bizPrice-f.price):(f.bizCabin||'公务')+'￥'+f.bizPrice):''),_rc_txt(f),(f.lcc?'是':''),f.labels||'',f.labelNote||'',f.transferService||'',f.airlineTransfer||'',f.plat,srxEntryOf(f),srxEvLevel(f),
   f.stale?('补位·'+f.stale+'h前'):'实时',
   f.stale?(f.cal?'补位·日历·不判达标':'补位·不判达标'):(f.qual?'真达标':(f.brk?'行情破线':(f.near?'擦边':(f.cal?'日历价不参与':(Number(f.th)?'未达标':'仅观察'))))),
   f.xphan?'是':'',
@@ -8327,7 +8769,7 @@ function _chunkHtml(ci){if(_CHUNKS[ci]!=null)return _CHUNKS[ci];
   `<td class="price${f.brk?' brk':(f.near?' near':'')}"${f.brk?' title="行情破线未达标：因非直挂/衔接不足/税前等原因暂不可出手"':(f.near?` title="擦边：距达标线 ≤${NEAR_PCT}%，未达标"`:'')}>${'<span class="fire">'+(f.qual?'<svg class="ic" aria-hidden="true"><use href="#i-flame"></use></svg>':'')+'</span>'}￥${f.price}${f.xphan?' <span class="stl" style="color:var(--warn);cursor:help" title="跨渠道孤低价：显著低于其他渠道同航班报价，疑似页面污染/错误价——不参与达标判定与行情最优">⚠</span>':''}${f.platKey==='fliggy'&&!f.intl?'<span class="pretax" style="cursor:help" title="飞猪列表价为不含机建燃油的裸价，出行总成本需另加此项">税前</span>':''}${f.blackCard?'<span class="pretax" style="cursor:help" title="黑卡价：渠道黑卡商品价，实付以渠道页为准">黑卡价</span>':''}${f.agePolicy?`<span class="pretax" style="color:var(--warn);cursor:help" title="资格受限专享价：仅符合限定条件（年龄/航司或平台会员资格/指定卡类型/航司协议/成团人数）的旅客可购，误购无法出行">⚠${he(f.agePolicy)}价</span>`:''}${f.riskPolicy?`<span class="pretax" style="color:var(--warn);cursor:help" title="渠道标注的高风险政策价：出票/退款类购买风险以渠道页说明为准，下单前请核实政策详情">⚠${he(f.riskPolicy)}</span>`:''}${f.ticketRisk?`<span class="pretax" style="color:var(--warn);cursor:help" title="值机时效风险（渠道弹层警示）：航班临近起飞，购票前请先到值机柜台确认出票后仍有时间值机；出票失败自动取消全额退款；已出票退改损失需自行承担">⚠值机</span>`:''}${f.lurePrice?`<span class="pretax" style="color:var(--warn);cursor:help" title="渠道列表页展示价￥${f.lurePrice}已被渠道过滤（不可购）：点进渠道预订将按本行可购价成交，请勿以该展示价比价">⚠页面价￥${f.lurePrice}不可购</span>`:''}${(f.returnFee!=null||f.changeFee!=null)?`<span class="pretax" style="cursor:help" title="该价位退改规则（渠道标注，当前档位费率、起飞前分档变动）：退票/改签手续费，不可=渠道标注不可办理">${_rc_txt(f)}</span>`:''}</td>`+
   `<td class="catt">${f.intl?'<span class="tag t-i" title="国际航线：价格为含税总价">国际</span>':''}${f.cal?'<span class="tag t-c" title="日历价：渠道日历最低含税价（非具体航班，时刻/航班号/航司不适用）">日历</span>':`<span class="tag ${f.transfer?'t-t':'t-d'}"${(f.transfer&&f.transferService)?` title="中转服务：${he(f.transferService)}"`:''}>${f.transfer?'中转':'直飞'}</span>`}</td>`+
   `<td class="datd">${f.date?he(dSlash(f.date)):'—'}</td>`+
-  `<td${((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null)||(f.childPrice!=null||f.infantPrice!=null)||f.distance!=null||(f.nearby&&f.nearby.length)||(f.trendRound&&f.trendRound.length))?` title="${he((f.labels||'').split('·').join(' · '))+(f.labels&&f.labelNote?'｜':'')+he(f.labelNote||'')+((f.labels||f.labelNote)&&f.baggage?'｜':'')+(f.baggage?he(f.baggage):'')+((f.labels||f.labelNote||f.baggage)&&f.carryon?'｜':'')+(f.carryon?he(f.carryon):'')+((f.labels||f.labelNote||f.baggage||f.carryon)&&f.bizPrice!=null?'｜':'')+(f.bizPrice!=null?he(f.bizCabin||'公务')+'￥'+he(String(f.bizPrice)):'')+((f.childPrice!=null||f.infantPrice!=null)?(((f.labels||f.labelNote||f.bizPrice!=null||f.baggage||f.carryon)?'｜':'')+(f.childPrice!=null?'儿童价￥'+he(String(f.childPrice)):'')+((f.childPrice!=null&&f.infantPrice!=null)?'｜':'')+(f.infantPrice!=null?'婴儿价￥'+he(String(f.infantPrice)):'')):'')+(f.distance!=null?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null)?'｜':'')+'航程'+he(String(f.distance))+'km':'')+(f.nearby&&f.nearby.length?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null||f.distance!=null)?'｜':'')+he(_nb_txt(f)):'')+(f.trendRound&&f.trendRound.length?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null||f.distance!=null||(f.nearby&&f.nearby.length))?'｜':'')+he(_rt_txt(f)):'')}"`:''}><div class="mmeta">${f.intl?'<span class="tag t-i" title="国际航线：价格为含税总价">国际</span>':''}${f.cal?'<span class="tag t-c" title="日历价：渠道日历最低含税价（非具体航班，时刻/航班号/航司不适用）">日历</span>':`<span class="tag ${f.transfer?'t-t':'t-d'}"${(f.transfer&&f.transferService)?` title="中转服务：${he(f.transferService)}"`:''}>${f.transfer?'中转':'直飞'}</span>`}<span class="mdat">${f.date?he(dSlash(f.date)):'—'}</span>${f.cross?`<span class="mdat">次日</span>`:''}<span class="mdat">${he(durTxt(f.dur)||'—')}</span>${f.trans?`<span class="mdat">经${he(f.trans)}${f.layoverT?' · 衔接'+he(f.layoverT):''}</span>`:''}${f.stale?`<span class="mdat stale" title="该渠道当轮无数据，展示 ${he(String(f.stale))}h 前补位价；不参与达标与同班比价">补位${he(String(f.stale))}h</span>`:''}<span class="mplat">${srxPlatIcon(srxPlatKey(f.platKey||f.plat))}${he(f.plat||'')}</span></div><span class="xind" aria-hidden="true"></span>${srxAirIcon(f.code)}${he(f.name)}${f.stop?`<span class="stoptag">经停${he(f.stopCity||'')}${f.stopTimeT?` 停${he(f.stopTimeT)}`:''}${f.stopWin?`(${he(f.stopWin)})`:''}</span>`:''}${f.bagState==='direct'?'<span class="bagtag">直挂</span>':(f.bagState==='recheck'?'<span class="stoptag" title="渠道标注行李需重新托运（中转不直挂）">需转运</span>':'')}${f.lcc?'<span class="stoptag" title="廉价航空：中转常需重新值机、行李托运受限">廉航</span>':''}${(f.cabinT||f.prate||f.meal||f.shareCarrier||f.codeShare||f.fewTicket||f.depTerminal||f.arrTerminal||f.depAirport||f.arrAirport||f.planeSize||f.ptripNote||f.airlineTransfer||f.avgDelay!=null||f.transTerminal||f.transDepTerminal||f.transferTax!=null||(f.leftTickets>0&&f.leftTickets<10)||f.intl)?`<div class="stl" style="margin-top:3px">${[((f.cabinT||f.cabinCode)?_cchip(f):''),f.intl?`<span title="国际行价格为含税总价口径，此为其中税费构成部分">含税${f.tax!=null?'￥'+he(String(f.tax)):''}</span>`:'',f.cabinCode?'<span title="舱位代码'+(f.seatTilt!=null?'｜座椅倾斜'+f.seatTilt+'°':'')+'">'+he(f.cabinCode)+'</span>':'',f.prate?'准点'+he(String(f.prate))+'%'+(f.cancelRate!=null?'·取消'+he(String(f.cancelRate))+'%':''):'',f.meal?he(f.meal):'',(FLT&&FLT.bagkg&&f.baggage)?(function(){const k=_bagKgs(f);return k.length?'<span class="nw" title="托运≥'+FLT.bagkg+'kg 筛选命中：本行免费额最大值">托运'+he(String(Math.max(...k)))+'kg</span>':'';})():'',(f.plane||f.planeSize)?'<span class="nw nw-keep" title="'+(f.plane?'机型'+he(f.plane)+(f.plane2?'｜二段机型'+he(f.plane2):'')+'｜':'')+'数据源：渠道连廊率/机龄">'+srxPlaneIcon(f.plane||f.planeSize)+he(f.plane||f.planeSize)+(f.planeSize2?'·二段'+he(f.planeSize2):'')+(f.bridgeRate!=null?'·廊桥'+he(String(f.bridgeRate))+'%':'')+(f.planeAge?'·机龄'+he(String(f.planeAge))+'年':'')+'</span>':'',f.codeShare?'<span title="共享航班：实际承运航司可能与票面不同">共享航班</span>':'',f.shareCarrier?'共享·'+he(f.shareAirline?f.shareAirline+f.shareCarrier:f.shareCarrier):(f.shareAirline?'承运·'+he(f.shareAirline):''),f.fewTicket?he(f.fewTicket):'',(f.leftTickets>0&&f.leftTickets<10)?'余'+he(String(f.leftTickets))+'张':'',(f.depTerminal||f.arrTerminal||f.depAirport||f.arrAirport)?'<span class="nw">'+he(((_ttc(f.depAirport,f.depTerminal,f.depAirportCode))&&(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode))&&_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)!==_ttc(f.depAirport,f.depTerminal,f.depAirportCode))?(_ttc(f.depAirport,f.depTerminal,f.depAirportCode)+'→'+_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)):(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)||_ttc(f.depAirport,f.depTerminal,f.depAirportCode)))+'</span>':'',f.transTerminal?'<span class="nw">换乘·'+he(f.transTerminal)+(f.transDepTerminal?'（'+he((f.transDepTerminal.match(/T\d+/)||[''])[0])+'出）':'')+'</span>':'',f.transferTax!=null?'<span title="飞猪列表价为不含机建燃油的裸价，出行总成本需另加此项">+机建燃油￥'+he(String(f.transferTax))+'</span>':'',f.ptripNote?he(f.ptripNote):'',_ad_txt(f.avgDelay),f.airlineTransfer?he(f.airlineTransfer):''].filter(Boolean).join(' ｜ ')}</div>`:''}${tgCap(f,k)}${f.view?`<a class="vw" href="${he(f.view)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="在${he(f.plat||'去哪儿')}查看该航线">↗</a>`:''}${f.route?`<span class="stl nw"> <span style="display:inline-block">${he(f.route)}</span><span class="tj" role="button" tabindex="0" title="查看该航线价格走势" data-r="${he(f.route)}" data-d="${he(f.date||'')}" onclick="event.stopPropagation();jumpRowTrend(this.dataset.r,this.dataset.d)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();jumpRowTrend(this.dataset.r,this.dataset.d)}"> <svg class="gly" aria-hidden="true"><use href="#i-chart"></use></svg></span></span>`:''}</td><td>${f.depTime?he(f.depTime):'—'}</td>`+
+  `<td${((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null)||(f.childPrice!=null||f.infantPrice!=null)||f.distance!=null||(f.nearby&&f.nearby.length)||(f.trendRound&&f.trendRound.length))?` title="${he((f.labels||'').split('·').join(' · '))+(f.labels&&f.labelNote?'｜':'')+he(f.labelNote||'')+((f.labels||f.labelNote)&&f.baggage?'｜':'')+(f.baggage?he(f.baggage):'')+((f.labels||f.labelNote||f.baggage)&&f.carryon?'｜':'')+(f.carryon?he(f.carryon):'')+((f.labels||f.labelNote||f.baggage||f.carryon)&&f.bizPrice!=null?'｜':'')+(f.bizPrice!=null?he(f.bizCabin||'公务')+'￥'+he(String(f.bizPrice)):'')+((f.childPrice!=null||f.infantPrice!=null)?(((f.labels||f.labelNote||f.bizPrice!=null||f.baggage||f.carryon)?'｜':'')+(f.childPrice!=null?'儿童价￥'+he(String(f.childPrice)):'')+((f.childPrice!=null&&f.infantPrice!=null)?'｜':'')+(f.infantPrice!=null?'婴儿价￥'+he(String(f.infantPrice)):'')):'')+(f.distance!=null?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null)?'｜':'')+'航程'+he(String(f.distance))+'km':'')+(f.nearby&&f.nearby.length?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null||f.distance!=null)?'｜':'')+he(_nb_txt(f)):'')+(f.trendRound&&f.trendRound.length?((f.labels||f.labelNote||f.baggage||f.carryon||f.bizPrice!=null||f.childPrice!=null||f.infantPrice!=null||f.distance!=null||(f.nearby&&f.nearby.length))?'｜':'')+he(_rt_txt(f)):'')}"`:''}><div class="mmeta">${f.intl?'<span class="tag t-i" title="国际航线：价格为含税总价">国际</span>':''}${f.cal?'<span class="tag t-c" title="日历价：渠道日历最低含税价（非具体航班，时刻/航班号/航司不适用）">日历</span>':`<span class="tag ${f.transfer?'t-t':'t-d'}"${(f.transfer&&f.transferService)?` title="中转服务：${he(f.transferService)}"`:''}>${f.transfer?'中转':'直飞'}</span>`}<span class="mdat">${f.date?he(dSlash(f.date)):'—'}</span>${f.cross?`<span class="mdat">次日</span>`:''}<span class="mdat">${he(durTxt(f.dur)||'—')}</span>${f.trans?`<span class="mdat">经${he(f.trans)}${f.layoverT?' · 衔接'+he(f.layoverT):''}</span>`:''}${f.stale?`<span class="mdat stale" title="该渠道当轮无数据，展示 ${he(String(f.stale))}h 前补位价；不参与达标与同班比价">补位${he(String(f.stale))}h</span>`:''}<span class="mplat">${srxPlatIcon(srxPlatKey(f.platKey||f.plat))}${he(f.plat||'')}</span>${(f.entryPath||(f.prov&&f.prov.entryPath))?'<span class="srx-entry" title="本次真实请求入口（PC/H5/API；路径级证据）">入口 '+he(f.entryPath||f.prov.entryPath)+'</span>':''}</div><span class="xind" aria-hidden="true"></span>${srxAirIcon(f.code)}${he(f.name)}${f.stop?`<span class="stoptag">经停${he(f.stopCity||'')}${f.stopTimeT?` 停${he(f.stopTimeT)}`:''}${f.stopWin?`(${he(f.stopWin)})`:''}</span>`:''}${f.bagState==='direct'?'<span class="bagtag">直挂</span>':(f.bagState==='recheck'?'<span class="stoptag" title="渠道标注行李需重新托运（中转不直挂）">需转运</span>':'')}${f.lcc?'<span class="stoptag" title="廉价航空：中转常需重新值机、行李托运受限">廉航</span>':''}${(f.cabinT||f.prate||f.meal||f.shareCarrier||f.codeShare||f.fewTicket||f.depTerminal||f.arrTerminal||f.depAirport||f.arrAirport||f.planeSize||f.ptripNote||f.airlineTransfer||f.avgDelay!=null||f.transTerminal||f.transDepTerminal||f.transferTax!=null||(f.leftTickets>0&&f.leftTickets<10)||f.intl)?`<div class="stl" style="margin-top:3px">${[((f.cabinT||f.cabinCode)?_cchip(f):''),f.intl?`<span title="国际行价格为含税总价口径，此为其中税费构成部分">含税${f.tax!=null?'￥'+he(String(f.tax)):''}</span>`:'',f.cabinCode?'<span title="舱位代码'+(f.seatTilt!=null?'｜座椅倾斜'+f.seatTilt+'°':'')+'">'+he(f.cabinCode)+'</span>':'',f.prate?'准点'+he(String(f.prate))+'%'+(f.cancelRate!=null?'·取消'+he(String(f.cancelRate))+'%':''):'',f.meal?he(f.meal):'',(FLT&&FLT.bagkg&&f.baggage)?(function(){const k=_bagKgs(f);return k.length?'<span class="nw" title="托运≥'+FLT.bagkg+'kg 筛选命中：本行免费额最大值">托运'+he(String(Math.max(...k)))+'kg</span>':'';})():'',(f.plane||f.planeSize)?'<span class="nw nw-keep" title="'+(f.plane?'机型'+he(f.plane)+(f.plane2?'｜二段机型'+he(f.plane2):'')+'｜':'')+'数据源：渠道连廊率/机龄">'+srxPlaneIcon(f.plane||f.planeSize)+he(f.plane||f.planeSize)+(f.planeSize2?'·二段'+he(f.planeSize2):'')+(f.bridgeRate!=null?'·廊桥'+he(String(f.bridgeRate))+'%':'')+(f.planeAge?'·机龄'+he(String(f.planeAge))+'年':'')+'</span>':'',f.codeShare?'<span title="共享航班：实际承运航司可能与票面不同">共享航班</span>':'',f.shareCarrier?'共享·'+he(f.shareAirline?f.shareAirline+f.shareCarrier:f.shareCarrier):(f.shareAirline?'承运·'+he(f.shareAirline):''),f.fewTicket?he(f.fewTicket):'',(f.leftTickets>0&&f.leftTickets<10)?'余'+he(String(f.leftTickets))+'张':'',(f.depTerminal||f.arrTerminal||f.depAirport||f.arrAirport)?'<span class="nw">'+he(((_ttc(f.depAirport,f.depTerminal,f.depAirportCode))&&(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode))&&_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)!==_ttc(f.depAirport,f.depTerminal,f.depAirportCode))?(_ttc(f.depAirport,f.depTerminal,f.depAirportCode)+'→'+_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)):(_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)||_ttc(f.depAirport,f.depTerminal,f.depAirportCode)))+'</span>':'',f.transTerminal?'<span class="nw">换乘·'+he(f.transTerminal)+(f.transDepTerminal?'（'+he((f.transDepTerminal.match(/T\d+/)||[''])[0])+'出）':'')+'</span>':'',f.transferTax!=null?'<span title="飞猪列表价为不含机建燃油的裸价，出行总成本需另加此项">+机建燃油￥'+he(String(f.transferTax))+'</span>':'',f.ptripNote?he(f.ptripNote):'',_ad_txt(f.avgDelay),f.airlineTransfer?he(f.airlineTransfer):''].filter(Boolean).join(' ｜ ')}</div>`:''}${tgCap(f,k)}${f.view?`<a class="vw" href="${he(f.view)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="在${he(f.plat||'去哪儿')}查看该航线">↗</a>`:''}${f.route?`<span class="stl nw"> <span style="display:inline-block">${he(f.route)}</span><span class="tj" role="button" tabindex="0" title="查看该航线价格走势" data-r="${he(f.route)}" data-d="${he(f.date||'')}" onclick="event.stopPropagation();jumpRowTrend(this.dataset.r,this.dataset.d)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();jumpRowTrend(this.dataset.r,this.dataset.d)}"> <svg class="gly" aria-hidden="true"><use href="#i-chart"></use></svg></span></span>`:''}</td><td>${f.depTime?he(f.depTime):'—'}</td>`+
   `<td>${f.arrTime?he(f.arrTime):'—'}${f.cross?`<span class="stl xday" title="次日到达">${he(String(f.cross).replace(/\s*天/g,'').trim())}</span>`:''}</td>`+
   `<td>${he(durTxt(f.dur))||'—'}</td><td>${f.trans?he(f.trans):'—'}${(f.lay2dep||f.transGoDate)?`<div class="stl">二段 ${he([f.transGoDate&&dSlash(f.transGoDate),f.lay2dep].filter(Boolean).join(' '))} 起飞</div>`:''}${f.layoverT?`<div class="${f.layMin>0?('stl lay nw'+((+f.layoverM||0)>=f.layMin?' ok':'')):'stl nw'}"${f.layMin>0?' title="航线衔接下限 '+f.layMin+' 分钟"':''}>停${he(f.layoverT)}</div>`:''}</td>`+
   `<td data-plat="${srxPlatKey(f.platKey||f.plat)}">${srxPlatIcon(srxPlatKey(f.platKey||f.plat))}${he(f.plat)}${f.stale?`<span class="stl">·补位${he(f.stale)}h</span>`:''}</td></tr>`+
@@ -8348,7 +8790,21 @@ function _jumpTableBottom(){
  else tw.scrollTop=tw.scrollHeight;
  const rows=tw.querySelectorAll('tbody tr[data-k]');
  if(rows.length)rows[rows.length-1].focus();}
- async function toggleWatchOnly(btn){
+ /* 关注筛选用完整航班身份（flightKey 已含日期/机场/号/中转/跨天），
+   再加舱位；旧键 code|from|to|date 会把同号不同舱位/不同中转结构
+   混为一体，也会让停用/过期关注继续命中。 */
+function _watchKeysOf(ws){
+ const all=new Set(),ch=new Set();
+ (ws||[]).forEach(w=>{
+  if(w.active===false||w.inScope===false||srxWatchExpired(w))return;
+  const fk=String(w.flightKey||'');if(!fk)return;
+  const base=fk+'|'+String(w.cabin||'');
+  all.add(base);
+  (w.channels||[]).forEach(p=>ch.add(base+'|'+String(p)));
+ });
+ return {all,ch};
+}
+async function toggleWatchOnly(btn){
  const u=S&&S.users&&S.users[U];if(!u)return;
  if(WATCH_ONLY){WATCH_ONLY=false;WATCH_KEYS=null;
   if(btn){btn.textContent='只看关注';btn.setAttribute('aria-pressed','false')}
@@ -8357,12 +8813,11 @@ function _jumpTableBottom(){
  try{
   const r=await fetch('/api/srx/watch?user='+encodeURIComponent(u.name),{cache:'no-store'});
   const j=await r.json();if(!j||!j.ok)throw new Error((j&&j.err)||'关注清单读取失败');
-  WATCH_KEYS=new Set((j.watches||[]).map(w=>String(w.code||'').toUpperCase()+'|'
-   +(w.from||'')+'|'+(w.to||'')+'|'+(w.date||'')));
+  WATCH_KEYS=_watchKeysOf(j.watches||[]);
   WATCH_ONLY=true;
   if(btn){btn.textContent='取消关注筛选';btn.setAttribute('aria-pressed','true')}
   table();
-  if(!WATCH_KEYS.size)toast('当前用户还没有关注航班；可在用户卡 D 区添加','');
+  if(!WATCH_KEYS.all.size)toast('当前用户还没有有效关注航班；停用/过期关注不参与筛选','');
  }catch(e){toast('关注筛选失败：'+(e.message||e),'err')}
  finally{if(btn)btn.disabled=false}
 }
@@ -8390,7 +8845,23 @@ function table(){if(!S||!S.users.length)return;/* 状态未到不渲染（render
     必然有一档说谎；统一以控件名指路。抽屉已展开时不再叫用户去
     「展开抽屉」——按当前真实开合态给下一步 */
  const _fOpen=!!(document.querySelector('.fbar')&&document.querySelector('.fbar').classList.contains('open'));
- if(!rows.length) h+='<tr class="erow"><td colspan="9">'+(u.flights.length?(_fOpen?'当前筛选无匹配——放宽上方条件，或点 ':'没有符合条件的航班——点「筛选」展开抽屉放宽条件，或点 ')+'<button class="btn2" style="margin:0 6px;vertical-align:middle" onclick="resetFltUI()">重置筛选与排序</button> 恢复全部 '+u.flights.length+' 班':'本轮尚无采集数据——完成一轮扫描后，这里会出现航班明细（可先到「配置」核对航线与日期）')+'</td></tr>';
+ if(!rows.length){
+  /* 空态分型：尚未采集 / 所选日期无数据 / 所选渠道无数据 / 只看关注
+     未命中 / 普通筛选无匹配——五种原因给不同下一步，不能一句
+     「没有符合条件的航班」把所有情况混在一起。 */
+  let _why='';
+  if(!u.flights.length)_why='本轮尚无采集数据——完成一轮扫描后，这里会出现航班明细（可先到「配置」核对航线与日期）';
+  else if(WATCH_ONLY)_why='当前「只看关注」未命中本用户有效关注（停用/过期/超出航线条件的关注不参与）——放宽或关闭关注筛选，或到配置页补充关注航班';
+  else if(FLT.dates.size)_why='所选日期没有采集行——放宽日期筛选，或到配置页补充该日期的监控';
+  else if(FLT.plats.size)_why='所选渠道没有数据——换选其他渠道或恢复全部渠道';
+  else {
+   const _act=_fltFlags().concat(FLT.q?['关键词「'+FLT.q+'」']:[]).join(' · ');
+   _why=(_fOpen?'当前筛选无匹配':'没有符合条件的航班')+(_act?'（生效：'+_act+'）':'')
+    +'——'+(_fOpen?'放宽上方条件':'点「筛选」展开抽屉放宽条件')
+    +'，或点重置筛选恢复全部 '+u.flights.length+' 班';
+  }
+  h+='<tr class="erow"><td colspan="9">'+_why+(u.flights.length?' <button class="btn2" style="margin:0 6px;vertical-align:middle" onclick="resetFltUI()">重置筛选与排序</button> 恢复全部 '+u.flights.length+' 班':'')+'</td></tr>';
+ }
  /* 同 render()：重建前快照 data-k（th=排序键 / tr=fp 行键），重建后回焦 */
   const fae=document.activeElement,fk=fae&&fae.getAttribute?fae.getAttribute('data-k'):null;
   $('ftable').innerHTML=h+'</tbody>';
@@ -8455,7 +8926,19 @@ function loadTrend(u){
  fetch('/api/trend?from='+encodeURIComponent(CR.r.from||'')
   +'&to='+encodeURIComponent(CR.r.to||'')
   +'&date='+encodeURIComponent(CR.r.date||'')
-  +'&days='+days+'&th='+(CR.r.th&&CR.r.th.direct||0),{signal:_ac.signal})
+  +'&days='+days+'&th='+(CR.r.th&&CR.r.th.direct||0)
+  /* 长窗也带航线条件：短窗/列表已剔除的直飞/航司/时段/价格/渠道，
+     长窗不能画出另一套结论。 */
+  +'&rdirect='+(CR.r.direct_only?1:0)
+  +'&rnostop='+(CR.r.exclude_stop?1:0)
+  +'&rnocross='+(CR.r.no_cross?1:0)
+  +'&rairlines='+encodeURIComponent(CR.r.airlines||'')
+  +'&rdepmin='+encodeURIComponent(CR.r.dep_time_min||'')
+  +'&rdepmax='+encodeURIComponent(CR.r.dep_time_max||'')
+  +'&rarrmin='+encodeURIComponent(CR.r.arr_time_min||'')
+  +'&rarrmax='+encodeURIComponent(CR.r.arr_time_max||'')
+  +'&rpmax='+encodeURIComponent(CR.r.price_max||0)
+  +'&rchannels='+encodeURIComponent((CR.r.channels||[]).join(',')),{signal:_ac.signal})
   .then(r=>r.json()).then(j=>{
    clearTimeout(_to);
    delete _tlBusy[key];   /* 先清标记再弃包：快切档位弃响应不得留死锁标记 */
@@ -8465,7 +8948,8 @@ function loadTrend(u){
       且 cache-hit 焊死自愈通道——失败不写缓存=切档或数据轮重渲自然
       重试，与网络级失败同一落点 */
    if(!j||!j.ok)throw 0;
-   st.long[key]={direct:j.direct||[],transfer:j.transfer||[],basis:j.basis||''};
+   st.long[key]={direct:j.direct||[],transfer:j.transfer||[],basis:j.basis||'',
+    filtered:!!j.filtered,note:j.note||''};
    const cr2=curRoute();
    if(TREND_LONG[cr2.range]&&cr2.r.label===CR.r.label)chart();})
   .catch(()=>{clearTimeout(_to);delete _tlBusy[key];
@@ -8705,7 +9189,9 @@ function togChart(i){if(!S||!S.users.length)return;
  function monWatchCard(w,tr,deferred){
   const expired=srxWatchExpired(w);
   const on=w.active!==false&&w.inScope&&!expired,st=w.active===false?'暂停':(expired?'已过期':(w.inScope?'监控':'范围外'));
-  const cur=tr&&tr.current?Number(tr.current.price):null,tgt=w.target==null?null:Number(w.target);
+  /* 概览卡与关注台/推送/告警同口径：达标看 eff（含税垫/可信口径），
+     列表裸价只作展示辅助，避免「卡上未达标、钉钉却推送」。 */
+  const cur=tr&&tr.current?Number(tr.current.eff==null?tr.current.price:tr.current.eff):null,tgt=w.target==null?null:Number(w.target);
   /* 概览卡与关注台/推送同口径：>6h 的端点价只展示，不再判达标 */
   const curAt=tr&&tr.current&&(tr.current.at||tr.current.fetchedAt||'');
   const ageH=curAt?((Date.now()-Date.parse(String(curAt).replace(' ','T')))/36e5):null;
@@ -8733,7 +9219,9 @@ function togChart(i){if(!S||!S.users.length)return;
   return '<article class="monwatch'+(on?'':' paused')+(w.inScope?'':' out')+(hit?' hit':'')+'" data-monwid="'+he(w.id)+'">'
    +'<div class="monwatch-h"><div class="monwatch-id"><div class="monwatch-code">'+(srxAirIcon(w.code)||'')+'<b>'+he(w.code||'—')+'</b></div><span title="'+he(_idtxt)+'">'+he(_idtxt)+'</span></div>'
    +'<span class="monwatch-state '+(on?'on':(w.inScope?'':'out'))+'" title="'+he(w.inScope?'':(w.scopeReason||'航班日期已过或不在当前扫描范围'))+'"><i></i>'+st+'</span></div>'
-   +'<div class="monwatch-main"><span class="mk">当前最低'+(tr&&tr.days?' · 近 '+he(tr.days)+' 天':'')+'</span><b>'+(cur!=null?'¥'+he(cur):'—')+'</b><span class="'+(hit?'ok':(near?'warn':''))+'">'+he(diff)+'</span></div>'
+   +'<div class="monwatch-main">'+sectorStripHTML({from:w.from,to:w.to,price:cur,target:tgt,
+      status:st,cls:hit?'hit':'',title:diff})+'</div>'
+   +'<div class="monwatch-diff '+(hit?'ok':(near?'warn':''))+'">'+he(diff)+'</div>'
    +'<div class="monwatch-svg">'+trend+'</div>'
    +'<div class="monwatch-foot"><span class="monwatch-chs">'+chIcons+'</span><span>'+coverage+'/'+he((w.channels||[]).length)+' 渠道有价 · '+(tr&&tr.current?he(srxWatchAgo(tr.current.at)):'—')+'</span><span class="sp"></span><button type="button" data-monwatchstudio="'+he(w.id)+'">监控台</button><button type="button" data-monwatch30="'+he(w.id)+'">'+(tr&&tr.days===30?'7 天走势':'30 天走势')+'</button><button type="button" data-monwatchlocate="'+he(w.id)+'">在检索台查看</button></div></article>';
  }
@@ -8751,7 +9239,7 @@ function togChart(i){if(!S||!S.users.length)return;
    if(!j||!j.ok)throw new Error((j&&j.err)||'关注接口无返回');
    const ws=j.watches||[];window._monWatches=ws;
    const _wtab=$('wsTabN');
-   if(_wtab){_wtab.textContent=ws.length?String(ws.length):'';_wtab.style.display=ws.length?'inline':'none';
+   if(_wtab){_wtab.textContent=ws.length?(' · '+ws.length):'';_wtab.style.display=ws.length?'inline':'none';
     _wtab.style.color=ws.some(w=>{const q=wsQuote(w),t=wsTargetInfo(w,q);return t.state==='hit'})?'var(--green)':''}
    if(meta)meta.textContent=ws.length+' 个关注 · '+ws.filter(w=>w.active!==false&&w.inScope).length+' 个监控中';
    if(!ws.length){monWatchRenderView();return}
@@ -8776,10 +9264,17 @@ function monWatchStudio(id){
  const w=(window._monWatches||[]).find(x=>x.id===id);if(!w){toast('关注对象尚未加载','err');return}
  const i=(S&&S.users||[]).findIndex(x=>x.name===MON_WATCH_USER);if(i>=0){U=i;try{saveUI()}catch(e){}}
  WS.preview=null;WS.focus=id;WS.route=wsRouteKey(w);
+ /* 从概览卡带入：保留卡上的时间范围；清掉不适用于新关注对象的名册
+    筛选，否则焦点航班被旧航司/状态筛选排除，图表与焦点不一致。 */
+ const _tr=(window._monTrends||{})[id];
+ if(_tr&&[2,7,30,90,180].indexOf(_tr.days)>=0)WS.range=_tr.days;
+ WS.q='';WS.status='';WS.target='';WS.airline='';WS.direct='';WS.channel='';
+ WS.cabin='';WS.time='';WS.pmin='';WS.pmax='';
+ try{localStorage.setItem('jpwsrange',String(WS.range))}catch(e){}
  switchView('mon');showMonTab('watch');
  let n=0;
  (function waitFocus(){
-  if(wsWatchById(id)){wsSetFocus(id);toast('已在关注航班台定位','ok');return}
+  if(wsWatchById(id)){wsSetFocus(id);document.querySelectorAll('#wsRanges button').forEach(b=>b.classList.toggle('on',+b.dataset.wsrange===WS.range));toast('已在关注航班台定位','ok');return}
   if(n++>30){toast('关注台尚未载入，请稍后再试','err');return}
   setTimeout(waitFocus,150);})();
 }
@@ -9290,12 +9785,23 @@ function wsRenderLegend(){
   return '<button type="button" class="ws-lg'+(on?' on':'')+'" data-wsfocus="'+he(w.id)+'" aria-pressed="'+(on?'true':'false')+'" title="'+he((w.code||'')+' · '+ti.text)+'">'+srxAirIcon(w.code)+'<i style="background:'+wsColor(i)+'"></i><b>'+he(w.code||'—')+'</b><span>'+(q?wsMoney(q.price):'—')+'</span><em>目标 '+(w.target==null?'未设':wsMoney(w.target))+'</em><span class="'+(ti.state==='hit'?'ok':'')+'">'+he(ti.state==='hit'?'达标':(ti.state==='near'?'接近':''))+'</span></button>'
  }).join('');
 }
+function sectorStripHTML(o){
+ const a=he(o.from||'—'),b=he(o.to||'—');
+ const p=o.price==null?'—':'¥'+he(String(o.price));
+ const t=o.target==null?null:Number(o.target);
+ const noT=!(t>0);
+ return '<div class="sector-strip '+(o.cls||'')+(noT?' no-target':'')+'" title="'+he(o.title||('目标 '+(t==null?'未设':'¥'+t)))+'">'
+  +'<span class="ss-route">'+a+' <span style="color:var(--r-ink-3)">→</span> '+b+'</span>'
+  +'<span class="ss-rail">'+(noT?'':'<i class="ss-notch" style="left:50%"></i>')+'</span>'
+  +'<span class="ss-price">'+p+'</span><span class="ss-state">'+he(o.status||'')+'</span></div>';
+}
 function wsRunway(w,q,ti){
- if(ti.target==null)return '<div class="ws-runway none"><b>仅观察 · 未设目标价</b></div>';
- if(!q)return '<div class="ws-runway none"><b>等待真实行</b></div>';
- const cur=Number(q.price),t=ti.target,max=Math.max(cur,t)*1.02;
- const pct=Math.max(3,Math.min(100,cur/max*100)),mark=Math.max(1,Math.min(99,t/max*100));
- return '<div class="ws-runway '+(ti.state==='hit'?'hit':(ti.state==='near'?'near':''))+'" title="'+he('当前 '+wsMoney(cur)+' · 目标 '+wsMoney(t))+'"><i style="width:'+pct.toFixed(1)+'%"></i><em style="left:'+mark.toFixed(1)+'%"></em><b>当前 '+wsMoney(cur)+' · 目标 '+wsMoney(t)+'</b></div>';
+ const cur=q?Number(q.price):null;
+ return sectorStripHTML({
+  from:w.from,to:w.to,price:cur,target:ti.target,
+  status:ti.target==null?'仅观察':(!q?'等待真实行':(ti.state==='hit'?'达标':(ti.state==='near'?'接近':'未达标'))),
+  cls:ti.state==='hit'?'hit':'',
+  title:'当前 '+(cur==null?'—':wsMoney(cur))+' · 目标 '+(ti.target==null?'未设':wsMoney(ti.target))});
 }
 function wsChannelStrip(w){
  const tr=WS.trends[w.id]||{},lat=tr.latest||{};
@@ -9700,12 +10206,14 @@ function chart(){if(!S||!S.users.length)return;/* 状态未到不画（render �
     没守卫。空态分支清备忘同拍 */
  const _rn=$('ringNote'),_rh=CR.mode==='kline'
   ?((thD||thT)?'环标：●标在真达标轮自身价 · ○标在桶最低价；<span style="color:var(--green)">●</span>真达标（与明细达标标记同口径）· <span style="color:var(--green)">○</span>行情破线未达标 · <span style="color:var(--warn)">○</span>擦边 · <span style="color:var(--red)">▼</span>达标回落<br>':'')
-   +(TREND_LONG[CR.range]?(_basis==='price_daily_calendar'?'日K=行情池当日最低价（含日历价 · 开/收=当日首末价）':'日K=真实航班当日最低价（不含日历价 · 开/收=当日首末价）'):'K线=轮最低价分桶（开/收=桶内首末轮）')
+   +(TREND_LONG[CR.range]?(_basis==='price_daily_calendar'?'日K=行情池当日最低价（含日历价 · 开/收=当日首末价）':'日K=真实航班当日最低价（不含日历价 · 开/收=当日首末价）')+(H0.filtered?' · 已按航线条件过滤':''):'K线=轮最低价分桶（开/收=桶内首末轮）')
    +(CD.length&&CT.length?'；左簇=直飞 · 右簇=中转':'')
    +'；<span style="color:var(--green)">绿桶</span>=桶内回落（与达标绿无关）'
-  :[_rw,(hd.length&&ht.length)?(TREND_LONG[CR.range]&&_basis==='price_daily_calendar'?'两线均为行情池最低（含日历价） · 中转不限直挂':'两线均为真实航班日桶最低（不含日历价） · 中转不限直挂'):'',
+   +(H0.note?'；'+H0.note:'')
+  :[_rw,(hd.length&&ht.length)?(TREND_LONG[CR.range]&&_basis==='price_daily_calendar'?'两线均为行情池最低（含日历价） · 中转不限直挂':'两线均为真实航班日桶最低（不含日历价） · 中转不限直挂')+(H0.filtered?' · 已按航线条件过滤':''):'',
      (hd.length>0&&hd.length<3)?'直飞样本少仅列点不成线':'',
-     (ht.length>0&&ht.length<3)?'中转样本少仅列点不成线':''
+     (ht.length>0&&ht.length<3)?'中转样本少仅列点不成线':'',
+     (!hd.length&&!ht.length&&H0.note)?H0.note:''
     ].filter(Boolean).join('；');
  /* 长窗覆盖说明：桶序列先于档位窗止时注明起点（长窗上线初期/新
     航线，档位天数>覆盖天数，无注会让读者把覆盖期当完整窗）；
@@ -10348,7 +10856,7 @@ function armConfirm(el,fn,opts){if(!el&&!opts)return;   /* 空锚静默 */
   o.message||'此操作在保存配置后生效；保存前可通过「放弃更改」撤回。',
   o.label||'确认删除',fn,el||null);}
 /* ===== 渠道健康时间线：/api/health（monitor.log 解析，与状态同拍刷新） ===== */
-let HL=null;
+let HL=null,HL_ETAG='';
 /* Current authentication is independent of quote ETags and historical health. */
 var CHANNEL_STATE=CHANNEL_STATE||{payload:null,error:'',request:0,at:0,pending:null};
 function srxToggleScNote(btn){
@@ -10415,13 +10923,53 @@ function renderHealthLoginAction(){
   ha.title='当前认证需要处理：'+need.map(p=>(typeof LOGIN_CN!=='undefined'&&LOGIN_CN[p])||p).join('、')+'；历史健康记录保留原状';}
 }
 async function srcAccessState(force){return loadChannelState(!!force);}
-async function health(){srcAccessState(false);try{const r=await fetch('/api/health');
- const t=await r.text();if(t===HL)return;HL=t;renderHealth(JSON.parse(t));}
- catch(e){/* 错误态落点（_markStale 家族）：健康 tab 整区纯空白=零
+async function health(){srcAccessState(false);try{const r=await fetch('/api/health',{headers:HL_ETAG?{'If-None-Match':HL_ETAG}:{}});
+ if(r.status===304)return;
+ const _et=r.headers.get('ETag');
+ const t=await r.text();
+ let _j=null;try{_j=JSON.parse(t)}catch(_e){HL_ETAG='';throw _e}
+ /* 错误体不是可缓存的新鲜健康态：保留旧 ETag 会让恢复拍携带它，
+   服务端回 304 后错误态永远退不出去。 */
+ if(_j&&_j.err){HL_ETAG='';}else if(_et){HL_ETAG=_et;}
+ if(t===HL)return;HL=t;renderHealth(_j);}
+ catch(e){HL_ETAG='';/* 失败拍作废内容校验：否则恢复拍仍带旧 ETag，服务端回 304 后错误态永不退出 */
+  /* 错误态落点（_markStale 家族）：健康 tab 整区纯空白=零
    引导；healthcard 可见=已有真实时间线，保陈旧不闪错，恢复轮重写自愈 */
   const _he=$('healthEmpty');
   if(_he&&$('healthcard').style.display==='none'){_he.style.display='';
    _he.innerHTML='⚠ 健康数据读取失败（详见服务日志）';}}}
+function renderHealthDiag(){
+ const box=$('healthDiagBody');if(!box)return;
+ let j=null;try{j=HL?JSON.parse(HL):null}catch(e){}
+ if(!j||!j.diag||!j.diag.length){
+  box.innerHTML='<span class="muted">诊断数据未到（不猜测；等下一轮健康数据）</span>';return;
+ }
+ const meta=$('healthDiagMeta');
+ if(meta)meta.textContent='最近一轮 '+(j.diag_at||'—')+' · 按轮次/Cookie 证据分型';
+ const cn={available:'明细成功',login_required:'需重新登录',pending:'保存待验证',saved:'已保存待验证',stale:'Cookie 已过期',page_ok:'页面可访问待明细',challenge:'需验证',missing:'未保存'};
+ const ck={expired:'已过期',missing:'无本地会话',unverified:'待验证'};
+ const st={ok:'成功',part:'部分成功',fail:'失败',maint:'维护',empty:'空结果',none:'无本轮记录'};
+ box.innerHTML=j.diag.map(c=>{
+  const lg=cn[c.login]||c.login||'登录状态未读取';
+  const cv=ck[c.cookie]||c.cookie||'未检查';
+  const btn=(c.kind==='login'||c.kind==='captcha')
+   ?'<button type="button" class="btn2" style="height:24px;padding:0 8px;font-size:11px" data-diaglogin="'+he(c.plat)+'" onclick="srxGoLogin(this.dataset.diaglogin)">打开登录</button>':'';
+  const self='<button type="button" class="btn2" style="height:24px;padding:0 8px;font-size:11px" data-diagself="'+he(c.plat)+'" onclick="diagSelfcheck(this.dataset.diagself)">自检</button>';
+  return '<div class="hdiag-card '+he(c.kind)+'"><div class="hdiag-h">'+srxPlatIcon(c.plat)+'<b>'+he(c.name)+'</b><span class="hdiag-st">'+he(c.label)+'</span></div>'
+   +'<div class="hdiag-l"><span>登录 <b>'+he(lg)+'</b></span><span>Cookie <b>'+he(cv)+'</b></span><span>最近轮次 <b>'+he(st[c.s]||c.s||'—')+'</b></span></div>'
+   +'<div class="hdiag-a">'+he(c.action)+'</div>'
+   +(c.evidence?'<div class="hdiag-e" title="'+he(c.evidence)+'">证据：'+he(c.evidence)+'</div>':'')
+   +'<div style="display:flex;gap:6px;flex-wrap:wrap">'+btn+self+'</div></div>';
+ }).join('');
+}
+async function diagSelfcheck(p){
+ const u=(S&&S.users||[])[U];
+ try{
+  const r=await fetch('/api/channel/selfcheck',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plat:p,user:u?u.name:''})});
+  const j=await r.json();if(!j.ok)throw new Error(j.err||('HTTP '+r.status));
+  toast('自检：'+j.card.label+' · '+j.card.action,'ok');renderHealthDiag();
+ }catch(e){toast('自检失败：'+(e&&e.message||e),'err')}
+}
 function renderHealth(j){
  /* 已有时间线时错误体保陈旧（与 catch 分支「healthcard 可见=保陈旧不
     闪错」政策对齐）：瞬态 500 曾把整条格带掀成错误文案，下一轮询才自愈 */
@@ -10440,7 +10988,7 @@ function renderHealth(j){
  if(_he)_he.style.display='none';
  $('healthcard').style.display='';
  const CN={'qunar':'去哪儿','fliggy':'飞猪','ctrip':'携程','tongcheng':'同程','tuniu':'途牛'};
- const SM={'ok':'成功','part':'部分成功','fail':'失败','maint':'维护模式'};
+ const SM={'ok':'成功','part':'部分成功','fail':'失败','maint':'维护模式','empty':'空结果'};
  let h='';
  const plats=Object.keys(j.stats||{}).sort();
  for(const p of plats){const st=j.stats[p];
@@ -10479,7 +11027,7 @@ function renderHealth(j){
    +`<span class="hbadge ${cls}" title="${_title}">${_badgeTxt}</span></div>`;}
  const rc=$('hroundcnt');
  if(rc)rc.textContent=(S&&S.demo?'DEMO · 合成健康 · ':'')+'近 24h 共 ' + j.rounds.length + ' 轮 · ';
- renderHealthLoginAction();
+ renderHealthLoginAction();renderHealthDiag();
  $('hbody').innerHTML=h;
  /* 健康格在手机上滚动显示最新一轮：默认滚到右端，避免最新 15h 藏在屏外 */
  if(window.innerWidth<=760){document.querySelectorAll('#hbody .hcells').forEach(x=>{try{x.scrollLeft=x.scrollWidth}catch(e){}})}
@@ -10575,15 +11123,17 @@ async function showLog(el){let p=null,ts=null;if(el&&el.dataset){p=el.dataset.p;
   :'<div class="muted">该时间窗无日志（或已滚动出日志尾部 2MB 读取范围）</div>';
  _openPvMask();}catch(e){if(_sq===_PV_SEQ)toast('请求失败','err');}finally{if(_sq===_PV_SEQ)_PV_PENDING=false;}}
 /* ===== 运行脉冲：/api/pulse（每轮每渠道行数/耗时，签派台脉搏） ===== */
-let PU=null;
+let PU=null,PU_ETAG='';
 const PCN={'qunar':'去哪儿','fliggy':'飞猪','ctrip':'携程','tongcheng':'同程','tuniu':'途牛'};
-async function pulse(){try{const r=await fetch('/api/pulse');
- /* 空守卫先于签名记账（r324 穷举审计 F3）：state 失败拍 pulse 成功
-    时 PU 曾已记账、renderPulse 空守卫早退——state 恢复拍同文本早退，
-    pulsecard 缺席至 /api/pulse 文本变化（≈一个扫描间隔） */
- const t=await r.text();if(t===PU)return;
- if(!(S&&S.users&&S.users.length))return;
- PU=t;renderPulse(JSON.parse(t));}catch(e){}}
+async function pulse(){try{const r=await fetch('/api/pulse',{headers:PU_ETAG?{'If-None-Match':PU_ETAG}:{}});
+  if(r.status===304)return;
+  const _et=r.headers.get('ETag');if(_et)PU_ETAG=_et;
+  const t=await r.text();if(t===PU)return;
+  /* 空守卫先于签名记账：无用户不写 PU，避免 state 恢复拍同文本早退。 */
+  if(!(S&&S.users&&S.users.length))return;
+  PU=t;renderPulse(JSON.parse(t));
+ }catch(e){PU_ETAG='';/* 失败拍作废 ETag；pulse 属「有则显示」，失败保持静默不制造假等待 */}
+}
 /* pulse 失败静默论证：脉冲区属「有则显示」性质——
    失败时保持 display:none 即「无脉冲数据」的正确落点，非假等待；
    LESSONS 二十三要求每个异步终点显式论证落点，此处即论证 */
@@ -10983,7 +11533,16 @@ function spDealList(deals){
 function spRender(body,deals){if(body)body.innerHTML=spDealList(deals)}
 const SRX_RADAR={data:null,user:'',loaded:false,busy:false};
 const SRX_RADAR_NAMES={ctrip:'携程',qunar:'去哪儿',fliggy:'飞猪',tongcheng:'同程',tuniu:'途牛'};
-const SRX_RADAR_ST={ok:'可用',empty:'无日期价',error:'失败',not_connected:'未接入',unsupported:'不支持',login:'需登录',challenge:'需验证'};
+const SRX_RADAR_ST={ok:'可用',empty:'无日期价',error:'失败',not_connected:'未接入',unsupported:'不支持',login:'需登录',challenge:'需验证',partial:'部分可用',fallback:'已回退',cached:'缓存结果'};
+/* 价格口径与缓存/回退必须随价展示：榜单单裸价、日历代含税价、缓存
+   结果都不是「当前刚取到的同口径最低」。 */
+function _radarBasis(b){return (b&&(b.basis_label||b.price_basis_label))||''}
+function _radarLowNote(low){
+ return [low&&(low.lowest_basis_label||low.basis_label),low&&low.basis_mixed?'跨口径最低，仅同口径可比':'',low&&low.note].filter(Boolean).join(' · ');
+}
+function _radarSrcExtra(s){
+ return (s&&s.cache_hit?' · 缓存':(s&&s.fallback?' · 回退':''))+(s&&s.partial?' · 部分':'');
+}
 function srxRadarChips(sel){
  sel=sel||[];return Object.keys(SRX_RADAR_NAMES).map(function(p){
   return '<label class="chip" style="--pc:var(--c-'+p+');display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px">'
@@ -11024,6 +11583,284 @@ async function srxRadarLoadFromUser(force){
 function srxRadarSyncForm(){
  const m=$('spRadarMeta');if(m)m.textContent='条件已修改 · 点击「查低价」按当前条件查询';
 }
+/* ===== 特价监控：官方日历/榜单的逐日价 → 持久化走势 + 低价日真实航班 ===== */
+const SPMON_RUN_LABEL={ok:'成功',cache_hit:'缓存',fallback:'回退',partial:'部分',empty:'空结果',error:'失败',demo:'演示'};
+let SPMON={data:null,user:'',date:'',busy:false,alertCfg:null,lastAlert:null,chart:null,rt:0};
+async function spAlertLoad(){
+ const u=(S&&S.users||[])[U];if(!u||!$('spRadarAlertOn'))return;
+ try{
+  const [rc,ra]=await Promise.all([
+   fetch('/api/radar/alert-config?user='+encodeURIComponent(u.name),{cache:'no-store'}),
+   fetch('/api/radar/alerts?days=30&user='+encodeURIComponent(u.name),{cache:'no-store'})]);
+  const jc=await rc.json(),ja=await ra.json();
+  if(jc&&jc.ok){SPMON.alertCfg=jc.config||{};
+   const c=jc.config||{};
+   $('spRadarAlertOn').checked=!!c.enabled;
+   $('spRadarDrop').value=(c.drop_min==null?50:c.drop_min);
+   $('spRadarTh').value=(c.threshold==null?0:c.threshold);
+   $('spRadarCool').value=(c.cooldown_h==null?12:c.cooldown_h);
+  }
+  SPMON.lastAlert=(ja&&ja.ok&&(ja.alerts||[])[0])||null;
+  if(SPMON.data)spMonRender();
+ }catch(e){}
+}
+async function spAlertSave(){
+ const u=(S&&S.users||[])[U];if(!u){toast('请先添加用户','err');return}
+ if(S&&S.demo){toast('演示模式不保存提醒配置','err');return}
+ try{
+  const r=await fetch('/api/radar/alert-config?user='+encodeURIComponent(u.name),{
+   method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    user:u.name,enabled:!!$('spRadarAlertOn').checked,
+    drop_min:Number($('spRadarDrop').value||0),
+    threshold:Number($('spRadarTh').value||0),
+    cooldown_h:Number($('spRadarCool').value||12)})});
+  const j=await r.json();if(!j.ok)throw new Error(j.err||('HTTP '+r.status));
+  SPMON.alertCfg=j.config;toast('提醒配置已保存','ok');spAlertLoad();
+ }catch(e){toast('保存失败：'+(e&&e.message||e),'err')}
+}
+function spMonCfgText(q){
+ q=q||{};return (q.from||'未设出发')+' → '+(q.to||'全国')+' · '+(q.start||'—')+'→'+(q.end||'—');
+}
+async function spMonLoad(force){
+ const u=(S&&S.users||[])[U];if(!u)return;
+ const box=$('spMonCal');if(!box)return;
+ try{
+  const r=await fetch('/api/radar/history?user='+encodeURIComponent(u.name)+'&days=120',{cache:'no-store'});
+  const j=await r.json();if(!j||!j.ok)throw new Error((j&&j.err)||'监控记录读取失败');
+  if(!(S&&S.users||[])[U]||((S.users[U]||{}).name)!==u.name)return;
+  SPMON.data=j;SPMON.user=u.name;
+  if(!SPMON.date||!(j.dates||[]).some(d=>d.date===SPMON.date)){
+   SPMON.date=(j.lowest&&j.lowest.date)||'';
+  }
+  spMonRender();spAlertLoad();
+ }catch(e){
+  box.innerHTML='<div class="spmon-empty">监控记录读取失败：'+he(String(e&&e.message||e))+'</div>';
+ }
+}
+function spMonDeltaTxt(prev,cur){
+ if(prev==null||!isFinite(Number(prev))||!isFinite(Number(cur)))return '';
+ const d=Number(cur)-Number(prev);
+ if(d===0)return '持平';
+ return (d<0?'↓':'↑')+'¥'+Math.abs(d);
+}
+function spMonRender(){
+ const j=SPMON.data;if(!j)return;
+ const q=j.query||{},dates=j.dates||[],low=j.lowest||{},runs=j.runs||[];
+ const meta=$('spMonMeta'),cfg=$('spRadarCfgSum'),lr=j.last_run||{};
+ const _alertTxt=SPMON.alertCfg?(' · 提醒：'+(SPMON.alertCfg.enabled?'开':'关')+(SPMON.lastAlert?' · 上次 '+String(SPMON.lastAlert.sent_at||'').slice(5,16):'')):'';
+ const _runTxt=lr.status&&lr.status!=='ok'?(' · 最近运行 '+(SPMON_RUN_LABEL[lr.status]||lr.status)):'';
+ if(meta)meta.textContent=(S&&S.demo?'DEMO · 合成监控 · ':'')+spMonCfgText(q)+' · '+(j.snapshots||0)+' 次监控'+(j.last_at?' · 最近 '+j.last_at.slice(5,16):' · 尚未采集')+' · 自动每 '+he(String(j.auto_interval_h||2))+' 小时'+_alertTxt+_runTxt;
+ if(cfg)cfg.textContent=spMonCfgText(q);
+ const cal=$('spMonCal');
+ if(cal){
+  if(!dates.length){
+   cal.innerHTML='<div class="spmon-empty"><b>还没有监控记录</b><span>设置出发地/目的地与未来出发日期范围后，点击「刷新监控」；系统按官方渠道能提供的日历/榜单价记录逐日走势，并每 2 小时自动刷新。</span><button type="button" class="btn2" onclick="document.getElementById(\'spRadarCfg\').open=true;document.getElementById(\'spRadarFrom\').focus()">设置监控条件</button></div>';
+  }else{
+   const nums=dates.map(d=>Number(d.price)).filter(Number.isFinite);
+   const mn=Math.min(...nums);
+   cal.innerHTML=dates.map(d=>{
+    const prev=d.prev_price==null?null:Number(d.prev_price),cur=Number(d.price);
+    const delta=prev==null?null:cur-prev;
+    const bl=d.basis==='tax_included'?'含税':(d.basis==='bare'?'裸价':'口径未标');
+    const dt=spMonDeltaTxt(prev,cur);
+    const isLow=cur===mn;
+    return '<button type="button" class="spmon-day'+(isLow?' low':'')+(SPMON.date===d.date?' sel':'')+'" data-spmday="'+he(d.date)+'" onclick="spMonPick(\''+he(d.date)+'\')" aria-pressed="'+(SPMON.date===d.date)+'" title="'+he(d.date+' · ¥'+cur+' · '+(SRX_RADAR_NAMES[d.channel]||d.channel)+' · '+bl+(dt?' · 较上次 '+dt:''))+'">'
+     +(isLow?'<span class="lowtag">低</span>':'')
+     +'<span class="d">'+he(d.date.slice(5))+'</span>'
+     +'<b class="p">¥'+he(String(cur))+'</b>'
+     +'<span class="ch">'+srxPlatIcon(d.channel)+he(SRX_RADAR_NAMES[d.channel]||d.channel)+'</span>'
+     +'<span class="b '+(delta==null?'':(delta<0?'down':(delta>0?'up':'')))+'">'+(dt?he(dt):'首次')+'</span></button>';
+   }).join('');
+  }
+ }
+ const sel=dates.find(d=>d.date===SPMON.date)||(low&&low.date?low:null);
+ spMonLow(sel,q,(low||{}).date);
+ spMonDraw(j.date_series||[], SPMON.date, (low||{}).date);
+ const src=$('spMonSources');
+ if(src){
+  const cs=j.channels_status||{};
+  const valid=Object.keys(cs).filter(ch=>cs[ch]&&cs[ch].rows>0);
+  const missing=(q.channels||[]).filter(ch=>!cs[ch]||!cs[ch].rows);
+  const bases=new Set();
+  (j.date_series||[]).forEach(x=>(x.points||[]).forEach(p=>{if(p.basis)bases.add(p.basis)}));
+  const bl=bases.size===1?({tax_included:'含税',bare:'裸价',unknown:'口径未标'}[Array.from(bases)[0]]||Array.from(bases)[0]):(bases.size>1?'混合口径':'口径未标');
+  const basisChg=(j.date_series||[]).filter(x=>x.basis_changed).map(x=>x.date);
+  src.innerHTML='<span class="spmon-srclab">来源</span>'
+   +valid.map(p=>'<span class="spmon-srcchip">'+srxPlatIcon(p)+he(SRX_RADAR_NAMES[p]||p)+' · '+he(String(cs[p].days))+'日</span>').join('')
+   +(missing.length?'<span class="spmon-missing">未供：'+missing.map(p=>he(SRX_RADAR_NAMES[p]||p)).join('、')+'</span>':'')
+   +(basisChg.length?'<span class="spmon-missing" title="'+he(basisChg.join('、'))+'">口径变化 '+basisChg.length+' 日</span>':'')
+   +'<span class="spmon-srcnote">官方日历/榜单价只作发现 · 口径：'+he(bl)+' · 明细由真实探针采集</span>';
+ }
+ const hn=$('spMonHistN'),hb=$('spMonHistBody');
+ if(hn)hn.textContent=runs.length?(' · '+runs.length+' 次'):' · 0 次';
+ if(hb)hb.innerHTML=runs.length?('<div class="spmon-run head"><span>时间</span><span>状态</span><b>行</b><span>说明</span></div>'+runs.map(r=>{
+  const st=SPMON_RUN_LABEL[r.status]?String(r.status):'empty';
+  return '<div class="spmon-run"><time>'+he(String(r.finished_at||'').slice(5,16)||'—')+'</time>'
+   +'<span class="st '+st+'">'+he(SPMON_RUN_LABEL[r.status]||r.status||'—')+'</span>'
+   +'<b title="写入快照行数">'+he(String(r.rows==null?'—':r.rows))+'</b>'
+   +'<span class="note" title="'+he(r.note||'')+'">'+he(r.note||'')+'</span></div>';
+ }).join('')):'<div class="spmon-histempty">暂无运行记录</div>';
+ const mon=$('spRadarMonitor');if(mon)mon.classList.toggle('is-empty',!dates.length);
+ const hist=$('spMonHist');if(hist)hist.style.display=(dates.length||runs.length)?'':'none';
+ spMonCalFit();
+}
+function spMonLow(sel,q,lowDate){
+ const box=$('spMonLow');if(!box)return;
+ if(!sel){box.innerHTML='<div class="spmon-lowh">低价日与航班</div><div class="spmon-empty">暂无日期价</div>';return}
+ const isLow=!lowDate||sel.date===lowDate;
+ const bl=sel.basis==='tax_included'?'含税总价':(sel.basis==='bare'?'裸价不含税':'口径未标注');
+ const dt=spMonDeltaTxt(sel.prev_price,sel.price);
+ const ds=((SPMON.data&&SPMON.data.date_series)||[]).find(x=>x.date===sel.date);
+ box.innerHTML='<div class="spmon-lowh">'+(isLow?'低价日 · 真实航班':'选中日 · 真实航班')+'</div>'
+  +'<div class="spmon-lowdate"><b>'+he(sel.date)+'</b>'+(isLow?'<span class="lowtag">最低日</span>':'<span class="seltag">选中日 · 非最低</span>')+'</div>'
+  +'<div class="spmon-lowday">'+sectorStripHTML({from:q.from,to:sel.to||q.to,price:sel.price,
+     target:0,status:bl,cls:'low',title:'最低日 '+sel.date+' · '+(SRX_RADAR_NAMES[sel.channel]||sel.channel)})+'</div>'
+  +'<div class="spmon-lowmeta">'+(SRX_RADAR_NAMES[sel.channel]||sel.channel)+(dt?' · 较上次 '+he(dt):'')+(ds&&ds.basis_changed?' · <span class="spmon-basiswarn">口径较上次变化</span>':'')+'</div>'
+  +'<div id="spMonFlights" class="spmon-flights"><span class="muted">读取该日真实明细…</span></div>';
+ spMonFlights(sel,q);
+}
+async function spMonFlights(sel,q){
+ const box=$('spMonFlights');if(!box)return;
+ const to=sel.to||q.to||'';
+ try{
+  const r=await fetch('/api/radar/flights?from='+encodeURIComponent(q.from||'')+'&to='+encodeURIComponent(to)+'&date='+encodeURIComponent(sel.date),{cache:'no-store'});
+  const j=await r.json();if(!j||!j.ok)throw new Error((j&&j.err)||'明细读取失败');
+  if(!(j.flights||[]).length){
+   box.innerHTML='<div class="spmon-empty">该日尚无已采集的真实明细；日历价不能生成航班。</div>';
+  }else{
+   box.innerHTML=j.flights.slice(0,3).map(f=>'<div class="spmon-flight"><div class="fid">'+srxAirIcon(f.code)+' <b>'+he(f.code||'—')+'</b></div><div class="ftime">'+he(f.depTime||'—')+' → '+he(f.arrTime||'—')+(f.trans?' · 经 '+he(f.trans):'')+'</div><div class="fpr">¥'+he(String(f.price))+' <span>'+he(f.platform_cn||'')+'</span></div></div>').join('')+'<div class="spmon-note">'+he(j.note||'')+'</div>';
+  }
+ }catch(e){
+  box.innerHTML='<div class="spmon-empty">'+he(String(e&&e.message||e))+'</div>';
+ }
+ box.insertAdjacentHTML('beforeend','<button type="button" class="btn2 spmon-probe" onclick="spMonProbe(\''+he(sel.date)+'\')">查该日全部明细</button>');
+}
+function spMonCalFit(){
+ const cal=$('spMonCal');if(!cal)return;
+ cal.classList.toggle('xhint',cal.scrollWidth>cal.clientWidth+4);
+ const sel=cal.querySelector('.spmon-day.sel');
+ if(sel)try{sel.scrollIntoView({inline:'nearest',block:'nearest'})}catch(e){}
+}
+function spMonPick(date){SPMON.date=date;spMonRender();setTimeout(spMonCalFit,0);}
+function spMonDraw(dateSeries,selDate,lowDate){
+ const c=$('spMonChart'),note=$('spMonChartNote');if(!c)return;
+ const tip=$('spMonTip');if(tip)tip.hidden=true;
+ SPMON.geo=null;
+ SPMON.chart={dateSeries:dateSeries||[],selDate:selDate||'',lowDate:lowDate||''};
+ const series=(dateSeries||[]).map(x=>({
+  date:String(x.date||''),
+  pts:(x.points||[]).map(p=>({t:new Date(String(p.at).replace(' ','T')).getTime(),
+   p:Number(p.price),at:p.at,ch:p.channel,basis:p.basis})).filter(p=>isFinite(p.t)&&isFinite(p.p))
+ })).filter(x=>x.pts.length);
+ const all=series.flatMap(x=>x.pts);
+ const times=[...new Set(all.map(p=>p.t))].sort((a,b)=>a-b);
+ const dpr=window.devicePixelRatio||1,W=c.clientWidth||600,H=c.clientHeight||180;
+ c.width=Math.max(1,Math.round(W*dpr));c.height=Math.max(1,Math.round(H*dpr));
+ const ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+ const tb=$('spMonTable')&&$('spMonTable').querySelector('tbody');
+ if(tb)tb.innerHTML=series.flatMap(x=>x.pts.map(p=>{
+  const mk=x.date===lowDate?(x.date===selDate?'最低日 · 选中':'最低日'):(x.date===selDate?'选中':'');
+  return '<tr><td>'+he(String(p.at||''))+'</td><td>¥'+he(String(p.p))+'</td><td>'+he(x.date)+'</td><td>'+he(SRX_RADAR_NAMES[p.ch]||p.ch||'')+'</td><td>'+he(mk)+'</td></tr>';
+ })).join('');
+ if(times.length<2||all.length<2){
+  if(note)note.textContent='监控次数不足（'+times.length+' 次采集）· 继续积累后显示每个出发日的走势';
+  return;
+ }
+ const ps=all.map(x=>x.p);let mn=Math.min(...ps),mx=Math.max(...ps);
+ const pad=Math.max(1,(mx-mn)*0.08);mn-=pad;mx+=pad;
+ const padL=44,padR=10,padT=12,padB=22;
+ const fmtAt=t=>{const d=new Date(t);return String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+ const X=t=>padL+(t-times[0])/Math.max(1,times[times.length-1]-times[0])*(W-padL-padR);
+ const Y=p=>padT+(mx-p)/(mx-mn)*(H-padT-padB);
+ SPMON.geo={W,H,padL,padR,padT,padB,times,series,X,Y};
+ ctx.strokeStyle=cssv('--grid')||'#d7dee8';ctx.lineWidth=1;ctx.fillStyle=cssv('--mut')||'#5a6c7d';ctx.font='10px var(--num)';
+ for(let i=0;i<4;i++){const p=mx-(mx-mn)*i/3,yy=Y(p);ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(W-padR,yy);ctx.stroke();ctx.fillText('¥'+Math.round(p),4,yy+3)}
+ series.forEach(x=>{
+  const low=x.date===lowDate,sel=x.date===selDate;
+  ctx.strokeStyle=low?(cssv('--red')||'#c22a2e'):(sel?(cssv('--blue')||'#0b62d6'):'#aab4c0');
+  ctx.lineWidth=low||sel?2.4:1.2;ctx.globalAlpha=low||sel?1:.75;
+  ctx.beginPath();x.pts.forEach((p,i)=>{const xx=X(p.t),yy=Y(p.p);i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy)});ctx.stroke();
+  const last=x.pts[x.pts.length-1];
+  if(low||sel){ctx.fillStyle=low?(cssv('--red')||'#c22a2e'):(cssv('--blue')||'#0b62d6');ctx.beginPath();ctx.arc(X(last.t),Y(last.p),3.2,0,Math.PI*2);ctx.fill()}
+  ctx.globalAlpha=1;
+ });
+ ctx.fillStyle=cssv('--mut')||'#5a6c7d';ctx.fillText(fmtAt(times[0]),padL,H-6);ctx.textAlign='right';ctx.fillText(fmtAt(times[times.length-1]),W-padR,H-6);
+ const marks=[];
+ if(lowDate){const s=series.find(x=>x.date===lowDate);if(s)marks.push({s,c:cssv('--red')||'#c22a2e'})}
+ if(selDate&&selDate!==lowDate){const s=series.find(x=>x.date===selDate);if(s)marks.push({s,c:cssv('--blue')||'#0b62d6'})}
+ if(marks.length){
+  ctx.font='600 10px var(--num)';
+  let prevY=-1e9;
+  marks.map(m=>{const last=m.s.pts[m.s.pts.length-1];return{s:m.s,c:m.c,last,y:Math.max(padT+8,Y(last.p)-8)}})
+   .sort((a,b)=>a.y-b.y).forEach(m=>{
+    if(m.y<prevY+12)m.y=prevY+12;if(m.y>H-padB-2)m.y=H-padB-2;prevY=m.y;
+    const txt=m.s.date.slice(5)+' ¥'+Math.round(m.last.p),tx=W-padR-4,tw=ctx.measureText(txt).width;
+    ctx.fillStyle=cssv('--r-surface-2')||'#f6f8fb';
+    ctx.fillRect(tx-tw-3,m.y-10,tw+6,13);
+    ctx.fillStyle=m.c;ctx.fillText(txt,tx,m.y);
+   });
+  ctx.textAlign='left';
+ }
+ if(note)note.textContent='每线=一个出发日期 · 红=最低日'+(lowDate===selDate?'/选中':'')+' · 蓝=选中 · 线尾标日期/价格'+((dateSeries||[]).some(x=>x.basis_changed)?' · 含口径变化日':'')+' · '+times.length+' 次采集 · 最近 '+fmtAt(times[times.length-1]);
+}
+window.addEventListener('resize',function(){
+ clearTimeout(SPMON.rt);
+ SPMON.rt=setTimeout(function(){const s=SPMON.chart;if(s)spMonDraw(s.dateSeries,s.selDate,s.lowDate)},180);
+});
+function spMonHover(e){
+ const c=$('spMonChart'),t=$('spMonTip'),g=SPMON.geo;
+ if(!c||!t||!g||!g.series.length)return;
+ const r=c.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+ let best=null;
+ g.series.forEach(s=>s.pts.forEach(p=>{
+  const dx=g.X(p.t)-mx,dy=g.Y(p.p)-my,d=dx*dx+dy*dy;
+  if(d<=441&&(!best||d<best.d))best={d,p,s};
+ }));
+ if(!best){t.hidden=true;return}
+ const p=best.p,basis=p.basis==='tax_included'?'含税':(p.basis==='bare'?'裸价':(p.basis?'口径未标':''));
+ t.innerHTML='<b>'+he(best.s.date)+'</b> · ¥'+he(String(Math.round(p.p)))
+  +'<br>'+he(String(p.at||'').slice(5,16))+' · '+he(SRX_RADAR_NAMES[p.ch]||p.ch||'—')
+  +(basis?' · '+he(basis):'');
+ t.hidden=false;
+ const wr=c.parentElement.getBoundingClientRect();
+ let left=e.clientX+12,top=e.clientY-t.offsetHeight-10;
+ if(left+t.offsetWidth>wr.right-6)left=e.clientX-t.offsetWidth-12;
+ if(left<wr.left+6)left=wr.left+6;
+ if(top<8)top=e.clientY+14;
+ t.style.left=Math.round(left)+'px';t.style.top=Math.round(top)+'px';
+}
+(function(){
+ const c=$('spMonChart');if(!c)return;
+ let tipT=0;
+ const hideTip=function(){const t=$('spMonTip');if(t)t.hidden=true};
+ c.addEventListener('pointermove',spMonHover);
+ c.addEventListener('pointerdown',function(e){clearTimeout(tipT);spMonHover(e)});
+ c.addEventListener('pointerup',function(){
+  clearTimeout(tipT);tipT=setTimeout(hideTip,2600);
+ });
+ c.addEventListener('pointercancel',function(){clearTimeout(tipT);hideTip()});
+ c.addEventListener('pointerleave',function(e){
+  if(e&&e.pointerType==='touch')return;hideTip()});
+ window.addEventListener('scroll',hideTip,{passive:true});
+})();
+async function spMonRefresh(){
+ const q=(SPMON.data&&SPMON.data.query)||{};
+ const f=$('spRadarFrom'),t=$('spRadarTo'),s=$('spRadarStart'),e=$('spRadarEnd');
+ if(f&&!f.value&&q.from)f.value=q.from;if(t&&!t.value&&q.to)t.value=q.to;
+ if(s&&!s.value&&q.start)s.value=q.start;if(e&&!e.value&&q.end)e.value=q.end;
+ if(f&&!f.value){const d=$('spRadarCfg');if(d)d.open=true;toast('请先设置出发城市与日期范围','err');if(f)f.focus();return}
+ const btn=$('spRadarGo');await srxRadarRun(btn);await spMonLoad(true);
+}
+async function spMonProbe(date){
+ const j=SPMON.data;if(!j)return;const q=j.query||{};
+ const row=(j.dates||[]).find(d=>d.date===date);
+ const to=(row&&row.to)||q.to||'';
+ if(!(q.from&&to)){toast('该日期没有可定位的目的地','err');return}
+ const plats=(q.channels||[]).filter(p=>!!SRX_PLATS[p]);
+ switchView('search');SRX.plats=plats.slice();SRX.pair=q.from+'|'+to;SRX.date=date;SRX.q='';SRX.probe=null;
+ toast('已带入 '+date+' 的真实明细探针','ok');
+ await srxTaskStart({from:q.from,to:to,date:date,plats:plats});
+}
 async function srxRadarRun(btn){
  const u=(S&&S.users||[])[U];if(!u){toast('请先在配置页添加用户','err');return}
  if(SRX_RADAR.busy)return;
@@ -11034,27 +11871,30 @@ async function srxRadarRun(btn){
  if(!$('spRadarNation').checked&&!to){toast('请填写到达城市，或勾选携程全国','err');return}
  if(!chans.length){toast('至少选择一个渠道','err');return}
  SRX_RADAR.busy=true;if(btn)btn.disabled=true;
+ const uname=u.name,seq=SRX_RADAR.seq=(SRX_RADAR.seq||0)+1;
  const box=$('spRadarStatus'),res=$('spRadarResults');
  if(box)box.textContent='正在查询 '+chans.length+' 个渠道的低价日历/榜单…';
  if(res)res.innerHTML='';
  try{
   const r=await fetch('/api/special-radar',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({user:u.name,from:from,to:to,nationwide:$('spRadarNation').checked,
+   body:JSON.stringify({user:uname,from:from,to:to,nationwide:$('spRadarNation').checked,
     start:start,end:end,channels:chans})});
   const j=await r.json();
+  /* 切用户/重查后旧响应晚到：不得渲染为当前用户的结果。 */
+  if(seq!==SRX_RADAR.seq||((S&&S.users||[])[U]||{}).name!==uname)return;
   if(!j.ok)throw new Error(j.err||('HTTP '+r.status));
-  SRX_RADAR.data=j;srxRadarRender(j);
+  SRX_RADAR.data=j;srxRadarRender(j);try{spMonLoad(true)}catch(e){}
  }catch(e){
-  if(box)box.textContent='查询失败：'+(e&&e.message||e);
+  if(seq===SRX_RADAR.seq&&box)box.textContent='查询失败：'+(e&&e.message||e);
  }
- finally{SRX_RADAR.busy=false;if(btn)btn.disabled=false}
+ finally{if(seq===SRX_RADAR.seq)SRX_RADAR.busy=false;if(btn)btn.disabled=false}
 }
 function srxRadarRender(j){
  const q=j.query||{},dates=j.dates||[],st=j.channels||{};
  const box=$('spRadarStatus'),res=$('spRadarResults');if(!box||!res)return;
  const chips=(q.channels||[]).map(function(p){
   const s=st[p]||{};const lab=SRX_RADAR_ST[s.status]||s.status||'—';
-  return '<span class="chip" title="'+he(s.reason||'')+'" style="--pc:var(--c-'+p+');height:24px;padding:0 7px;display:inline-flex;align-items:center;gap:4px">'+srxPlatIcon(p)+he(SRX_RADAR_NAMES[p]||p)+' · '+he(lab)+(s.rows?' · '+s.rows:'')+'</span>';
+  return '<span class="chip" title="'+he((s.reason||'')+(s.cached_at?'｜缓存于 '+s.cached_at:''))+'" style="--pc:var(--c-'+p+');height:24px;padding:0 7px;display:inline-flex;align-items:center;gap:4px">'+srxPlatIcon(p)+he(SRX_RADAR_NAMES[p]||p)+' · '+he(lab)+_radarSrcExtra(s)+(s.rows?' · '+s.rows:'')+'</span>';
  }).join(' ');
  box.innerHTML='<span style="display:inline-flex;flex-wrap:wrap;gap:5px">'+chips+'</span>';
  if(!dates.length){
@@ -11069,14 +11909,14 @@ function srxRadarRender(j){
  let h='<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;margin-bottom:8px">'
   +'<b style="font-size:15px">'+he(q.from_name||q.from)+' → '+he(q.to_name||q.to||'全国')+'</b>'
   +'<span class="muted">'+he(q.start||'')+' → '+he(q.end||'')+' · '+dates.length+' 个日期有价</span>';
- if(low.date)h+='<span class="chip" style="border-color:var(--blue);color:var(--blue)">最低 ¥'+he(low.price)+' · '+he(low.date)+' · '+he(SRX_RADAR_NAMES[low.channel]||low.channel)+'</span>';
+ if(low.date)h+='<span class="chip" title="'+he(_radarLowNote(low))+'" style="border-color:var(--blue);color:var(--blue)">最低 ¥'+he(low.price)+' · '+he(low.date)+' · '+he(SRX_RADAR_NAMES[low.channel]||low.channel)+(low.basis_mixed?' · 口径混合':'')+'</span>';
  h+='</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:6px;margin-bottom:10px">';
  dates.forEach(function(d){
   const b=d.best||{},hi=low.date===d.date;
   h+='<button type="button" class="chip" style="height:auto;min-height:54px;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;'+(hi?'border-color:var(--blue);color:var(--blue)':'')+'" title="'+he(d.date)+' · '+he(SRX_RADAR_NAMES[b.channel]||b.channel)+' · '+(b.kind==='calendar'?'日历价':'榜单价')+'" onclick="srxRadarDetail(\''+he(d.date)+'\')">'
    +'<span style="font-size:10px;color:var(--mut)">'+he(d.date.slice(5))+' · '+he(SRX_RADAR_NAMES[b.channel]||b.channel)+'</span>'
    +'<b style="font-size:15px">¥'+he(b.price)+'</b>'
-   +'<span style="font-size:10px;color:var(--mut)">'+(b.kind==='calendar'?'日历价':'榜单价')+'</span></button>';
+   +'<span style="font-size:10px;color:var(--mut)">'+(b.kind==='calendar'?'日历价':'榜单价')+(_radarBasis(b)?' · '+he(_radarBasis(b)):'')+'</span></button>';
  });
  h+='</div><div style="display:flex;flex-direction:column;gap:5px">';
  dates.forEach(function(d){
@@ -11088,7 +11928,7 @@ function srxRadarRender(j){
    +'<span class="sp" style="margin-left:auto"></span>'
    +'<button class="btn2" type="button" onclick="srxRadarDetail(\''+he(d.date)+'\')">'+dlab+'</button></div>';
  });
- h+='</div><div class="muted" style="font-size:11px;margin-top:7px">'+he(j.note||'日历/榜单价只作发现；明细由探针真实采集。')+((st.tuniu&&st.tuniu.rows)?' · 途牛日历为裸价（不含税）':'')+'</div>';
+ h+='</div><div class="muted" style="font-size:11px;margin-top:7px">'+he(j.note||'日历/榜单价只作发现；明细由探针真实采集。')+((st.tuniu&&st.tuniu.rows)?' · 途牛日历为裸价（不含税）':'')+(low.basis_mixed?' · 最低价跨口径，已标注不可直接横比':'')+'</div>';
  res.innerHTML=h;
 }
 async function srxRadarDetail(date){
@@ -11146,7 +11986,7 @@ function updFltN(){const el=$('fltN');if(!el)return;
  if(FLT.nolcc)n++;
  if(FLT.cross)n++;
  if(FLT.child)n++;
- if(FLT.shareOnly)n++;if(FLT.stopOnly)n++;if(FLT.riskOnly)n++;if(FLT.hideCal)n++;if(FLT.onlyQual)n++;
+ if(FLT.shareOnly)n++;if(FLT.stopOnly)n++;if(FLT.riskOnly)n++;if(FLT.hideCal)n++;if(FLT.onlyQual)n++;if(WATCH_ONLY)n++;
  try{const u=S.users[U];const ps=[...new Set(u.flights.map(f=>f.plat))];
   if(FLT.plats.size&&FLT.plats.size<ps.length)n++;
   const rs=[...new Set(u.flights.map(f=>f.route).filter(Boolean))];
@@ -11771,10 +12611,19 @@ const LOGIN_NEED = {qunar:'必须', ctrip:'必须', tongcheng:'建议',
 let SRX_LOGIN_T=0,SCAT=0;   /* 旧检索页同步点保留，实际以 loadChannelState 为准 */
 let LGSIG='';   /* 登录态内容签名：轮询期状态无变化不重绘（重建按钮
    会打断用户正要点按的动作件——签名防抖+失败显式失效签名） */
-const SLOT_STATUS_CN={active:'登录窗口已打开',saving:'正在保存…',pending:'已保存，下轮采集验证中',
- page_ok:'页面已登录',available:'近期明细可用',login_required:'需登录',
- challenge:'需人机验证',save_error:'会话保存失败',missing:'未保存会话',saved:'已保存，待核验'};
+const SLOT_STATUS_CN={active:'登录窗口已打开',saving:'正在保存…',pending:'已保存 · 下轮采集验证中',
+ page_ok:'已保存 · 页面可访问（明细未验证）',available:'已保存 · 会话有效 · 明细可用',login_required:'需登录',
+ challenge:'需人机验证',save_error:'会话保存失败',missing:'未保存会话',saved:'已保存 · 会话待验证'};
 function slotStatusCn(st){return SLOT_STATUS_CN[st]||st||'状态待确认'}
+/* 登录点三档：绿=近期明细成功；琥珀=已保存且会话/页面已核验但本轮
+   无明细；灰=仅已保存。page_ok 不再冒充整卡绿灯。 */
+function lgDotCls(s,v){
+ if(v){if(v.status==='available')return ' on';if(v.status==='page_ok')return ' mid';return ' stale'}
+ if(s&&s.detail_ok)return ' on';
+ if(s&&s.session_verified)return ' mid';
+ return ' stale';
+}
+const LG_DOT_TIP='绿=近期明细成功；琥珀=会话/页面已核验、本轮无明细；灰=仅已保存';
 function lgActionHTML(s){
  const key=s.slot||s.plat,p=s.plat||key,st=s.status||(s.saved?'saved':'missing');
  const h5=key==='fliggy_h5';
@@ -11792,8 +12641,8 @@ function lgActionHTML(s){
 function lgShortStatus(s){
  if(!s)return '未保存';
  const st=s.status||(s.saved?'saved':'missing');
- return {missing:'未保存',saved:'待核验',pending:'待核验',page_ok:'页面已登录',
-  available:'可用',login_required:'需登录',challenge:'需验证',
+ return {missing:'未保存',saved:'已保存·待验证',pending:'已保存·验证中',page_ok:'页面可访问·待明细',
+  available:'明细可用',login_required:'需登录',challenge:'需验证',
   save_error:'保存失败',active:'登录中',saving:'保存中'}[st]||st;
 }
 function lgFliggyModalHTML(){
@@ -11805,7 +12654,7 @@ function lgFliggyModalHTML(){
   const st=s.status||(s.saved?'saved':'missing');
   const sub=[s.account||'',s.requirement||'',slotStatusCn(st)].filter(Boolean).join(' · ');
   return `<div class="lglane" data-slot="${he(s.slot)}">`
-   +`<div class="lglane-h"><span>${he(title)}</span><span class="lgdot${(st==='available'||st==='page_ok')?' on':' stale'}"></span></div>`
+   +`<div class="lglane-h"><span>${he(title)}</span><span class="lgdot${lgDotCls(s)}" title="${LG_DOT_TIP}"></span></div>`
    +`<div class="lglane-sub" title="${he(s.detail||'')}">${he(sub)}</div>${lgActionHTML(s)}</div>`;
  }
  return '<div class="lgmodal-h"><b>飞猪双端登录</b><span>PC 与 H5 会话独立</span>'
@@ -11868,7 +12717,7 @@ function renderLoginCards(force){
   const sub=[s.account||'',requirement,v?v.label:slotStatusCn(st)]
    .filter(Boolean).join(' · ');
   return `<div class="lgslot" data-slot="${key}">`
-   +`<div class="lgslot-h"><span>${he(surface)}</span><span class="lgdot${(v?v.status==='available':(st==='available'||st==='page_ok'))?' on':' stale'}"></span></div>`
+   +`<div class="lgslot-h"><span>${he(surface)}</span><span class="lgdot${lgDotCls(s,v)}" title="${LG_DOT_TIP}"></span></div>`
    +`<div class="lgsub" title="${he(s.detail||(v?v.title:''))}">${he(sub)}</div>${lgActionHTML(s)}</div>`;
  }
  box.innerHTML='<div class="lggrid">'+groups.map(g=>{
@@ -12194,7 +13043,7 @@ function cwCityCode(inp){
  if(hit){inp.dataset.code=hit.c;inp.dataset.name=hit.n;return hit.c}
  return v;
 }
-function cwCityHide(inp){const d=cwCityDrop(inp);if(d){d.hidden=true;d.innerHTML='';d.style.top='';d.style.bottom='';d.style.maxHeight=''}if(inp){delete inp.dataset.cwall;inp.setAttribute('aria-expanded','false');inp.removeAttribute('aria-activedescendant');const rl=inp.closest('.rline');if(rl)rl.classList.remove('cityopen');const uc=inp.closest('.ucard');if(uc)uc.classList.remove('cityopen')}}
+function cwCityHide(inp){const d=cwCityDrop(inp);if(d){d.hidden=true;d.innerHTML='';d.style.top='';d.style.bottom='';d.style.maxHeight='';d.style.left=''}if(inp){delete inp.dataset.cwall;inp.setAttribute('aria-expanded','false');inp.removeAttribute('aria-activedescendant');const rl=inp.closest('.rline');if(rl)rl.classList.remove('cityopen');const uc=inp.closest('.ucard');if(uc)uc.classList.remove('cityopen')}}
 function cwCityShow(inp){
  if(!inp)return;
  const _rl=inp.closest('.rline');if(_rl)_rl.classList.add('cityopen');const _uc=inp.closest('.ucard');if(_uc)_uc.classList.add('cityopen');
@@ -13287,7 +14136,7 @@ function buildForm(){if(!CFG)return;let h='',gh='';
   const _rDefE=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
   h+=`<div class="cfgfieldset"><div class="subsec">官方特价机票 · 低价日历/榜单</div>
   <div class="srow"><div class="slab"><b>出发 → 到达</b><div class="shint">任意城市对，不要求已加入关注航线；携程支持全国（出发地→全中国）。日历/榜单价只作发现，明细走真实探针</div></div><div class="sctl" style="flex-wrap:wrap;gap:6px">
-   <span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:nowrap">
+   <span class="rad-pair">
     <span class="fld fld-city"><input data-rad="from_name" aria-label="雷达出发城市" placeholder="出发城市" value="${esc(_rad.from_name||_rad.from||'')}" onclick="cityPanelOpen(this)" onchange="setRadar(${i},'from_name',this.value)"><span class="fx chev" aria-hidden="true" onclick="cityPanelOpen(this.parentElement.querySelector('input'))">▾</span></span>
     <span class="sunit">→</span>
     <span class="fld fld-city"><input data-rad="to_name" aria-label="雷达到达城市" placeholder="到达城市" value="${esc(_rad.to_name||_rad.to||'')}" onclick="cityPanelOpen(this)" onchange="setRadar(${i},'to_name',this.value)"><span class="fx chev" aria-hidden="true" onclick="cityPanelOpen(this.parentElement.querySelector('input'))">▾</span></span>
@@ -14260,8 +15109,8 @@ function radarCfgRender(i,j){
  const q=j.query||{},st=j.channels||{},dates=j.dates||[],low=j.lowest||{};
  const chips=SRX_PLAT_KEYS.filter(p=>q.channels&&q.channels.indexOf(p)>=0).map(p=>{
   const s=st[p]||{},lab=SRX_RADAR_ST[s.status]||s.status||'—';
-  return '<span class="chip" style="height:24px;--pc:'+SRX_PLATS[p][1]+'" title="'+esc(s.reason||'')+'">'
-   +srxPlatIcon(p)+esc(SRX_PLATS[p][0])+' · '+esc(lab)+(s.rows?' · '+s.rows:'')+'</span>';
+  return '<span class="chip" style="height:24px;--pc:'+SRX_PLATS[p][1]+'" title="'+esc((s.reason||'')+(s.cached_at?'｜缓存于 '+s.cached_at:''))+'">'
+   +srxPlatIcon(p)+esc(SRX_PLATS[p][0])+' · '+esc(lab)+_radarSrcExtra(s)+(s.rows?' · '+s.rows:'')+'</span>';
  }).join(' ');
  let h='<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:6px 0">'+chips+'</div>';
  if(!dates.length){
@@ -14276,16 +15125,19 @@ function radarCfgRender(i,j){
   +'</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:6px">';
  dates.slice(0,12).forEach(d=>{
   const b=d.best||{},hi=low.date===d.date;
-  h+='<button type="button" class="chip" style="height:auto;min-height:52px;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;'+(hi?'border-color:var(--blue);color:var(--blue)':'')+'" onclick="radarCfgDetail(\''+esc(d.date)+'\')">'
+  h+='<button type="button" class="chip" style="height:auto;min-height:52px;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;'+(hi?'border-color:var(--blue);color:var(--blue)':'')+'" onclick="radarCfgDetail(\''+esc(d.date)+'\','+i+')">'
    +'<span style="font-size:10px;color:var(--mut)">'+esc(d.date.slice(5))+'</span>'
    +'<b style="font-size:15px">¥'+esc(b.price)+'</b>'
-   +'<span style="font-size:10px;color:var(--mut)">'+esc(SRX_PLATS[b.channel]?SRX_PLATS[b.channel][0]:b.channel)+' · '+(b.kind==='calendar'?'日历价':'榜单价')+'</span></button>';
+   +'<span style="font-size:10px;color:var(--mut)">'+esc(SRX_PLATS[b.channel]?SRX_PLATS[b.channel][0]:b.channel)+' · '+(b.kind==='calendar'?'日历价':'榜单价')+(_radarBasis(b)?' · '+esc(_radarBasis(b)):'')+'</span></button>';
  });
- h+='</div><div class="muted" style="font-size:11px;padding-top:6px">'+esc(j.note||'日历/榜单价只作发现；点日期发起真实明细探针。')+((st.tuniu&&st.tuniu.rows)?' · 途牛日历为裸价（不含税）':'')+'</div>';
+ h+='</div><div class="muted" style="font-size:11px;padding-top:6px">'+esc(j.note||'日历/榜单价只作发现；点日期发起真实明细探针。')+((st.tuniu&&st.tuniu.rows)?' · 途牛日历为裸价（不含税）':'')+(low.basis_mixed?' · 最低价跨口径，已标注不可直接横比':'')+'</div>';
  box.innerHTML=h;
 }
-function radarCfgDetail(date){
+function radarCfgDetail(date,ci){
  const p=_RADAR_CFG_PREV;if(!p||!p.data)return;
+ /* 预览结果按用户归属：A 卡渲染期间 B 查询过，点 A 卡的日期不能用
+    B 的航线/明细上下文。 */
+ if(ci!=null&&CFG[ci]&&CFG[ci].name!==p.user){toast('该日期属于另一用户的雷达结果，请在本卡重新查询','err');return}
  SRX_RADAR.data=p.data;SRX_RADAR.user=p.user;SRX_RADAR.loaded=true;
  srxRadarDetail(date);
 }
@@ -15172,12 +16024,32 @@ function srxPlatIcon(p,cls,lazy){
  const nm=SRX_PLATS[p]?SRX_PLATS[p][0]:(p||'渠道');
  const c='bic bic-ota '+(cls||'');
  if(!im)return '<span class="'+c+' bic-fb" data-plat="'+he(p)+'" style="--pc:'+(SRX_PLATS[p]?SRX_PLATS[p][1]:'#5a6c7d')+'" title="'+he(nm)+' · 官方图标未收录" aria-hidden="true">'+he(String(nm).slice(0,1))+'</span>';
- return '<img class="'+c+'" data-plat="'+he(p)+'" src="'+srxLogoURL(im)+'"'+(lazy?' loading="lazy"':'')+' decoding="async" alt="" aria-hidden="true" title="'+he(nm)+' · 官方图标">';
+ return '<img class="'+c+'" data-plat="'+he(p)+'" src="'+srxLogoURL(im)+'"'+(lazy?' loading="lazy"':'')+' decoding="async" alt="" aria-hidden="true" title="'+he(nm)+' · 官方图标" onerror="srxIconErr(this)">';
+}
+/* 图片解码/加载失败回退到与「未收录」一致的字符牌，避免破图与
+   行高跳动；不改变尺寸令牌，图标与文字基线仍对齐。 */
+function srxIconErr(img){
+ try{
+  if(!img||!img.parentNode)return;
+  const plat=img.getAttribute('data-plat'),code=img.getAttribute('data-code');
+  const sp=document.createElement('span');
+  if(plat){
+   const nm=SRX_PLATS[plat]?SRX_PLATS[plat][0]:(plat||'渠道');
+   sp.className='bic bic-ota bic-fb';sp.setAttribute('data-plat',plat);
+   sp.style.setProperty('--pc',SRX_PLATS[plat]?SRX_PLATS[plat][1]:'#5a6c7d');
+   sp.title=nm+' · 图标加载失败，以文字标识';sp.textContent=String(nm).slice(0,1);
+  }else{
+   sp.className='bic bic-air bic-iata';sp.style.setProperty('--ac','#5a6c7d');
+   sp.title=(code||'航司')+' · 图标加载失败，以代码标识';sp.textContent=code||'?';
+  }
+  sp.setAttribute('aria-hidden','true');
+  img.replaceWith(sp);
+ }catch(e){}
 }
 function srxAirIcon(v,cls,lazy){
  const m=srxAirMeta(v);if(!m.code)return '';
  const im=SRX_AIR_IMG[m.code];
- if(im)return '<img class="bic bic-air '+(cls||'')+'" src="'+srxLogoURL(im)+'"'+(lazy?' loading="lazy"':'')+' decoding="async" alt="" aria-hidden="true" title="'+he((m.name||m.code)+' · 官方航司图标')+'">';
+ if(im)return '<img class="bic bic-air '+(cls||'')+'" data-code="'+he(m.code)+'" src="'+srxLogoURL(im)+'"'+(lazy?' loading="lazy"':'')+' decoding="async" alt="" aria-hidden="true" title="'+he((m.name||m.code)+' · 官方航司图标')+'" onerror="srxIconErr(this)">';
  return '<span class="bic bic-air bic-iata '+(cls||'')+'" style="--ac:'+m.color+'" title="'+he((m.name||m.code)+' · 官方图标未收录，以 IATA 代码标识')+'" aria-hidden="true">'+he(m.code)+'</span>';
 }
 /* 机型图标层：真实机族上视金属剪影（空客/波音/商飞/巴航/ATR），
@@ -15560,15 +16432,21 @@ async function srxWatchLoad(force){
  if(!force&&SRX_WATCH.loadedFor===user&&Date.now()-SRX_WATCH.loadedAt<45000)return;
  /* 连发 renderSearch 曾同时发 10 个 /api/srx/watch（审计 P2） */
  if(SRX_WATCH.pending)return;
+ const seq=SRX_WATCH.seq=(SRX_WATCH.seq||0)+1;
  SRX_WATCH.pending=true;
  try{
   const r=await fetch('/api/srx/watch?user='+encodeURIComponent(user),{cache:'no-store'});
   const j=await r.json();
+  /* 请求期间切了用户：旧清单不得盖到新用户名下。 */
+  if(seq!==SRX_WATCH.seq||srxWatchUser()!==user)return;
   if(!j||!j.ok)throw new Error((j&&j.err)||'关注接口无返回');
   SRX_WATCH.list=j.watches||[];SRX_WATCH.err='';SRX_WATCH.loadedFor=user;SRX_WATCH.loadedAt=Date.now();
+  if(WATCH_ONLY){WATCH_KEYS=_watchKeysOf(SRX_WATCH.list);if(typeof table==='function'&&S)table()}
  }catch(e){
+  if(seq!==SRX_WATCH.seq||srxWatchUser()!==user)return;
   SRX_WATCH.err=String(e&&e.message||e);SRX_WATCH.loadedAt=Date.now();
- }finally{SRX_WATCH.pending=false}
+ }finally{if(seq===SRX_WATCH.seq)SRX_WATCH.pending=false}
+ if(seq!==SRX_WATCH.seq)return;
  srxWatchCount();srxWatchSync();
  if(SRX_WATCH.open)srxRenderWatch();
 }
@@ -15611,6 +16489,7 @@ async function srxWatchToggleDo(f,old){
    toast('已关注 '+((f.code||'')+' · '+(f.date||''))+' · 默认监控 '+(SRX_PLATS[f.platKey]?SRX_PLATS[f.platKey][0]:'该渠道')+'，可在「航班监控」添加渠道与目标价','ok');
   }
   SRX_WATCH.loadedFor=srxWatchUser();SRX_WATCH.loadedAt=Date.now();
+  if(WATCH_ONLY){WATCH_KEYS=_watchKeysOf(SRX_WATCH.list);table()}
   srxWatchCount();srxWatchSync();
   if(SRX_WATCH.open)srxRenderWatch();
  }catch(e){toast(String(e&&e.message||e),'err')}
@@ -15628,6 +16507,7 @@ async function srxWatchPatch(w,patch){
   const j=await srxWatchPost({op:'update',id:w.id,patch});
   SRX_WATCH.list=j.watches||SRX_WATCH.list;
   delete SRX_WATCH.trends[w.id];
+  if(WATCH_ONLY){WATCH_KEYS=_watchKeysOf(SRX_WATCH.list);table()}
   srxWatchSync();
   if(SRX_WATCH.open){srxRenderWatch();srxWatchLoadTrend(w.id,true)}
  }catch(e){toast(String(e&&e.message||e),'err')}
@@ -15847,6 +16727,8 @@ function srxWatchLocate(w){
  setTimeout(()=>{if(VIEW!=='search')return;srxSelect(srxKey(f),true);const el=document.querySelector('#srxRows .srx-row[data-k="'+CSS.escape(srxKey(f))+'"]');if(el)try{el.scrollIntoView({block:'center'})}catch(e){}},90);
 }
 function srxKey(f){return f.rowKey||('x|'+[f.platKey,f.rowId,f.rawIdx,f.code,f.depTime,f.date].join('|'))}
+function srxEntryOf(f){return (f&&(f.entryPath||(f.prov&&f.prov.entryPath)))||''}
+function srxEvLevel(f){const p=f&&f.prov;return p&&p.evidenceLevel?p.evidenceLevel:(f&&f.entryPath?'path':'unknown')}
 function srxRawKey(f){return (f&&f.rawKey)||srxKey(f)}
 function srxIsCal(f){return !!f.isCal||!(f.code&&f.depTime&&f.arrTime)}
 /* stale 是「距本次已采时数」，不是脏标记：只有显式 isStale 或 >6h
@@ -15906,17 +16788,21 @@ function srxScope(ignorePlat,F0){
  if(SRX.date)a=a.filter(f=>(f.date||'')===SRX.date);
  if(!ignorePlat){const ps=srxPlatSet();a=a.filter(f=>ps.has(f.platKey))}
  const q=String(SRX.q||'').trim().toLowerCase();
- if(q)a=a.filter(f=>[f.code,f.name,f.plat,f.trans,f.depAirport,f.arrAirport,f.shareAirline,f.airlineCode,
-  f.cabinT,f.plane,f.labels].filter(Boolean).join(' ').toLowerCase().includes(q));
+ if(q)a=a.filter(f=>[f.code,f.name,f.plat,f.trans,f.depAirport,f.arrAirport,f.depAirportCode,f.arrAirportCode,
+  f.shareAirline,f.shareCarrier,f.airlineCode,f.cabinT,f.labels,f.plane,f.plane2].filter(Boolean).join(' ').toLowerCase().includes(q));
  const F=F0||SRX.f||{};
  a=a.filter(f=>{
+  /* 日历薄行没有直/中/行李语义：与明细同律，不能混进航班级筛选。 */
+  if(srxIsCal(f)&&(F.trip||F.bag))return false;
   if(F.trip==='direct'&&f.transfer)return false;
   if(F.trip==='transfer'&&!f.transfer)return false;
   const cab=srxCabinClass(f);
+  const _cabMissing=!cab||cab==='未知'||String(cab).indexOf('票种:')===0;
   const _cabins=Array.isArray(F.cabins)?F.cabins:[];
-  if(_cabins.length){if(!_cabins.includes(cab))return false}
-  else if(F.cabin==='eco'&&!(cab==='经济'||cab==='超级经济'))return false;
-  else if(F.cabin==='biz'&&!(cab==='公务'||cab==='头等'))return false;
+  /* 与明细同一空值律：缺舱位维度的行不被指定舱位档静默滤除。 */
+  if(_cabins.length){if(!_cabMissing&&!_cabins.includes(cab))return false}
+  else if(F.cabin==='eco'&&!_cabMissing&&!(cab==='经济'||cab==='超级经济'))return false;
+  else if(F.cabin==='biz'&&!_cabMissing&&!(cab==='公务'||cab==='头等'))return false;
   const _airlines=Array.isArray(F.airlines)?F.airlines:[];
   if(_airlines.length){if(!_airlines.includes(carrierKeyOf(f)))return false}
   else if(F.airline&&!String([f.airlineCode,f.name,f.shareAirline].filter(Boolean).join(' ')).toUpperCase().includes(F.airline.toUpperCase()))return false;
@@ -15945,7 +16831,8 @@ function srxScope(ignorePlat,F0){
    if(F.arrFrom&&m<hm(F.arrFrom))return false;if(F.arrTo&&m>hm(F.arrTo))return false}
   if(F.pmin!==''&&Number(f.price)<Number(F.pmin))return false;
   if(F.pmax!==''&&Number(f.price)>Number(F.pmax))return false;
-  if(F.bag&&!String(f.baggage||f.carryon||'').trim())return false;
+  /* 含行李与明细同一判据：明示「无免费托运」不算含行李。 */
+ if(F.bag&&!_hasFreeBag(f))return false;
   if(F.meal&&!String(f.meal||'').trim())return false;
   if(F.noLcc&&f.lcc)return false;
   const _share=String(f.shareAirline||f.shareCarrier||'').trim();
@@ -16125,13 +17012,29 @@ function srxMaybeRender(){
 }
 function renderSearch(){
  if(!S){
-  const r=$('srxRows');if(r)r.innerHTML='<div class="srx-skel"></div><div class="srx-skel"></div><div class="srx-skel"></div>';
+  const r=$('srxRows'),b=$('srxBrief');
+  if(STATE_ERR){
+   /* 冷启动 /api/state 失败必须结束等待并给恢复入口：旧骨架在服务
+      500/中断时永久驻留，页面看起来仍在加载。 */
+   if(r)r.innerHTML='<div class="srx-empty" style="grid-column:1/-1;padding:16px"><b>状态读取失败</b><span> '+he(STATE_ERR)+'</span><div style="margin-top:8px"><button type="button" class="btn2" onclick="load()">立即重试</button></div></div>';
+   if(b)b.innerHTML='<div class="srx-empty" style="padding:10px">'+he(STATE_ERR)+'</div>';
+  }else{
+   if(r)r.innerHTML='<div class="srx-skel"></div><div class="srx-skel"></div><div class="srx-skel"></div>';
+   if(b)b.innerHTML='<div class="srx-skel" style="height:76px;margin:0"></div>';
+  }
   ['srxKpis','srxPairs','srxDates','srxPlats','srxAbar'].forEach(id=>{const e=$(id);if(e)e.innerHTML=''});
-  const b=$('srxBrief');if(b)b.innerHTML='<div class="srx-skel" style="height:76px;margin:0"></div>';
   const d=$('srxDetail');if(d)d.classList.remove('open');
   return;
  }
  try{
+  if(!SRX.detailOpen){
+   const _d=$('srxDetail');
+   if(_d&&_d.classList.contains('open')){
+    _d.classList.remove('open');_d.setAttribute('aria-hidden','true');
+    const _m=$('srxDmask');if(_m)_m.classList.remove('open');
+    try{srxUnlockBody()}catch(e){}
+   }
+  }
   srxEnsure();
   const _sv=$('searchview');if(_sv)_sv.classList.toggle('srx-neutral',!SRX.date&&!SRX.probe);
  srxRenderRestore();srxRenderHero();srxRenderBand();srxRenderBrief();srxRenderCapbar();srxRenderKpis();srxRenderChips();srxRenderFacets();srxRenderQuick();srxRenderAbar();srxRenderCtx();srxRenderMobileSummary();
@@ -16172,7 +17075,11 @@ function srxRenderHero(){
  const _last=real.map(f=>f.fetchedAt).filter(Boolean).sort().pop();
  let scope;
  if(SRX.probe){
-  scope=(SRX.probe.batch?'组合任务':'本次任务')+' · '+(SRX.date?SRX.date+' '+c.date+' 行':'全部日期 '+c.base+' 行')+' · 任务返回 '+c.base+' 行';
+  const _taskRows=(SRX.probe&&Array.isArray(SRX.probe.rows))?SRX.probe.rows.length:0;
+  /* 「任务返回」只报本次任务真实行；srxBase 是探针行 ∪ 同航线历史行，
+     旧文案把带历史的并集总量说成任务返回（单日期探针也会虚高）。 */
+  scope=(SRX.probe.batch?'组合任务':'本次任务')+' · '+(SRX.date?SRX.date+' '+c.date+' 行':'全部日期 '+c.base+' 行')
+   +' · 任务返回 '+_taskRows+' 行'+(c.base>_taskRows?' · 含既有历史 '+c.base+' 行':'');
  }else if(SRX.date){
   scope=SRX.date+' '+c.date+' 行 · 航线跨日期 '+c.base+' 行';
  }else{
@@ -16228,6 +17135,10 @@ function srxRenderBand(){
  if(!box)return;
  if(!box.dataset.xhooked){box.dataset.xhooked='1';box.addEventListener('scroll',srxBandHint,{passive:true})}
  if(SRX.bandPair!==SRX.pair){SRX.bandAnchor='';SRX.bandPair=SRX.pair}
+ /* 展开态属于当前航线+日期，不是全局粘滞开关：曾一次展开后所有
+     无数据航线永久渲染 14 个「未采」格，日期带收敛能力失效。 */
+ const _bk=(SRX.pair||'')+'|'+(SRX.date||'');
+ if(SRX._bandKey!==_bk){SRX._bandKey=_bk;SRX.bandExpand=false}
  if(!SRX.pair||!SRX.date){box.innerHTML='<div class="srx-band-empty"><span>近 14 天出发价带需选定出发日；只画真实落库点，未采不补价。</span></div>';if(note)note.textContent='';if(sec)sec.classList.add('compact');return}
  const anchor=SRX.bandAnchor||SRX.date;
  const key=srxCalKey();
@@ -16280,6 +17191,9 @@ function srxRenderBand(){
   return '<button type="button" class="srx-day'+(sel?' sel':'')+(x&&mn!=null&&x.price===mn?' low':'')+(x?'':' miss')+'" data-calday="'+he(d)+'" title="'+he(d)+(x?' · DB 行最低 ¥'+x.price+' · '+(x.platform||'')+(x.isCal?' 日历价':'')+' · 采集 '+x.capturedAt:' · 该出发日未采')+'">'
    +'<span class="d">'+he(srxMmdd(d))+'</span><span class="p">'+(x?'¥'+he(x.price):'未采')+'</span></button>'
  }).join('');
+ if(!(j.departure||[]).length&&SRX.bandExpand){
+  box.insertAdjacentHTML('beforeend','<button type="button" class="srx-band-collapse" data-bandcollapse="1">收起日期带</button>');
+ }
  if(note){
   const real=(j.departure||[]).length;
   note.innerHTML='出发日轴：'+real+'/14 天有真实落库行（含渠道日历价/补位行，仅作价带，不当作可出手机票）；缺失日期保持“未采”，不使用日历因子补价。'
@@ -16322,7 +17236,7 @@ function srxRenderBrief(){
    +'<span class="srx-src-a">'+(link.url?'<a href="#" data-openlink="'+he(link.url)+'" onclick="event.stopPropagation();srxOpen(this.dataset.openlink);return false">打开原页</a>':'<span>本态不供落地页</span>')+'</span>'
    +'</div>';
  }).join('');
- el.innerHTML=cards;
+ el.innerHTML='<button type="button" class="srx-foldbtn srx-brieffold" data-foldtarget="srxBrief" onclick="srxFold(this.dataset.foldtarget,this)" aria-expanded="true">收起五源</button>'+cards;
  if(!el.dataset.xhooked){el.dataset.xhooked='1';el.addEventListener('scroll',srxBriefHint,{passive:true})}
  requestAnimationFrame(srxBriefHint);
 }
@@ -16530,6 +17444,7 @@ function srfAirFilter(q){
  document.querySelectorAll('#srfAirChips .srf-opt').forEach(b=>{b.style.display=(!!q&&!b.textContent.toLowerCase().includes(q))?'none':''});
 }
 function srxRenderFacets(force){
+ if(!SRX.more&&!force)return;
  const sig=srxFacetSig();if(!force&&sig===SRX_FACET_SIG)return;SRX_FACET_SIG=sig;
  const F=SRX.f||{};
  const airRows=srxFacetRows('airline'),depRows=srxFacetRows('depA'),arrRows=srxFacetRows('arrA');
@@ -16703,7 +17618,7 @@ function srxRowHTML(f){
  const airCode=srxAirCode(f.code);
  const airOfficial=!cal&&!!airCode;
  const airMark=airOfficial?srxAirIcon(f.code,'srx-air'):'';
- const carrier=airMark?('<span class="srx-airline" title="'+he((airLabel||'承运航司')+' · 官方航司图标')+'">'+airMark+(airLabel?'<em>'+he(airLabel)+'</em>':'')+'</span>'):'';
+ const carrier=airMark?('<span class="srx-airline" title="'+he((f.shareCarrier?'销售航司；实际承运 '+f.shareCarrier:(airLabel||'承运航司'))+' · 官方航司图标')+'">'+airMark+(airLabel?'<em>'+he(airLabel)+'</em>':'')+'</span>'):'';
  const tripTxt=cal?'渠道日历':(f.transfer?('中转'+(f.trans?' · 经 '+f.trans:'')):'直飞');
  const planeMark=!cal&&(f.plane||f.planeSize)?srxPlaneIcon(f.plane||f.planeSize):'';
  const sub=carrier?carrier+planeMark+'<span title="'+he(tripTxt)+'">'+he(tripTxt)+'</span>'
@@ -16728,7 +17643,7 @@ function srxRowHTML(f){
   +(SRX.exp===srxKey(f)?srxExpHTML(f):'');
 }
 function srxExpHTML(f){
- const raw=srxRawOf(f),prov='<div class="box"><b>来源与证据</b><div class="kv"><span>渠道</span><b>'+srxPlatIcon(f.platKey)+' '+he((SRX_PLATS[f.platKey]||[f.plat])[0]||'—')+'</b></div><div class="kv"><span>采集</span><b>'+he(f.fetchedAt||(srxIsStale(f)?'补位 '+f.stale+'h':'—'))+'</b></div><div class="kv"><span>原始行</span><b>'+(f.rowId!=null?'#'+f.rowId+' / '+f.rawIdx:(f.raw?'探针 raw':'无'))+'</b></div><div class="kv"><span>镜像</span><b>结构重绘 · 非截图</b></div><div class="kv"><span>落地页</span><b title="'+he(f.view||'')+'">'+(f.view?'有':'未供')+'</b></div></div>';
+ const raw=srxRawOf(f),prov='<div class="box"><b>来源与证据</b><div class="kv"><span>渠道</span><b>'+srxPlatIcon(f.platKey)+' '+he((SRX_PLATS[f.platKey]||[f.plat])[0]||'—')+'</b></div><div class="kv"><span>采集入口</span><b>'+(f.prov&&f.prov.entryPath?(he(f.prov.entryPath)+' · '+(f.prov.evidenceLevel==='path'?'路径级':'未记录')):'未记录')+'</b></div><div class="kv"><span>采集</span><b>'+he(f.fetchedAt||(srxIsStale(f)?'补位 '+f.stale+'h':'—'))+'</b></div><div class="kv"><span>原始行</span><b>'+(f.rowId!=null?'#'+f.rowId+' / '+f.rawIdx:(f.raw?'探针 raw':'无'))+'</b></div><div class="kv"><span>镜像</span><b>结构重绘 · 非截图</b></div><div class="kv"><span>落地页</span><b title="'+he(f.view||'')+'">'+(f.view?'有':'未供')+'</b></div></div>';
  const fields='<div class="box"><b>字段刻度</b>'+SRX_FIELD_SPECS.slice(0,13).map(s=>{const p=srxFieldParsed(s,f),m=srxFieldMirror(s,f,raw),st=srxFieldState(s,f,raw);return '<div class="kv"><span>'+he(s.label)+'</span><b title="解析 '+he(p||'—')+' / 镜像 '+he(m||'—')+'">'+he(st[1])+' · '+(p?'有':'未供')+'</b></div>'}).join('')+'</div>';
  return '<div class="srx-exp" data-expk="'+he(srxKey(f))+'" data-k="'+he(srxKey(f))+'">'+prov+fields+'<div class="acts" style="grid-column:1/-1"><button type="button" data-openbtn="1">打开三重对齐详情</button><button type="button" data-rawbtn="1">定位 RAW</button><button type="button" data-copyev="1">复制证据 JSON</button>'+(f.view?'<button type="button" data-openlink="'+he(f.view)+'">打开原页</button>':'<button type="button" disabled>本行无原页深链</button>')+'</div></div>';
 }
@@ -16871,7 +17786,7 @@ function srxMirrorHTML(){
  const host=(f&&f.view)?f.view.replace(/^https?:\/\//,'').split('/')[0]:(lk&&lk.url?lk.url.replace(/^https?:\/\//,'').split('/')[0]:'原页深链未供（渠道本态）');
  const rail=chans.map(c=>'<button type="button" class="srx-mtab'+(c===ch?' on':'')+(cnt[c]?'':' off')+'" data-mch="'+c+'" style="--pc:'+SRX_PLATS[c][1]+'" aria-pressed="'+(c===ch)+'"><span class="p" aria-hidden="true">'+srxPlatIcon(c)+'</span>'+SRX_PLATS[c][0]+'<span class="n">'+cnt[c]+'</span></button>').join('');
  const body=SRX.mview==='detail'?srxMirrorDetailHTML(f,ch):srxMirrorListHTML(ch,rows);
- return '<div class="srx-mrail">'+rail+'<span class="srx-mtools"><button type="button" class="'+(SRX.mview==='list'?'on':'')+'" data-mview="list" aria-pressed="'+(SRX.mview==='list')+'">列表</button><button type="button" class="'+(SRX.mview==='detail'?'on':'')+'" data-mview="detail" aria-pressed="'+(SRX.mview==='detail')+'">详情</button><button type="button" data-mview="four" aria-pressed="'+(SRX.mview==='four')+'" title="四源同屏">四源</button>'+(lk&&lk.url?'<button type="button" data-openlink="'+he(lk.url)+'">打开原页</button>':'')+'</span></div>'
+ return '<div class="srx-mrail">'+rail+'<button type="button" class="srx-foldbtn" style="margin-left:6px" data-foldtarget="srxMirror" onclick="srxFold(this.dataset.foldtarget,this)" aria-expanded="true">收起镜像</button><span class="srx-mtools"><button type="button" class="'+(SRX.mview==='list'?'on':'')+'" data-mview="list" aria-pressed="'+(SRX.mview==='list')+'">列表</button><button type="button" class="'+(SRX.mview==='detail'?'on':'')+'" data-mview="detail" aria-pressed="'+(SRX.mview==='detail')+'">详情</button><button type="button" data-mview="four" aria-pressed="'+(SRX.mview==='four')+'" title="四源同屏">四源</button>'+(lk&&lk.url?'<button type="button" data-openlink="'+he(lk.url)+'">打开原页</button>':'')+'</span></div>'
   +'<div class="srx-mchrome"><span class="dots"><i></i><i></i><i></i></span><span class="host">'+he(host)+'</span><span class="tag">原页镜像 · 结构重绘</span></div>'
   +'<div class="srx-mbody"><div class="srx-msearch"><b>'+he(srxPairName(...(SRX.pair||'|').split('|')))+'</b><span>'+he(SRX.date||'全部日期')+'</span><span>'+he(nm)+'</span><span class="go" style="--pc:'+pc+'">镜像</span></div>'
   +'<div class="srx-mfilt"><span>'+he(nm)+'</span><span>'+rows.length+' 行</span><span>'+he(srxChAge(ch,rows))+'</span><span>与左侧同源 /api/state · 本渠道全量</span></div>'
@@ -16910,7 +17825,7 @@ function srxMirrorDetailHTML(f,ch){
  return '<div class="srx-mdet" style="--pc:'+SRX_PLATS[ch][1]+'"><div class="h"><div><b>'+(cal?'':srxAirIcon(f.code)+' ')+he(cal?'日历/薄行':(f.code||f.name||'—'))+'</b><span>'+srxPlatIcon(ch)+' '+he(f.name||'')+'</span><span>'+he((f.date||'')+' · '+SRX_PLATS[ch][0])+'</span></div><div class="price">¥'+he(f.price)+'</div></div>'
   +'<div class="grid">'+[['起飞',f.depTime||'—'],['到达',(f.arrTime||'—')+he(f.cross?String(f.cross).replace(/\s*天/g,'').trim():'')],['时长',durTxt(f.dur)||'—'],['中转',f.trans||(f.transfer?'有':'直飞')],['舱位',f.cabin||'—'],['机型',f.plane||f.planeSize||'—'],['行李',f.baggage||'未供'],['餐食',f.meal||'未供'],['准点',f.prate||'未供'],['余票',f.leftTickets!=null?f.leftTickets+' 张':'未供']].map(x=>'<div class="kv"><span>'+srxInfoLabel(x[0])+'</span><b>'+(x[0]==='机型'?srxPlaneIcon(f.plane||f.planeSize):'')+he(x[1])+'</b></div>').join('')+'</div>'
   +'<div class="acts">'+(f.view?'<button type="button" data-openlink="'+he(f.view)+'">打开原页 ↗</button><button type="button" data-copy="'+he(f.view)+'">复制深链</button>':'<button type="button" disabled>该行无原页深链</button>')+'<button type="button" data-mdetail="'+he(srxKey(f))+'">解析详情（三重对齐）</button></div>'
-  +'<div class="srx-mfoot">raw：'+(raw?'在场 · 可逐字段核对':(f.rowId!=null?'待取 · 打开解析详情加载':'未供/无当轮 raw'))+' · 采集 '+(f.fetchedAt||'—')+' · 镜像非截图</div></div>';
+  +'<div class="srx-mfoot">解析 extra：'+(raw?'在场 · 可逐字段核对（非原始响应）':(f.rowId!=null?'待取 · 打开解析详情加载':'未供/无当轮 raw'))+' · 采集 '+(f.fetchedAt||'—')+' · 镜像非截图</div></div>';
 }
 function srxFourHTML(){
  const chans=SRX_PLAT_KEYS.slice(0,4);
@@ -16957,7 +17872,7 @@ function srxFieldTabHTML(f,raw){
    const lead=s.k==='name'?srxAirIcon(f.code):(s.k==='plane'?srxPlaneIcon(p):'');
    return '<div class="srx-f'+(srxKey(f)===SRX.sel&&f?'':'')+'" data-rk="'+he(s.raw.join('|'))+'" role="button" tabindex="0"><span class="n">'+srxInfoLabel(s.label)+'</span><span class="v'+(p?'':' miss')+'">'+lead+he(p||'—')+'</span><span class="mir'+(m?'':' miss')+'">'+(pending&&!m?'…':he(m||'—'))+'</span><span class="r" title="'+he(s.raw.join(' / '))+'">'+he(s.raw.slice(0,2).join(' / '))+'</span><span class="srx-fst '+stTxt[0]+'">'+he(stTxt[1])+'</span></div>'}).join('')
   +'</div></div>'
-  +'<div><div class="srx-dlab"><span>原始行回放 / RAW</span><em>'+(f.rowId!=null?'#'+f.rowId+' ['+f.rawIdx+']':(f.raw?'探针 raw':'无当轮 raw'))+'</em></div><div id="srxRawWrap">'+srxRawBoxHTML(f)+'</div>'
+  +'<div><div class="srx-dlab"><span>解析 extra / RAW（非原始响应）</span><em>'+(f.rowId!=null?'#'+f.rowId+' ['+f.rawIdx+']':(f.raw?'探针 raw':'无当轮 raw'))+'</em></div><div id="srxRawWrap">'+srxRawBoxHTML(f)+'</div>'
   +'<div class="srx-dlab" style="margin-top:8px"><span>解析结构 / PARSED</span><em>'+he(f.intl?'国际 · 含税':'')+'</em></div><div class="srx-statgrid">'+srxStatsHTML(f)+'</div></div></div>';
 }
 function srxStatsHTML(f){
@@ -16981,7 +17896,7 @@ function srxRawAuditHTML(f,raw){
  const dt=pick(['depTime','dTime','departTime']);if(dt!=null&&String(dt)!==String(f.depTime))checks.push('起飞 raw='+dt+' ≠ 解析 '+(f.depTime||'—'));
  const at=pick(['arrTime','aTime','arriveTime']);if(at!=null&&String(at)!==String(f.arrTime))checks.push('到达 raw='+at+' ≠ 解析 '+(f.arrTime||'—'));
  const cd=pick(['code','flightNo']);if(cd!=null&&srxNormCode(cd)!==srxNormCode(f.code))checks.push('航班号 raw='+cd+' ≠ 解析 '+(f.code||'—'));
- return '<div class="srx-rawaudit '+(checks.length?'warn':'ok')+'">'+(checks.length?'口径差异 '+checks.length+' 项：'+he(checks.join(' · ')):'原始行与解析价格/时刻/航班号逐项一致')+'</div>';
+ return '<div class="srx-rawaudit '+(checks.length?'warn':'ok')+'">'+(checks.length?'口径差异 '+checks.length+' 项：'+he(checks.join(' · ')):'解析 extra 与解析字段一致（非原始响应）')+'</div>';
 }
 function srxRawBoxHTML(f){
  if(f&&f.raw)return '<pre class="srx-raw" id="srxRawBox">'+srxRawLineHTML(f.raw)+'</pre>'+srxRawAuditHTML(f,f.raw);
@@ -16992,7 +17907,7 @@ function srxRawBoxHTML(f){
  return '<pre class="srx-raw" id="srxRawBox">'+srxRawLineHTML(c.raw)+'</pre>'+srxRawAuditHTML(f,c.raw);
 }
 function srxRawTabHTML(f,raw){
- return '<div class="srx-dlab"><span>原始行回放 / RAW</span><em>'+(f.rowId!=null?'#'+f.rowId+' ['+f.rawIdx+']':(f.raw?'探针 raw':'无'))+'</em></div>'
+ return '<div class="srx-dlab"><span>解析 extra / RAW（非原始响应）</span><em>'+(f.rowId!=null?'#'+f.rowId+' ['+f.rawIdx+']':(f.raw?'探针 raw':'无'))+'</em></div>'
   +'<div class="srx-dgrid"><div><div id="srxRawWrap">'+srxRawBoxHTML(f)+'</div><div class="srx-dacts" style="margin-top:6px"><button type="button" data-copyraw="1">复制完整 raw</button><button type="button" data-copyrawkey="1">复制当前节点</button></div></div>'
   +'<div><div class="srx-dlab"><span>字段 ⇄ raw 键</span><em>点击字段定位</em></div><div class="srx-prov"><div class="row"><span class="k">DB 行</span><span class="v mono">'+(f.rowId!=null?'#'+f.rowId+' / extra['+f.rawIdx+']':'无')+'</span></div><div class="row"><span class="k">采集时刻</span><span class="v mono">'+he(f.fetchedAt||'—')+'</span></div><div class="row"><span class="k">渠道</span><span class="v">'+srxPlatIcon(f.platKey)+' '+he((SRX_PLATS[f.platKey]||[f.plat])[0]||'—')+'</span></div><div class="row"><span class="k">口径</span><span class="v">解析值来自爬虫归一；镜像值来自 raw 同键。价格差异可能是含税/税垫，不是自动改价。</span></div></div>'+srxFieldTabMini(f,raw)+'</div></div>';
 }
@@ -17003,8 +17918,11 @@ function srxProvHTML(f){
  const nm=(SRX_PLATS[f.platKey]||[f.plat])[0]||'—',raw=srxRawOf(f);
  return '<div class="srx-dlab"><span>来源与采集 / PROVENANCE</span><em>可审计</em></div><div class="srx-dgrid"><div><div class="srx-prov">'
   +'<div class="row"><span class="k">渠道</span><span class="v">'+srxPlatIcon(f.platKey)+' '+he(nm)+' · '+he(f.platKey||'—')+'</span></div>'
-  +'<div class="row"><span class="k">承运航司</span><span class="v">'+(srxAirIcon(f.code)||'')+' '+he(srxAirMeta(f.code).name||f.name||'未供')+'</span></div>'
+  +'<div class="row"><span class="k">承运航司</span><span class="v">'+(srxAirIcon(f.shareCarrier||f.code)||'')+' '
+  +he(srxAirMeta(f.shareCarrier||f.code).name||f.shareAirline||f.name||'未供')
+  +(f.shareCarrier&&srxAirCode(f.shareCarrier)!==srxAirCode(f.code)?'（实际承运；销售 '+he(f.code||'—')+'）':'')+'</span></div>'
   +'<div class="row"><span class="k">航线</span><span class="v">'+he(srxPairName(f.from,f.to)+' · '+(f.date||'—'))+'</span></div>'
+  +'<div class="row"><span class="k">采集入口</span><span class="v">'+(f.entryPath||(f.prov&&f.prov.entryPath)?(he(f.entryPath||f.prov.entryPath)+' · '+(f.prov&&f.prov.evidenceLevel==='path'?'路径级':'探针路径')):'未记录（历史轮次未存入口）')+'</span></div>'
   +'<div class="row"><span class="k">采集时刻</span><span class="v mono">'+he(f.fetchedAt||(srxIsStale(f)?'补位 '+f.stale+'h':'—'))+'</span></div>'
   +'<div class="row"><span class="k">原始行</span><span class="v mono">'+(f.rowId!=null?'#'+f.rowId+' · extra['+f.rawIdx+']':(f.raw?'实时探针原始行（未落库）':'无（补位/日历行）'))+'</span></div>'
   +'<div class="row"><span class="k">原页深链</span><span class="v mono u" title="'+he(f.view||'')+'">'+he(f.view||'该行未提供')+'</span></div>'
@@ -17289,7 +18207,7 @@ function srxCitySuggest(inp){
  _dropFlip(inp,drop,268);
 }
 function _dropFlip(inp,drop,maxH){
- drop.style.top='';drop.style.bottom='';drop.style.maxHeight='';
+ drop.style.top='';drop.style.bottom='';drop.style.maxHeight='';drop.style.left='';
  if(!inp||!drop)return;
  const ir=inp.getBoundingClientRect();
  if(window.innerHeight-ir.bottom<200&&ir.top>220){
@@ -17298,8 +18216,18 @@ function _dropFlip(inp,drop,maxH){
  }else{
   drop.style.maxHeight=Math.min(maxH,Math.max(120,window.innerHeight-ir.bottom-16))+'px';
  }
+ /* 水平边界避让：城市联想框宽度由内容决定（配置页最小 230px），
+    窄屏/右侧栏触发时右缘曾出画并撑出页面横滚。以视口为界回推，
+    位移量换算到 offsetParent 坐标，锚点仍贴合触发框。 */
+ const vw=document.documentElement.clientWidth||window.innerWidth;
+ const dr=drop.getBoundingClientRect();
+ const pr=drop.offsetParent?drop.offsetParent.getBoundingClientRect():{left:0};
+ let shift=0;
+ if(dr.right>vw-8)shift=(vw-8)-dr.right;
+ else if(dr.left<8)shift=8-dr.left;
+ if(shift)drop.style.left=Math.round(dr.left-pr.left+shift)+'px';
 }
-function srxCityHide(inp){const d=srxCityDropEl(inp);if(d){d.hidden=true;d.innerHTML='';d.style.top='';d.style.bottom='';d.style.maxHeight=''}if(inp){inp.setAttribute('aria-expanded','false');inp.removeAttribute('aria-activedescendant')}}
+function srxCityHide(inp){const d=srxCityDropEl(inp);if(d){d.hidden=true;d.innerHTML='';d.style.top='';d.style.bottom='';d.style.maxHeight='';d.style.left=''}if(inp){inp.setAttribute('aria-expanded','false');inp.removeAttribute('aria-activedescendant')}}
 function srxCityHideAll(){['srxFrom','srxTo'].forEach(id=>srxCityHide(document.getElementById(id)))}
 function srxCityFocus(inp){
  if(!inp||_cpClosing)return;
@@ -17437,6 +18365,10 @@ async function srxProbeRun(){
  finally{if(btn){btn.disabled=false;btn.classList.remove('busy');btn.textContent='实时探针'}}
 }
 let SRX_TASK=null,SRX_TASK_TIMER=0,SRX_TASK_BASE=[],SRX_TASK_ROWS=[],SRX_TASK_ROWS_SEEN=0,SRX_TASK_SIG='',SRX_TASK_FOLLOW=true;
+/* 任务代次/单飞：旧任务的轮询或恢复响应晚到，曾把新任务的摘要、
+   行基线和阶段整体覆盖，轮询随后继续打旧 id。每次提交/恢复/退出
+   递增代次，回包校验 id+代次后再生效。 */
+let SRX_TASK_GEN=0,SRX_TASK_POLLING=false;
 function srxTaskStore(id){try{if(id)localStorage.setItem('jpsrx_task',String(id));else localStorage.removeItem('jpsrx_task')}catch(e){}}
 function srxTaskCond(j){
  const ps=(j&&j.plans)||[];
@@ -17651,7 +18583,7 @@ function srxTaskRender(j){
    const word=lg.status==='ok'?(lg.rows||0)+' 行':(lg.status==='empty'?'无结果':(lg.status==='queued'?'排队':(lg.status==='running'?'采集中':(lg.status==='cancelled'?'已取消':'失败'))));
    const chs=SRX_PLAT_ORDER.filter(p=>(lg.channels||{})[p]).map(p=>{
     const c=lg.channels[p],cs=c.status||'queued';
-    const k=cs==='running'?'run':(cs==='ok'?'ok':(cs==='queued'?'queued':(['error','timeout','parse_error','blocked','login_required','challenge','session_busy'].includes(cs)?'bad':(cs==='empty'||cs==='calendar_only'||cs==='partial'||cs==='cancelled'?'warn':'queued'))));
+    const k=cs==='running'?'run':(cs==='ok'?'ok':(cs==='queued'?'queued':(['error','timeout','parse_error','blocked','login_required','challenge','session_busy'].includes(cs)?'bad':(cs==='empty'||cs==='calendar_only'||cs==='partial'||cs==='cancelled'||cs==='unsupported'?'warn':'queued'))));
     const txt=srxChannelText(c);
     return '<span class="srx-tch '+k+'" title="'+he((c.raw_n!=null?('渠道记录 '+c.raw_n+' · '):'')+(c.err||c.phase||''))+'"><span class="p">'+srxPlatIcon(p)+'</span>'+he((SRX_PLATS[p]||[p])[0])+' · '+he(txt)+'</span>'}).join('');
    return '<div class="srx-tleg"><b>'+he(lg.from_name)+'→'+he(lg.to_name)+'</b><em>'+he(lg.date)+'</em><span class="st '+stc+'">'+he(word)+'</span>'+(lg.elapsed_ms?'<span>'+Math.round(lg.elapsed_ms/1000)+'s</span>':'')+chs+srxTaskPaths(lg)+'</div>';
@@ -17702,10 +18634,22 @@ function srxTaskStop(){
 }
 function srxTaskApply(j,opts){
  const opt=opts||{};
+ if(opt.expectId!=null&&String(j.id)!==String(opt.expectId))return false;
  const prev=SRX_TASK;
+ const newTask=!prev||prev.id!==j.id;
  SRX_TASK=j;SRX_TASK_SIG=[j.status,j.done,j.detail,j.cal,j.failed,j.raw,j.rows_total,j.updated].join('|');
+ if(newTask){
+  /* 新任务默认展开执行详情；上一任务的折叠态不得遗传。 */
+  const tb=$('srxTaskBody');if(tb)tb.hidden=false;
+  const fb=$('srxTaskFold');if(fb){fb.textContent='收起进度';fb.setAttribute('aria-expanded','true')}
+ }
  const fresh=j.rows||[];
- if(fresh.length){SRX_TASK_ROWS=SRX_TASK_ROWS.concat(fresh);SRX_TASK_ROWS_SEEN+=fresh.length}
+ if(fresh.length){
+  SRX_TASK_ROWS=SRX_TASK_ROWS.concat(fresh);
+  /* 已见游标以服务端 rows_from 为锚：并发的同一批响应曾把游标
+     加两次，rows_total 与页面可见行数从此对不上。 */
+  SRX_TASK_ROWS_SEEN=Math.max(SRX_TASK_ROWS_SEEN,Number(j.rows_from||0)+fresh.length);
+ }
  const rows=srxTaskMergeRows([]);
  SRX.probe=srxTaskProbe(j,rows,!!opt.forceBatch);
  SRX.probeNames={};
@@ -17727,31 +18671,43 @@ function srxTaskApply(j,opts){
  }
 }
 async function srxTaskFetch(){
- if(!SRX_TASK)return;
+ if(!SRX_TASK||SRX_TASK_POLLING)return;   /* 单飞：1.5s 慢网络下上一拍未回不再叠加 */
+ const id=String(SRX_TASK.id),gen=SRX_TASK_GEN;
+ SRX_TASK_POLLING=true;
  try{
-  const r=await fetch('/api/probe/task?id='+encodeURIComponent(SRX_TASK.id)+'&rows_from='+SRX_TASK_ROWS_SEEN,{cache:'no-store'});
-  if(r.status===404){srxTaskStop();SRX_TASK=null;SRX_TASK_ROWS=[];SRX_TASK_BASE=[];try{localStorage.removeItem('jpsrx_task')}catch(e){};const p=$('srxTaskPanel');if(p)p.hidden=true;toast('上次探针任务已随服务重启结束','err');return}
-  const j=await r.json();if(j&&j.ok)srxTaskApply(j);
- }catch(e){const live=$('srxTaskLive');if(live)live.querySelector('b').textContent='连接中断，重试中…'}
+  const r=await fetch('/api/probe/task?id='+encodeURIComponent(id)+'&rows_from='+SRX_TASK_ROWS_SEEN,{cache:'no-store'});
+  if(gen!==SRX_TASK_GEN||!SRX_TASK||String(SRX_TASK.id)!==id)return;
+  if(r.status===404){srxTaskStop();SRX_TASK=null;SRX_TASK_ROWS=[];SRX_TASK_BASE=[];SRX_TASK_ROWS_SEEN=0;try{localStorage.removeItem('jpsrx_task')}catch(e){};const p=$('srxTaskPanel');if(p)p.hidden=true;toast('上次探针任务已随服务重启结束','err');return}
+  const j=await r.json();
+  if(gen!==SRX_TASK_GEN||!SRX_TASK||String(SRX_TASK.id)!==id)return;
+  if(j&&j.ok)srxTaskApply(j,{expectId:id});
+ }catch(e){const live=$('srxTaskLive');if(live&&gen===SRX_TASK_GEN)live.querySelector('b').textContent='连接中断，重试中…'}
+ finally{SRX_TASK_POLLING=false}
 }
 function srxTaskStartPoll(){srxTaskStop();SRX_TASK_TIMER=setInterval(srxTaskFetch,1500)}
 async function srxTaskStart(payload,opts){
  const o=opts||{};
  const box=$('srxProbeStatus');
+ /* 提交前先退役旧任务：旧轮询在 POST 往返期间曾把新任务覆盖回旧 id。 */
+ srxTaskStop();SRX_TASK_GEN++;SRX_TASK_POLLING=false;
+ SRX_TASK=null;SRX_TASK_ROWS=[];SRX_TASK_ROWS_SEEN=0;
+ const gen=SRX_TASK_GEN;
  try{
   const _p=Object.assign({},payload);if(o.retry)_p.retry=true;
   const r=await fetch('/api/probe/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_p)});
   const j=await r.json();
+  if(gen!==SRX_TASK_GEN)return false;   /* 已被更晚的提交取代 */
   if(!j.ok)throw new Error(j.err||('HTTP '+r.status));
   srxTaskStore(j.task.id);
   SRX_TASK_BASE=o.merge?(o.base||SRX_TASK_BASE||[]):[];
   SRX_TASK_ROWS=[];SRX_TASK_ROWS_SEEN=0;SRX_TASK=null;
   if(!o.keepFilters){SRX.plats=[];SRX.q='';SRX.f={...SRX_DEFAULT_F};SRX.agg=false;SRX.sel=null;SRX.detailOpen=false;SRX.limit=SRX_PAGE}
-  srxTaskApply(j.task,{keepScope:!!o.merge,forceBatch:!!o.merge});
+  srxTaskApply(j.task,{keepScope:!!o.merge,forceBatch:!!o.merge,expectId:j.task.id});
   srxTaskStartPoll();
   if(box){box.className='srx-probestatus ok';box.textContent='任务已提交；展开「进度」可看真实阶段、逐渠道结果与阻塞原因。'}
   if(SRX_TASK) srxTaskOpen();
  }catch(e){
+  if(gen!==SRX_TASK_GEN)return false;
   if(box){box.className='srx-probestatus err';box.textContent='探针未能启动：'+(e.message||e)}
   return false;
  }
@@ -17761,10 +18717,13 @@ function srxTaskResume(){
  try{const qid=(new URLSearchParams(location.search).get('task')||'').trim();
   if(qid){id=qid;srxTaskStore(qid)}}catch(e){}
  if(!id)return;
+ if(SRX_TASK&&['queued','running','stopping'].includes(SRX_TASK.status))return; /* 已有活跃任务不并发恢复 */
+ SRX_TASK_GEN++;const gen=SRX_TASK_GEN;
  fetch('/api/probe/task?id='+encodeURIComponent(id)+'&rows_from=0',{cache:'no-store'}).then(r=>r.json()).then(j=>{
+  if(gen!==SRX_TASK_GEN)return;   /* 恢复期间已提交新任务：旧快照作废 */
   if(!j||!j.ok){try{localStorage.removeItem('jpsrx_task')}catch(e){};return}
   SRX_TASK_BASE=[];SRX_TASK_ROWS=[];SRX_TASK_ROWS_SEEN=0;
-  srxTaskApply(j);
+  srxTaskApply(j,{expectId:id});
   if(j.status==='running'||j.status==='stopping')srxTaskStartPoll();
  }).catch(()=>{});
 }
@@ -17790,7 +18749,10 @@ async function srxTaskRetry(){
   if(bad.length&&!retryable.length)authOnly++;
   if(retryable.length){byLeg[lg.leg]=retryable;retryable.forEach(p=>plats.add(p))}
  });
- const legs=(j.plans||[]).filter((p,i)=>byLeg[i]!=null).map(p=>({from:p.from,to:p.to,date:p.date}));
+ /* 逐腿只带该腿失败渠道：旧实现把并集发给每条腿，重试一个失败
+    会重跑最多五倍上游请求。 */
+ const legs=(j.plans||[]).filter((p,i)=>byLeg[i]!=null).map(p=>({
+  from:p.from,to:p.to,date:p.date,plats:(byLeg[p.leg!=null?p.leg:i]||[]).slice()}));
  if(!legs.length){
   toast(authOnly?'失败项需先完成登录/人工验证；打开验证窗口完成后再试':'没有可重试的失败项','err');
   return;
@@ -17799,7 +18761,12 @@ async function srxTaskRetry(){
  await srxTaskStart({legs,plats:[...plats]},{merge:true,batch:true,keepFilters:true,base:SRX_TASK_BASE,retry:true});
 }
 function srxExitProbe(){
- srxTaskStop();
+ const running=SRX_TASK&&(SRX_TASK.status==='running'||SRX_TASK.status==='stopping');
+ if(running)srxTaskCancel();   /* 退出面板不得让后端任务继续空跑：先请求取消 */
+ srxTaskStop();SRX_TASK_GEN++;SRX_TASK_POLLING=false;
+ SRX_TASK=null;SRX_TASK_ROWS=[];SRX_TASK_BASE=[];SRX_TASK_ROWS_SEEN=0;
+ const _tp=$('srxTaskPanel');if(_tp)_tp.hidden=true;
+ try{localStorage.removeItem('jpsrx_task')}catch(e){}
  const _pp=$('srxProbe');if(_pp)_pp.classList.remove('open');srxRenderProbeMini();
  SRX.probe=null;SRX.probeNames=null;SRX.sel=null;SRX.detailOpen=false;
  const pre=SRX.preProbe;SRX.preProbe=null;
@@ -17831,7 +18798,14 @@ function srxRenderProbeMini(j){
 }
 function srxOpenCfgRoutes(){switchView('cfg');setTimeout(()=>{try{showCfgPanel('users')}catch(e){}},0)}
 function srxReload(){toast('正在拉取最新真实数据…');load();setTimeout(renderSearch,650)}
-function srxSwitchUser(v){U=+v||0;try{saveUI()}catch(e){}SRX_WATCH.route='';SRX_WATCH.q='';SRX_WATCH.status='';SRX_WATCH.targetState='';SRX_WATCH.channel='';SRX.probe=null;SRX.probeNames=null;SRX.preProbe=null;SRX.sel=null;SRX.detailOpen=false;SRX._init=false;SRX.pair='';SRX.date='';SRX.plats=[];SRX.q='';SRX.f={...SRX_DEFAULT_F};SRX.agg=false;const ex=$('srxExitProbe');if(ex)ex.style.display='none';$('searchview').classList.remove('srx-probe-on');srxProbeStatus(null);render();renderSearch()}
+function srxSwitchUser(v){U=+v||0;try{saveUI()}catch(e){}
+ /* 切用户=换观察主体：旧用户的探针任务/关注清单/雷达结果必须停用，
+   否则旧轮询或旧响应会在新用户名下继续落行。 */
+ srxTaskStop();SRX_TASK_GEN++;SRX_TASK_POLLING=false;SRX_TASK=null;SRX_TASK_ROWS=[];SRX_TASK_BASE=[];SRX_TASK_ROWS_SEEN=0;const _tp=$('srxTaskPanel');if(_tp)_tp.hidden=true;
+ SRX_WATCH.list=[];SRX_WATCH.loadedFor='';SRX_WATCH.pending=false;SRX_WATCH.seq=(SRX_WATCH.seq||0)+1;SRX_WATCH.open=false;
+ SRX_RADAR.data=null;SRX_RADAR.user='';SRX_RADAR.loaded=false;SRX_RADAR.seq=(SRX_RADAR.seq||0)+1;
+ WATCH_ONLY=false;WATCH_KEYS=null;
+ SRX_WATCH.route='';SRX_WATCH.q='';SRX_WATCH.status='';SRX_WATCH.targetState='';SRX_WATCH.channel='';SRX.probe=null;SRX.probeNames=null;SRX.preProbe=null;SRX.sel=null;SRX.detailOpen=false;SRX._init=false;SRX.pair='';SRX.date='';SRX.plats=[];SRX.q='';SRX.f={...SRX_DEFAULT_F};SRX.agg=false;const ex=$('srxExitProbe');if(ex)ex.style.display='none';$('searchview').classList.remove('srx-probe-on');srxProbeStatus(null);srxWatchCount();srxWatchSync();render();renderSearch()}
 function srxOpen(url){if(!/^https?:\/\//i.test(String(url||''))){toast('该行没有可打开的 http(s) 原页深链');return}
  try{const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';
   document.body.appendChild(a);a.click();a.remove()}
@@ -17910,9 +18884,19 @@ function srxRenderRestore(){
  if((st.plats||[]).length)parts.push('渠道 '+st.plats.map(x=>(SRX_PLATS[x]||[x])[0]).join('/'));
  if(st.q)parts.push('关键词「'+st.q+'」');
  const fn=srxFilterCount(st.f);if(fn)parts.push('筛选 '+fn+' 项');
- if(!parts.length){el.hidden=true;el.innerHTML='';SRX.restore=null;return}
+ if(!parts.length){
+  /* 首次进入自动定位到最忙航线是产品选择，但必须明说，不能一边选中
+     具体航线一边宣称「展示全部」。用户可关闭本次提示。 */
+  if(SRX.pair&&SRX.pair!=='|'&&!SRX.date&&!SRX.probe&&!SRX.autoDismissed){
+   const q=SRX.pair.split('|');
+   el.hidden=false;
+   el.innerHTML='<b>已自动定位</b><span>已定位到有真实数据的航线 '+he(srxPairName(q[0],q[1]))+'；日期与渠道为全部，可在上方切换航线。</span><button type="button" data-restoreoff="1">知道了</button>';
+   return;
+  }
+  el.hidden=true;el.innerHTML='';SRX.restore=null;return;
+ }
  el.hidden=false;
- el.innerHTML='<b>已保持中性视图</b><span>上次条件未自动应用：'+he(parts.join(' · '))+'。当前展示全部日期与渠道。</span><button type="button" data-restore="1">恢复上次条件</button><button type="button" data-restoreoff="1">忽略</button>';
+ el.innerHTML='<b>已保持中性视图</b><span>上次条件未自动应用：'+he(parts.join(' · '))+'。当前展示'+(SRX.pair&&SRX.pair!=='|'?('航线 '+he(srxPairName(...SRX.pair.split('|')))+' 的'):'')+'全部日期与渠道。</span><button type="button" data-restore="1">恢复上次条件</button><button type="button" data-restoreoff="1">忽略</button>';
 }
 function srxRestoreApply(){
  const st=SRX.restore;if(!st)return;
@@ -17923,8 +18907,12 @@ function srxRestoreApply(){
  let _d=st.date||'';if(_d&&!srxDatesAvailable().includes(_d)){toast('上次日期 '+_d+' 已不在当前数据中；已恢复其余条件','err');_d=''}
  SRX.pair=st.pair||'';SRX.date=_d;SRX.plats=Array.isArray(st.plats)?st.plats.filter(x=>SRX_PLATS[x]):[];
  SRX.q=st.q||'';SRX.f={...SRX_DEFAULT_F,...(st.f||{})};SRX.agg=!!st.agg;SRX.restore=null;SRX._init=true;SRX.bandAnchor='';
- const el=$('srxRestoreNote');if(el)el.hidden=true;
- srxSave();srxRenderFacets(true);srxRenderQuick();renderSearch();toast('已恢复上次条件；筛选摘要见列表上方','ok');
+ srxSave();srxRenderFacets(true);srxRenderQuick();renderSearch();
+ /* 恢复后展示完整生效条件 + 一键重置，而不是只弹一句摘要。 */
+ const el=$('srxRestoreNote');
+ const eff=[SRX.pair&&SRX.pair!=='|'?('航线 '+srxPairName(...SRX.pair.split('|'))):'',SRX.date?('日期 '+SRX.date):'',srxFilterSummary()].filter(Boolean).join(' · ');
+ if(el){el.hidden=false;el.innerHTML='<b>已恢复上次筛选</b><span>'+he(eff||'中性条件')+'</span><button type="button" data-resetflt="1">重置</button>'}
+ toast('已恢复上次筛选','ok');
 }
 function srxRenderCtx(){
  const sec=$('srxContext'),b=$('srxFilterBtn');if(!sec)return;
@@ -18001,14 +18989,14 @@ async function srxExport(){
   const need=rows.filter(f=>f.rowId!=null&&!srxRawOf(f));
   for(let i=0;i<need.length;i+=8)await Promise.all(need.slice(i,i+8).map(f=>srxFetchRaw(f)));
   const signs=srxSigns();
-  const head=['查询日','航线','渠道','航班','解析价','原页价','起飞','到达','时长','舱位','机型','行李','餐食','准点','余票','税费','退改','数据类别','风险','对齐','采集时刻','原始行','证据指纹','落地页','结论','备注'];
+  const head=['查询日','航线','渠道','采集入口','证据级别','航班','解析价','原页价','起飞','到达','时长','舱位','机型','行李','餐食','准点','余票','税费','退改','数据类别','风险','对齐','采集时刻','原始行','证据指纹','落地页','结论','备注'];
   const q=s=>{let t=String(s==null?'':s);const _h=t.replace(/^\s+/,'');if(_h&&("=+-@".indexOf(_h[0])>=0||_h.charCodeAt(0)===9||_h.charCodeAt(0)===13))t="'"+t;return '"'+t.replace(/"/g,'""')+'"'};
   const lines=[head.map(q).join(',')];
   rows.forEach(f=>{
    const raw=srxRawOf(f),st=SRX_FIELD_SPECS.map(s=>srxFieldState(s,f,raw)[1]);
    const ok=st.filter(x=>x==='一致').length,bad=st.filter(x=>x==='不一致'||x==='口径差').length,miss=st.filter(x=>x==='未采'||x==='未供').length;
    const sign=signs[srxSignKey(f)]||{};
-   lines.push([f.date||'',srxPairName(f.from,f.to),f.plat||'',srxIsCal(f)?'日历/薄行':(f.code||''),f.price,
+   lines.push([f.date||'',srxPairName(f.from,f.to),f.plat||'',srxEntryOf(f),srxEvLevel(f),srxIsCal(f)?'日历/薄行':(f.code||''),f.price,
     (()=>{const v=srxPickRaw(raw,['price','avgTotalPrice','minPrice','adultPrice']);return v==null?'':v})(),
     f.depTime||'',f.arrTime||'',f.dur||'',f.cabin||'',f.plane||f.planeSize||'',f.baggage||'',f.meal||'',f.prate||'',
     f.leftTickets!=null?f.leftTickets:'',f.tax!=null?f.tax:'',srxRefund(f),srxIsCal(f)?('日历/薄行'+(srxIsStale(f)?' · 补位 '+f.stale+'h':'')):(srxIsStale(f)?'补位 '+f.stale+'h':(Number(f.th)?'实时':'实时 · 仅观察')),srxRiskLabels(f).map(x=>x[1]+':'+x[2]).join(';'),'一致'+ok+'/差异'+bad+'/缺'+miss,
@@ -18070,8 +19058,10 @@ document.addEventListener('click',ev=>{
     同时把渠道筛选切了。 */
  if(t.closest('a[data-openlink]'))return;
  if(t.closest('[data-restore]')){srxRestoreApply();return}
+ if(t.closest('[data-bandcollapse]')){SRX.bandExpand=false;srxRenderBand();return}
  if(t.closest('[data-bandexpand]')){SRX.bandExpand=true;srxRenderBand();return}
- if(t.closest('[data-restoreoff]')){SRX.restore=null;const rn=$('srxRestoreNote');if(rn)rn.hidden=true;srxSave();return}
+ if(t.closest('[data-restoreoff]')){SRX.restore=null;SRX.autoDismissed=true;const rn=$('srxRestoreNote');if(rn)rn.hidden=true;srxSave();return}
+ if(t.closest('[data-resetflt]')){srxClearAllFilters();SRX.autoDismissed=true;const rn=$('srxRestoreNote');if(rn)rn.hidden=true;toast('已重置筛选','ok');return}
  if(t.closest('[data-alldates]')){
   if(srxDateLock()){toast('已提交任务只查询了 '+SRX.date+'；查看其他日期需发起新查询','err');return}
   SRX.date='';SRX.bandAnchor='';SRX.sel=null;SRX._init=true;srxSave();renderSearch();return}
@@ -18492,7 +19482,60 @@ def _intl_payload():
 _TREND_DAYS = (30, 90, 180)   # 长窗档位单源（前端 chips 与钳制同源）
 
 
-def _trend_from_flights(st, from_city, to_city, depart_date, days):
+def _trend_route_ok(parts, lo, platform, route):
+    """长窗日桶的航线条件门：flight_daily 只有 flight_key/lo/platform，
+    能判的维度按与短窗/列表同一语义过滤；判不了的维度（舱位是否廉航、
+    行李额、机型）不伪造。flight_key 已含中转/跨天/经停/起降时刻。"""
+    if not route:
+        return True
+
+    def _g(k):
+        if isinstance(route, dict):
+            return route.get(k)
+        return getattr(route, k, None)
+
+    if _g("direct_only") and len(parts) > 6 and parts[6]:
+        return False
+    if _g("exclude_stop") and len(parts) > 8 and parts[8] == "1":
+        return False
+    if _g("no_cross") and len(parts) > 7 and parts[7]:
+        return False
+    for lo_k, hi_k, idx in (("dep_time_min", "dep_time_max", 4),
+                            ("arr_time_min", "arr_time_max", 5)):
+        val = str(parts[idx] if len(parts) > idx else "")
+        if not re.match(r"^\d{1,2}:\d{2}$", val):
+            continue
+        _m = lambda s: (int(s.split(":")[0]) * 60 + int(s.split(":")[1]))
+        v = _m(val)
+        lo_v, hi_v = _g(lo_k), _g(hi_k)
+        if lo_v and re.match(r"^\d{1,2}:\d{2}$", str(lo_v)) and v < _m(str(lo_v)):
+            return False
+        if hi_v and re.match(r"^\d{1,2}:\d{2}$", str(hi_v)) and v > _m(str(hi_v)):
+            return False
+    _al = str(_g("airlines") or "").replace("，", ",")
+    if _al.strip():
+        _want = [x.strip().upper() for x in _al.split(",") if x.strip()]
+        _ban = [x[1:].strip() for x in _want if x.startswith("!") and x[1:].strip()]
+        _allow = [x for x in _want if not x.startswith("!")]
+        _code = str(parts[2] if len(parts) > 2 else "").upper()
+        if _ban and any(b in _code for b in _ban):
+            return False
+        if _allow and not any(a in _code for a in _allow):
+            return False
+    try:
+        _pmax = float(_g("price_max") or 0)
+    except (TypeError, ValueError):
+        _pmax = 0
+    if _pmax and float(lo) > _pmax:
+        return False
+    _ch = _g("channels")
+    if isinstance(_ch, list) and _ch and platform not in _ch:
+        return False
+    return True
+
+
+def _trend_from_flights(st, from_city, to_city, depart_date, days,
+                        route=None):
     """长窗航线日桶：优先用 flight_daily（仅真实航班，已排除日历薄行）。
 
     同一采集日按直飞/中转聚合所有航班级桶：lo=当日最低、hi=当日最高，
@@ -18501,7 +19544,7 @@ def _trend_from_flights(st, from_city, to_city, depart_date, days):
     """
     with st._conn() as c:
         rows = c.execute(
-            "SELECT day, flight_key, lo, hi, open, close, fetched_max "
+            "SELECT day, flight_key, platform, lo, hi, open, close, fetched_max "
             "FROM flight_daily WHERE from_city=? AND to_city=? "
             "AND depart_date=? AND day>=date('now','localtime',?) "
             "ORDER BY day, fetched_max, flight_key",
@@ -18515,6 +19558,8 @@ def _trend_from_flights(st, from_city, to_city, depart_date, days):
         except (TypeError, ValueError):
             continue
         parts = str(r["flight_key"] or "").split("|")
+        if not _trend_route_ok(parts, lo, str(r["platform"] or ""), route):
+            continue
         kind = "t" if len(parts) > 6 and parts[6] else "d"
         groups.setdefault((r["day"], kind), []).append((lo, hi, r))
     out = {"d": [], "t": []}
@@ -18554,6 +19599,36 @@ def _trend_payload(q: dict) -> dict:
         th = float((q.get("th") or ["0"])[0])
     except ValueError:
         th = 0.0
+
+    def _qv(k):
+        return str((q.get(k) or [""])[0] or "").strip()
+
+    rf = {}
+    if _qv("rdirect") in ("1", "true", "on"):
+        rf["direct_only"] = True
+    if _qv("rnostop") in ("1", "true", "on"):
+        rf["exclude_stop"] = True
+    if _qv("rnocross") in ("1", "true", "on"):
+        rf["no_cross"] = True
+    if _qv("rairlines"):
+        rf["airlines"] = _qv("rairlines")
+    if _qv("rdepmin"):
+        rf["dep_time_min"] = _qv("rdepmin")
+    if _qv("rdepmax"):
+        rf["dep_time_max"] = _qv("rdepmax")
+    if _qv("rarrmin"):
+        rf["arr_time_min"] = _qv("rarrmin")
+    if _qv("rarrmax"):
+        rf["arr_time_max"] = _qv("rarrmax")
+    try:
+        _rpmax = float(_qv("rpmax") or 0)
+    except ValueError:
+        _rpmax = 0
+    if _rpmax > 0:
+        rf["price_max"] = _rpmax
+    _rch = [x.strip() for x in _qv("rchannels").split(",") if x.strip()]
+    if _rch:
+        rf["channels"] = _rch
     if _State.cfg is not None:
         # 数据源与 /api/state 同源（_State.cfg 单一事实源）——本函数
         # 初版读 config_path，demo 态从未设置该路径，会读穿真实
@@ -18569,10 +19644,18 @@ def _trend_payload(q: dict) -> dict:
     st = PriceStorage(_db)
     try:
         st.refresh_daily(frm, to, date)
-        fd = _trend_from_flights(st, frm, to, date, days)
+        fd = _trend_from_flights(st, frm, to, date, days, route=rf or None)
         if fd:
             return {"ok": True, "days": days, "basis": "flight_daily",
+                    "filtered": bool(rf),
                     "direct": fd["direct"], "transfer": fd["transfer"]}
+        if rf:
+            # 有航线条件但无航班级日桶：日历池无法按直飞/航司/时段过滤，
+            # 宁可不画，也不把未过滤的日历最低价冒充本航线曲线。
+            return {"ok": True, "days": days,
+                    "basis": "flight_daily_filtered_empty",
+                    "filtered": True, "direct": [], "transfer": [],
+                    "note": "长窗无航班级日桶，且航线条件无法套用到日历池；未用日历价替代"}
         d = st.daily_series(frm, to, date, days=days, th_d=th, kind="d")
         t = st.daily_series(frm, to, date, days=days, th_d=th, kind="t")
         basis = "price_daily_calendar"
@@ -18593,6 +19676,7 @@ class _State:
     cfg = None
     boot_cfg = None   # 进程启动快照（重启差量基准，热重载不覆盖）
     users = None
+    alerters = []     # 与 users 对齐；雷达降价提醒复用用户通知通道
     job = None
     report_push = None
     reload_cb = None
@@ -18787,6 +19871,11 @@ def _login_state_view() -> dict:
             else:
                 status = "missing"
             needs_login = status in ("login_required", "challenge")
+            # 三态分离：已保存（persisted）≠ 会话已核验 ≠ 本次明细成功。
+            # H5 页面核验只能证明入口可达；不把 page_ok 当明细证据。
+            page_ok = status == "page_ok"
+            detail_ok = False
+            session_verified = page_ok
             slots[key] = {
                 "slot": key, "plat": meta["plat"], "surface": meta["surface"],
                 "surface_label": meta["surface_label"],
@@ -18800,9 +19889,16 @@ def _login_state_view() -> dict:
                 "error": error,
                 "detail": verify.get("detail", ""),
                 "verified_at": verify.get("at", ""),
+                "page_ok": page_ok, "session_verified": session_verified,
+                "detail_ok": detail_ok,
             }
         else:
             base = dict(plats[meta["plat"]])
+            _scopes = base.get("scopes") or {}
+            _detail_ok = any(bool(v.get("detail_available"))
+                             for v in _scopes.values())
+            _sess_verified = bool(_scopes) and not base.get("needs_login") and (
+                _detail_ok or any(v.get("auth_at") for v in _scopes.values()))
             slots[key] = dict(base, **{
                 "slot": key, "plat": meta["plat"],
                 "surface": meta["surface"],
@@ -18811,6 +19907,8 @@ def _login_state_view() -> dict:
                 "requirement": meta["requirement"], "profile": meta["profile"],
                 "login_url": meta["login_url"],
                 "detail": "", "verified_at": "",
+                "page_ok": False, "session_verified": _sess_verified,
+                "detail_ok": _detail_ok,
             })
     try:
         _ensure_slot_verify_loop()
@@ -19674,19 +20772,27 @@ def _probe_result_status(rows, paths, cal=0):
         return "login_required"
     if "timeout" in states:
         return "timeout"
+    if "parse_error" in states:
+        return "parse_error"
+    if "session_busy" in states:
+        return "session_busy"
+    if "unsupported" in states:
+        return "unsupported"
     if "error" in states:
         return "error"
     return "empty"
 
 
-def _probe_start_task(task_id, frm, to, date, legs, plats, retry=False):
+def _probe_start_task(task_id, frm, to, date, legs, plats, retry=False,
+                      leg_wants=None):
     """后台线程：真实采集，事件/行增量写入 task；异常落 task。"""
     task = _PROBE_TASKS.get(task_id)
     if not task:
         return
     try:
         _probe_search(frm, to, date, plats, legs, task=task,
-                      cancel=task["cancel"], retry=retry)
+                      cancel=task["cancel"], retry=retry,
+                      leg_wants=leg_wants)
     except Exception as e:
         cancelled = task["cancel"].is_set()
         with _PROBE_TASK_LOCK:
@@ -19710,7 +20816,7 @@ def _probe_start_task(task_id, frm, to, date, legs, plats, retry=False):
 
 
 def _probe_search(frm, to, date, plats, legs=None, task=None, cancel=None,
-                  retry=False):
+                  retry=False, leg_wants=None):
     """主动探针：任意 OD/日期并发真实渠道采集（不落库、不触发推送）。
 
     legs=[{from,to,date},…] 时一次采集最多 _PROBE_BATCH_MAX 条航线/日期；
@@ -19777,6 +20883,11 @@ def _probe_search(frm, to, date, plats, legs=None, task=None, cancel=None,
         fc, fn = plan["from"], plan["from_name"]
         tc, tn = plan["to"], plan["to_name"]
         dat = plan["date"]
+        leg_want = (leg_wants or {}).get(ix) or want
+        leg_want = [q for q in leg_want if q in _REG]
+        leg_want.sort(key=_plat_rank)
+        if not leg_want:
+            raise RuntimeError("第 %d 条没有可执行渠道" % (ix + 1))
         scope = "international" if _is_intl(fc, tc) else "domestic"
         route = {"from": fc, "from_name": fn, "to": tc, "to_name": tn,
                  "dates": [dat]}
@@ -19787,7 +20898,7 @@ def _probe_search(frm, to, date, plats, legs=None, task=None, cancel=None,
             task["legs"][ix]["status"] = "running"
             _probe_task_event(task, leg=ix, phase="组合开始", status="running",
                               msg=fn + "→" + tn + " " + dat)
-            for p in want:
+            for p in leg_want:
                 _probe_task_channel(task, ix, p, phase="排队",
                                     status="queued")
                 _probe_task_event(task, leg=ix, plat=p, phase="排队",
@@ -19847,7 +20958,28 @@ def _probe_search(frm, to, date, plats, legs=None, task=None, cancel=None,
                                               msg="同渠道排队时任务已取消")
                             return {"n": 0, "rows": [], "ms": int((_time.time() - t) * 1000),
                                     "status": "cancelled", "detail": 0, "cal": 0}
+                        _probe_task_channel(task, ix, p, phase="等待响应",
+                                            status="running")
+                        _probe_task_event(
+                            task, leg=ix, plat=p, phase="等待响应",
+                            status="running",
+                            msg="请求已发出，等待 %s 上游返回" % p)
                         fps = c.fetch(fc, tc, [dat]) or []
+                        _ok_paths = [x for x in (getattr(c, "paths", []) or [])
+                                     if x.get("status") == "ok"
+                                     and int(x.get("rows") or 0) > 0]
+                        if not _ok_paths:
+                            _ok_paths = [x for x in (getattr(c, "paths", []) or [])
+                                         if x.get("status") == "calendar"]
+                        _entry_path = (_ok_paths[-1].get("path") or ""
+                                       if _ok_paths else "")
+                        _entry_status = (_ok_paths[-1].get("status") or "unknown"
+                                         if _ok_paths else "unknown")
+                        _probe_task_event(
+                            task, leg=ix, plat=p, phase="接收数据",
+                            status="running",
+                            msg="收到 %d 条渠道记录" % len(fps),
+                            n_raw=len(fps))
                 _probe_task_channel(task, ix, p, phase="解析中",
                                     status="running")
                 _probe_task_event(task, leg=ix, plat=p, phase="解析明细",
@@ -19924,6 +21056,13 @@ def _probe_search(frm, to, date, plats, legs=None, task=None, cancel=None,
                             "leftTickets": g.get("leftTickets") or g.get("seat"),
                             "tax": g.get("tax") if g.get("tax") is not None else None,
                             "labels": str(g.get("labels") or ""),
+                            "entryPath": _entry_path,
+                            "prov": {"entryPath": _entry_path,
+                                     "pathStatus": _entry_status,
+                                     "evidenceLevel": "path"
+                                     if _entry_path else "unknown",
+                                     "kind": ("calendar" if _entry_status == "calendar"
+                                              else "detail")},
                             "leg": ix, "route": fn + "→" + tn,
                             "routeLabel": fn + "→" + tn,
                         })
@@ -19931,6 +21070,11 @@ def _probe_search(frm, to, date, plats, legs=None, task=None, cancel=None,
                             break
                     if len(rows) >= leg_cap:
                         break
+                _probe_task_event(
+                    task, leg=ix, plat=p, phase="标准化去重",
+                    status="running",
+                    msg="标准化 %d 行为统一字段（渠道原始行 %d 条）"
+                        % (len(rows), len(fps)))
                 det = sum(1 for x in rows if not x.get("isCal"))
                 cal = len(rows) - det
                 if det > 0:
@@ -19991,7 +21135,7 @@ def _probe_search(frm, to, date, plats, legs=None, task=None, cancel=None,
             # 验证码（用户实测：新开浏览器即弹验证）。按优先级两两推进
             # 既保留并行加速，又降低同 IP 多浏览器指纹叠加的风控面
             ex = _cf.ThreadPoolExecutor(max_workers=min(2, max(1, len(want))))
-            futs = {ex.submit(one, p): p for p in want}
+            futs = {ex.submit(one, p): p for p in leg_want}
             try:
                 for fut in _cf.as_completed(futs, timeout=150):
                     p = futs[fut]
@@ -20177,7 +21321,7 @@ def _probe_raw(row_id, idx):
     try:
         r = conn.execute(
             "SELECT rowid AS id, platform, from_city, to_city, depart_date, "
-            "price, extra, fetched_at FROM flight_prices WHERE rowid=?",
+            "price, extra, prov, fetched_at FROM flight_prices WHERE rowid=?",
             (rid,)).fetchone()
     finally:
         conn.close()
@@ -20188,12 +21332,19 @@ def _probe_raw(row_id, idx):
     except Exception:
         obj = []
     item = (obj[i] if isinstance(obj, list) and 0 <= i < len(obj) else None)
+    try:
+        prov = json.loads(r["prov"] or "{}")
+    except (TypeError, ValueError):
+        prov = {}
     return {
         "ok": isinstance(item, dict),
         "row": {k: r[k] for k in (
             "id", "platform", "from_city", "to_city",
             "depart_date", "price", "fetched_at")},
         "raw": item if isinstance(item, dict) else None,
+        "prov": prov if isinstance(prov, dict) else {},
+        # DB 只存解析后的 extra；不能在 UI 标成 HTTP 原始响应。
+        "evidence_level": "parsed_extra",
         "idx": i,
         "count": len(obj) if isinstance(obj, list) else 0,
     }
@@ -20570,6 +21721,64 @@ def _watch_route_dates(route):
     return []
 
 
+def _watch_route_allows(entry, route):
+    """关注航班是否继承父航线的适用条件（不是声明上的子集）。
+
+    关注航班是父航线明细集合的指定子集：父航线配了「只要直飞/排除
+    跨天/排除经停/出发到达时段/航司名单/渠道」时，关注条目必须真实
+    满足这些条件，否则它不属于该集合。返回 (ok, reason)。
+    """
+    if route is None:
+        return False, "父航线不存在"
+    def _g(k):
+        if isinstance(route, dict):
+            return route.get(k)
+        return getattr(route, k, None)
+
+    def _mins(v):
+        m = re.match(r"^(\d{1,2}):(\d{2})", str(v or ""))
+        return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+
+    dep = _mins(entry.get("depTime"))
+    arr = _mins(entry.get("arrTime"))
+    for lo_k, hi_k, val, label in (
+            ("dep_time_min", "dep_time_max", dep, "出发时段"),
+            ("arr_time_min", "arr_time_max", arr, "到达时段")):
+        lo, hi = _mins(_g(lo_k)), _mins(_g(hi_k))
+        if val is not None:
+            if lo is not None and val < lo:
+                return False, "不在父航线%s内" % label
+            if hi is not None and val > hi:
+                return False, "不在父航线%s内" % label
+    if _g("direct_only") and entry.get("trans"):
+        return False, "父航线只要直飞"
+    if _g("no_cross") and entry.get("cross"):
+        return False, "父航线排除跨天"
+    if _g("exclude_stop") and entry.get("stop"):
+        return False, "父航线排除经停"
+    if _g("exclude_share") and (entry.get("shareCarrier") or entry.get("codeShare")):
+        return False, "父航线排除共享航班"
+    if str(_g("transfer_baggage") or "") == "direct" and entry.get("trans"):
+        if str(entry.get("bagState") or "") != "direct":
+            return False, "父航线要求行李直挂，关注航班无直挂证据"
+    _rc = _g("channels")
+    if isinstance(_rc, list) and _rc and entry.get("channels"):
+        if not set(entry.get("channels") or []).issubset(set(_rc)):
+            return False, "关注渠道超出父航线渠道"
+    _al = str(_g("airlines") or "").replace("，", ",")
+    if _al.strip():
+        _want = [x.strip().upper() for x in _al.split(",") if x.strip()]
+        _ban = [x[1:].strip() for x in _want if x.startswith("!") and x[1:].strip()]
+        _allow = [x for x in _want if not x.startswith("!")]
+        _m = re.match(r"^([A-Z0-9]{2})", str(entry.get("code") or "").upper())
+        _hay = (str(entry.get("airline") or "") + " " + (_m.group(1) if _m else "")).upper()
+        if _ban and any(b in _hay for b in _ban):
+            return False, "命中父航线航司排除项"
+        if _allow and not any(a in _hay for a in _allow):
+            return False, "不在父航线航司名单内"
+    return True, ""
+
+
 def _watch_parent_route(entry, user):
     """关注航班的父级配置航线：同 from/to，且日期在航线日期集合/区间内。"""
     date = str(entry.get("date") or "")[:10]
@@ -20675,8 +21884,12 @@ def _watch_scope_detail(entry, user):
     d = str(entry.get("date") or "")
     if d and d < time.strftime("%Y-%m-%d"):
         return False, "航班日期已过", "expired"
-    if _watch_parent_route(entry, user) is None:
+    _route = _watch_parent_route(entry, user)
+    if _route is None:
         return False, "未匹配关注航线/日期（历史保留；请编辑绑定）", "route_missing"
+    _applies, _why = _watch_route_allows(entry, _route)
+    if not _applies:
+        return False, "不满足父航线适用条件：%s" % _why, "route_filtered"
     known, has_rows = _watch_known_flight(entry)
     if has_rows and not known:
         # 采集轮次可能临时缺行：身份仍属于该航线/日期集合，保留监控，
@@ -20812,6 +22025,9 @@ def _watch_entry(payload, old=None, user=None):
         "depTime": dep, "arrTime": arr, "trans": trans,
         "cross": cross, "stop": stop, "cabin": cabin,
         "airline": str(payload.get("airline") or "").strip()[:40],
+        "shareCarrier": str(payload.get("shareCarrier") or "").strip()[:40],
+        "codeShare": bool(payload.get("codeShare")),
+        "bagState": str(payload.get("bagState") or "").strip()[:20],
         "platKey": str(payload.get("platKey") or "").strip()[:20],
         "channels": _watch_channels(payload.get("channels")),
         "target": target,
@@ -20820,6 +22036,15 @@ def _watch_entry(payload, old=None, user=None):
         "note": str(payload.get("note") or "").strip()[:160],
         "createdAt": created, "updatedAt": now,
     }
+    if _scope_changed and user is not None and _State.users:
+        # 仅身份/范围变更时重验父航线适用条件：历史关注改目标价/渠道
+        # 不应被现在的航线筛选挡住（否则旧条目永远保存不了）。
+        _pr = _watch_parent_route(entry, user)
+        if _pr is None:
+            raise ValueError("该航线/日期未配置关注航线")
+        _ok, _why = _watch_route_allows(entry, _pr)
+        if not _ok:
+            raise ValueError("该航班不满足父航线适用条件：%s" % _why)
     return entry
 
 
@@ -21133,8 +22358,20 @@ def _watch_alert_round(user, notifier, storage, logger, base_url="",
         except Exception:
             continue
         cur = tr.get("current") or {}
-        price = cur.get("price")
+        # 达标判定与检索台「达标」标记同口径：eff（含税垫/跨渠道口径），
+        # 不是渠道列表裸价。两者不一致会出现 UI 未达标却推送的情况。
+        price = cur.get("eff")
         if price is None:
+            price = cur.get("price")
+        if price is None:
+            continue
+        _route = _watch_parent_route(w, user)
+        _maxp = 0
+        try:
+            _maxp = float((_route or {}).get("price_max") or 0) if isinstance(_route, dict) else float(getattr(_route, "price_max", 0) or 0)
+        except (TypeError, ValueError):
+            _maxp = 0
+        if _maxp and price > _maxp:
             continue
         try:
             _age = (datetime.now() - datetime.strptime(
@@ -21344,6 +22581,10 @@ def _user_state(u):
                     g["_row_id"] = r["id"]
                     g["_fetched_at"] = r["fetched_at"]
                     g["_raw_idx"] = _ri
+                    try:
+                        g["_prov"] = r["prov"]
+                    except (KeyError, IndexError):
+                        g["_prov"] = ""
                     _fnorm(g, r["depart_date"] or "")
                     if g.get("_dep_mismatch"):
                         continue   # 渠道滚动行不入列表池（与推送/曲线同滤）
@@ -21487,6 +22728,15 @@ def _user_state(u):
             return int(v)
         except (TypeError, ValueError):
             return None
+
+    def _prov_obj(v):
+        if not v:
+            return {}
+        try:
+            obj = json.loads(v)
+        except (TypeError, ValueError):
+            return {}
+        return obj if isinstance(obj, dict) else {}
 
     def _num_or_none(v):
         """float 协议键转写（_int_or_none 同型）：儿童票半价可出现
@@ -21756,6 +23006,7 @@ def _user_state(u):
             "fetchedAt": f.get("_fetched_at") or "",
             "rowId": _int_or_none(f.get("_row_id")),
             "rawIdx": _int_or_none(f.get("_raw_idx")),
+            "prov": _prov_obj(f.get("_prov")),
             "trans": f.get("transCity", ""), "cross": f.get("crossDayDesc", ""),
             # 日历薄行标记（无航班号无时刻=日历价，非具体航班）。
             # isCal 与 cal 同值但语义化，供检索台列表/矩阵/导出统一消费。
@@ -22419,6 +23670,80 @@ _HEALTH_CACHE = {"sig": None, "payload": None, "busy": False, "at": 0.0}
 _HEALTH_LOCK = threading.Lock()
 
 
+def _cookie_states() -> dict:
+    """Read-only session-state expiry hint (no cookie values leave disk)."""
+    from crawlers import REGISTRY
+    cfg = _effective_crawler_config()
+    out = {}
+    now = time.time()
+    for p in ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu"):
+        try:
+            c = REGISTRY[p](cfg, _State.logger)
+            path = getattr(c, "session_state_path", "")
+            if not path or not os.path.isfile(path):
+                out[p] = "missing"
+                continue
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            cookies = data.get("cookies") or []
+            if not cookies:
+                out[p] = "missing"
+                continue
+            valid = False
+            for ck in cookies:
+                exp = ck.get("expires", -1)
+                try:
+                    exp = float(exp)
+                except (TypeError, ValueError):
+                    exp = -1
+                if exp in (-1.0, 0.0) or exp > now:
+                    valid = True
+                    break
+            out[p] = "unverified" if valid else "expired"
+        except Exception:
+            out[p] = "unverified"
+    return out
+
+
+def _health_decorate(out: dict) -> dict:
+    from core.health_diag import classify_round
+    rounds = out.get("rounds") or []
+    plats = (rounds[-1].get("plats") if rounds else {}) or {}
+    out["diag"] = classify_round(plats, cookie=_cookie_states())
+    out["diag_at"] = rounds[-1].get("ts", "") if rounds else ""
+    return out
+
+
+def _channel_evidence_path() -> str:
+    return _anchored("logs/channel_evidence.jsonl", "logs/channel_evidence.jsonl")
+
+
+def _append_channel_evidence(card: dict, user: str = "") -> None:
+    path = _channel_evidence_path()
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "user": user, "plat": card.get("plat"),
+                "kind": card.get("kind"), "label": card.get("label"),
+                "s": card.get("s"), "ok": card.get("ok"),
+                "tot": card.get("tot"), "login": card.get("login"),
+                "cookie": card.get("cookie"),
+                "evidence": card.get("evidence", ""),
+            }, ensure_ascii=False) + "\n")
+        if os.path.getsize(path) > 512 * 1024:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()[-500:]
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+    except Exception as e:
+        try:
+            _State.logger.warning("[诊断] 证据账本写入失败: %s", e)
+        except Exception:
+            pass
+
+
 def _health_state(hours: int = 24) -> dict:
     """渠道健康时间线：解析 monitor.log（尾部 2MB 封顶，防长日志拖慢）。
 
@@ -22455,6 +23780,7 @@ def _health_state(hours: int = 24) -> dict:
                         out = parse_health(
                             _read_log_tail(max_age_h=hours + 2), hours=hours)
                         out["push"] = _push_channel_state(hours=hours)
+                        out = _health_decorate(out)
                         with _HEALTH_LOCK:
                             _HEALTH_CACHE.update(
                                 sig=sig, payload=out, busy=False,
@@ -22473,9 +23799,285 @@ def _health_state(hours: int = 24) -> dict:
             return _HEALTH_CACHE["payload"]
     out = parse_health(_read_log_tail(max_age_h=hours + 2), hours=hours)
     out["push"] = _push_channel_state(hours=hours)
+    out = _health_decorate(out)
     with _HEALTH_LOCK:
         _HEALTH_CACHE.update(sig=sig, payload=out, busy=False, at=time.time())
     return out
+
+
+def _radar_db_path() -> str:
+    return _anchored(((_State.cfg or {}).get("output") or {}).get(
+        "db_path"), "data/prices.db")
+
+
+def _radar_ok_dates(result: dict) -> tuple:
+    """Keep only real calendar observations from channels that succeeded.
+
+    Cached/fallback runs and failed channels may still be displayed live, but
+    they must not enter history or move an alert baseline.
+    """
+    sts = result.get("channels") or {}
+    dates = []
+    for d in result.get("dates") or []:
+        keep = {}
+        for ch, rec in (d.get("by_channel") or {}).items():
+            s = sts.get(ch) or {}
+            if s and (s.get("cache_hit") or s.get("fallback")
+                      or s.get("status") != "ok"):
+                continue
+            keep[ch] = rec
+        if keep:
+            dates.append({**d, "by_channel": keep})
+    if dates:
+        return dates, "ok"
+    if any((s or {}).get("cache_hit") for s in sts.values()):
+        return dates, "cache_hit"
+    if any((s or {}).get("fallback") for s in sts.values()):
+        return dates, "fallback"
+    if result.get("dates") or any((s or {}).get("status") == "ok"
+                                  for s in sts.values()):
+        return dates, "partial"
+    return dates, "empty"
+
+
+def _radar_alert_dispatch(user, query, date, low, dec, channel, basis):
+    from core.alerter import sanitize_desp
+    st = PriceStorage(_radar_db_path())
+    qkey = st.radar_query_key(query)
+    al = next((a for a in (_State.alerters or [])
+               if getattr(a, "user", "") == user), None)
+    if not al or not getattr(al, "notifier", None):
+        st.record_radar_alert(user, qkey, date, dec.price, dec.prev_low,
+                              channel, basis, dec.kind, low.get("link") or "",
+                              "", "skipped", "no_notifier")
+        return False, "no_notifier"
+    if hasattr(al, "_in_quiet") and al._in_quiet():
+        st.record_radar_alert(user, qkey, date, dec.price, dec.prev_low,
+                              channel, basis, dec.kind, low.get("link") or "",
+                              "", "skipped", "quiet")
+        return False, "quiet"
+    fl = _radar_low_flights(query.get("from"),
+                            low.get("to") or query.get("to"),
+                            date, limit=3)
+    fs = fl.get("flights") or []
+    title = "📉 特价雷达%s %s→%s %s ￥%.0f" % (
+        "新低" if dec.kind == "new_low" else "阈值",
+        query.get("from", ""), low.get("to") or query.get("to", ""),
+        date, dec.price)
+    lines = ["- **价格**：￥%.0f（%s）" % (
+        dec.price, low.get("basis_label") or basis or "口径未标注")]
+    if dec.prev_low is not None:
+        lines.append("- **较上次低点**：￥%.0f（降 ￥%.0f）"
+                     % (dec.prev_low, dec.prev_low - dec.price))
+    lines.append("- **渠道**：%s" % channel)
+    if fs:
+        lines.append("- **该日真实明细**：")
+        for f in fs:
+            lines.append("  - %s %s→%s ￥%.0f %s" % (
+                f.get("code") or "—", f.get("depTime") or "—",
+                f.get("arrTime") or "—", float(f.get("price") or 0),
+                f.get("platform_cn") or ""))
+    else:
+        lines.append("- **该日真实明细**：尚未采集；日历价不能生成航班")
+    if low.get("link"):
+        lines.append("- [打开官方渠道](%s)" % low["link"])
+    try:
+        ok = bool(al.notifier.send(sanitize_desp(title),
+                                   sanitize_desp("\n\n".join(lines))))
+        err = "" if ok else "send_failed"
+    except Exception as e:
+        ok, err = False, str(e)[:160]
+    st.record_radar_alert(user, qkey, date, dec.price, dec.prev_low,
+                          channel, basis, dec.kind, low.get("link") or "",
+                          json.dumps(fs, ensure_ascii=False),
+                          "sent" if ok else "failed", err)
+    return ok, err
+
+
+def _radar_eval_alerts(user, query, dates, st):
+    from core.radar_alerts import RadarAlertCfg, evaluate
+    raw = st.radar_alert_config(user)
+    acfg = RadarAlertCfg(enabled=bool(raw["enabled"]),
+                         drop_min=float(raw["drop_min"]),
+                         threshold=float(raw["threshold"]),
+                         cooldown_h=float(raw["cooldown_h"]))
+    qkey = st.radar_query_key(query)
+    for d in dates:
+        items = list((d.get("by_channel") or {}).items())
+        if not items:
+            continue
+        channel, low = min(items, key=lambda kv: float(
+            kv[1].get("price") or 0))
+        price = float(low.get("price") or 0)
+        basis = str(low.get("basis") or "")
+        prev = st.get_radar_alert_state(user, qkey, d["date"])
+        dec = evaluate(
+            float(prev["low_price"]) if prev else None,
+            (prev or {}).get("low_basis") or "",
+            price, basis, int((prev or {}).get("armed", 1)),
+            (prev or {}).get("last_alert_at"), datetime.now(), acfg)
+        now_s = datetime.now().isoformat(timespec="seconds")
+        if dec.action == "basis_reset" or not prev:
+            low_price, low_at = price, now_s
+            low_ch, low_basis = channel, basis
+        else:
+            prev_low = float(prev["low_price"])
+            if price <= prev_low:
+                low_price, low_at = price, now_s
+                low_ch, low_basis = channel, basis
+            else:
+                low_price = prev_low
+                low_at = prev.get("low_at") or now_s
+                low_ch = prev.get("low_channel") or ""
+                low_basis = prev.get("low_basis") or ""
+        last_at = (prev or {}).get("last_alert_at") or ""
+        last_price = (prev or {}).get("last_alert_price")
+        if dec.action in ("new_low", "threshold"):
+            ok, _err = _radar_alert_dispatch(
+                user, query, d["date"], low, dec, channel, basis)
+            if ok:
+                last_at, last_price = now_s, price
+        st.save_radar_alert_state(
+            user, qkey, d["date"], low_price, low_at, low_ch, low_basis,
+            last_price, last_at, dec.armed)
+
+
+def _radar_save_result(result: dict, source: str = "manual") -> int:
+    """Persist one radar run; auto runs may dispatch a price alert."""
+    q = result.get("query") or {}
+    user = str(q.get("user") or "")
+    if not user:
+        return 0
+    dates, status = _radar_ok_dates(result)
+    if DEMO["on"]:
+        status = "demo"
+    st = PriceStorage(_radar_db_path())
+    n = st.save_radar_snapshot(user, q, {**result, "dates": dates},
+                               run_status=status)
+    if source == "auto" and status == "ok" and dates:
+        try:
+            _radar_eval_alerts(user, q, dates, st)
+        except Exception as e:
+            _State.logger.warning("[雷达提醒] 评估失败: %s", e)
+    return n
+
+
+def _radar_history(user: str, days: int = 120,
+                   query_key: str = "") -> dict:
+    st = PriceStorage(_radar_db_path())
+    out = st.radar_history(user, days=days, query_key=query_key)
+    out["auto_interval_h"] = 2
+    return out
+
+
+def _radar_low_flights(frm, to, date, limit: int = 5) -> dict:
+    """Lowest *real detail* flights for one radar low-price date.
+
+    Radar calendar rows carry no flight identity; this reads already
+    collected detail rows (or flight_daily when raw was purged) and never
+    fabricates a flight for a calendar-only price.
+    """
+    frm = str(frm or "").upper()
+    to = str(to or "").upper()
+    date = str(date or "")[:10]
+    if not (frm and to and date):
+        raise ValueError("from/to/date required")
+    db = _radar_db_path()
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    rows = []
+    try:
+        raw = conn.execute(
+            "SELECT id, platform, extra, prov, fetched_at FROM flight_prices "
+            "WHERE from_city=? AND to_city=? AND depart_date=? "
+            "AND extra!='' AND fetched_at >= datetime('now','localtime','-14 days') "
+            "ORDER BY fetched_at DESC LIMIT 300",
+            (frm, to, date)).fetchall()
+        seen = {}
+        for r in raw:
+            try:
+                pv = json.loads(r["prov"] or "{}")
+            except (TypeError, ValueError):
+                pv = {}
+            try:
+                obj = json.loads(r["extra"] or "[]")
+            except ValueError:
+                continue
+            items = obj if isinstance(obj, list) else (
+                [obj] if isinstance(obj, dict) else [])
+            for idx, it in enumerate(items):
+                if not isinstance(it, dict):
+                    continue
+                code = str(it.get("code") or it.get("flightNo") or "")
+                dep = str(it.get("depTime") or "")
+                arr = str(it.get("arrTime") or "")
+                if not (code and dep and arr):
+                    continue
+                try:
+                    price = round(float(it.get("price")))
+                except (TypeError, ValueError):
+                    continue
+                if price <= 0:
+                    continue
+                key = _srx_flight_key({
+                    "from": frm, "to": to, "date": date, "code": code,
+                    "depTime": dep, "arrTime": arr,
+                    "trans": str(it.get("transCity") or ""),
+                    "cross": str(it.get("crossDayDesc") or ""),
+                    "stop": bool(it.get("stopover"))})
+                cur = seen.get(key)
+                if cur is None or price < cur["price"]:
+                    seen[key] = {
+                        "price": price, "code": code,
+                        "name": str(it.get("name") or it.get("airline") or ""),
+                        "depTime": dep, "arrTime": arr,
+                        "trans": str(it.get("transCity") or ""),
+                        "cross": str(it.get("crossDayDesc") or ""),
+                        "stop": bool(it.get("stopover")),
+                        "platform": str(r["platform"] or ""),
+                        "fetched_at": str(r["fetched_at"] or ""),
+                        "rowId": int(r["id"]),
+                        "rawIdx": idx,
+                        "entryPath": str((pv or {}).get("entryPath") or ""),
+                        "prov": pv if isinstance(pv, dict) else {},
+                        "detail": True,
+                    }
+        rows = sorted(seen.values(), key=lambda x: x["price"])[:limit]
+        if not rows:
+            hist = conn.execute(
+                "SELECT flight_key, platform, close, fetched_max FROM "
+                "flight_daily WHERE from_city=? AND to_city=? AND "
+                "depart_date=? ORDER BY close LIMIT 50",
+                (frm, to, date)).fetchall()
+            for h in hist:
+                parts = str(h["flight_key"] or "").split("|")
+                if len(parts) < 6:
+                    continue
+                rows.append({
+                    "price": round(float(h["close"] or 0)),
+                    "code": parts[2], "name": "",
+                    "depTime": parts[4], "arrTime": parts[5],
+                    "trans": parts[6] if len(parts) > 6 else "",
+                    "cross": parts[7] if len(parts) > 7 else "",
+                    "stop": len(parts) > 8 and parts[8] == "1",
+                    "platform": str(h["platform"] or ""),
+                    "fetched_at": str(h["fetched_max"] or ""),
+                    "detail": False,
+                })
+            rows = [r for i, r in enumerate(rows)
+                    if r["price"] > 0 and r["code"] not in
+                    {x["code"] for x in rows[:i]}][:limit]
+    finally:
+        conn.close()
+    names = {"qunar": "去哪儿", "ctrip": "携程", "fliggy": "飞猪",
+             "tongcheng": "同程", "tuniu": "途牛"}
+    for r in rows:
+        r["platform_cn"] = names.get(r["platform"], r["platform"])
+    return {"ok": True, "from": frm, "to": to, "date": date,
+            "found": bool(rows), "flights": rows,
+            "note": ("来自已采集的真实航班明细" if any(
+                r.get("detail") for r in rows) else
+                "仅有历史日桶，无当轮原始行；请用该日探针核对")}
 
 
 def _push_channel_state(hours: int = 24, tail_bytes: int = 262_144) -> dict:
@@ -22619,7 +24221,21 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        # GET JSON 统一内容 ETag：健康/脉冲/配置轮询在数据未变时回 304，
+        # 不再每拍重新传输/解析 3-100KB。POST 响应不参与条件请求。
+        etag = '"%s"' % hashlib.sha1(body).hexdigest()
+        if self.command == "GET" and code == 200:
+            _inm = self.headers.get("If-None-Match") or ""
+            if etag in [x.strip() for x in _inm.split(",") if x.strip()]:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return
         self.send_response(code)
+        if self.command == "GET" and code == 200:
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Type", "application/json; charset=utf-8")
         # 健康/脉冲/配置等 JSON 也有 50-100KB；大包按客户端能力 gzip
         if len(body) > 1024 and "gzip" in (
@@ -22775,7 +24391,13 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 if DEMO["on"]:
                     from core.demo import demo_health
-                    self._json(demo_health())
+                    from core.health_diag import classify_round
+                    out = demo_health()
+                    rounds = out.get("rounds") or []
+                    plats = (rounds[-1].get("plats") if rounds else {}) or {}
+                    out["diag"] = classify_round(plats)
+                    out["diag_at"] = rounds[-1].get("ts", "") if rounds else ""
+                    self._json(out)
                 else:
                     self._json(_health_state())
             except Exception as e:
@@ -22851,6 +24473,95 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "items": items})
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path.startswith("/api/radar/history"):
+            try:
+                from urllib.parse import urlparse as _up, parse_qs as _pq
+                qs = _pq(_up(self.path).query)
+                user = (qs.get("user") or [""])[0].strip()
+                if not user:
+                    self._json({"ok": False, "err": "缺少 user"}, 400)
+                    return
+                try:
+                    days = int((qs.get("days") or ["120"])[0])
+                except ValueError:
+                    days = 120
+                qkey = (qs.get("query_key") or [""])[0].strip()
+                self._json(_radar_history(user, days, qkey))
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 400)
+        elif self.path.startswith("/api/radar/alert-config"):
+            try:
+                from urllib.parse import urlparse as _up, parse_qs as _pq
+                qs = _pq(_up(self.path).query)
+                user = (qs.get("user") or [""])[0].strip()
+                if not user:
+                    self._json({"ok": False, "err": "缺少 user"}, 400)
+                    return
+                st = PriceStorage(_radar_db_path())
+                if self.command == "GET":
+                    self._json({"ok": True, "user": user,
+                                "config": st.radar_alert_config(user)})
+                    return
+                if DEMO["on"]:
+                    self._json({"ok": False, "err": "演示模式不保存提醒配置"}, 400)
+                    return
+                _ct = (self.headers.get("Content-Type") or "").lower()
+                if "application/json" not in _ct:
+                    self._json({"ok": False, "err": "Content-Type 必须为 application/json"}, 415)
+                    return
+                _origin = self.headers.get("Origin") or ""
+                if _origin:
+                    from urllib.parse import urlparse as _up0
+                    if (_up0(_origin).netloc or "") != (self.headers.get("Host") or ""):
+                        self._json({"ok": False, "err": "跨站提醒配置请求已拒绝"}, 403)
+                        return
+                length = int(self.headers.get("Content-Length", 0))
+                if length > 32768:
+                    self._json({"ok": False, "err": "请求体过大"}, 413)
+                    return
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(body, dict):
+                    raise ValueError("bad body")
+                if str(body.get("user") or "").strip() != user:
+                    raise ValueError("user 不一致")
+                cfg = {
+                    "enabled": bool(body.get("enabled")),
+                    "drop_min": max(0.0, min(float(body.get("drop_min") or 0), 10000.0)),
+                    "threshold": max(0.0, min(float(body.get("threshold") or 0), 200000.0)),
+                    "cooldown_h": max(1.0, min(float(body.get("cooldown_h") or 12), 168.0)),
+                }
+                st.set_radar_alert_config(user, cfg)
+                self._json({"ok": True, "user": user,
+                            "config": st.radar_alert_config(user)})
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)[:160]}, 400)
+        elif self.path.startswith("/api/radar/alerts"):
+            try:
+                from urllib.parse import urlparse as _up, parse_qs as _pq
+                qs = _pq(_up(self.path).query)
+                user = (qs.get("user") or [""])[0].strip()
+                if not user:
+                    self._json({"ok": False, "err": "缺少 user"}, 400)
+                    return
+                try:
+                    days = int((qs.get("days") or ["30"])[0])
+                except ValueError:
+                    days = 30
+                st = PriceStorage(_radar_db_path())
+                self._json({"ok": True, "user": user,
+                            "alerts": st.radar_alerts(user, days)})
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)[:160]}, 400)
+        elif self.path.startswith("/api/radar/flights"):
+            try:
+                from urllib.parse import urlparse as _up, parse_qs as _pq
+                qs = _pq(_up(self.path).query)
+                self._json(_radar_low_flights(
+                    (qs.get("from") or [""])[0],
+                    (qs.get("to") or [""])[0],
+                    (qs.get("date") or [""])[0]))
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 400)
         elif self.path == "/api/login-state":
             try:
                 if DEMO["on"]:
@@ -22862,6 +24573,39 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(_login_state_view())
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path == "/api/channel/selfcheck":
+            try:
+                if DEMO["on"]:
+                    self._json({"ok": False, "err": "演示模式不生成真实诊断证据"}, 400)
+                    return
+                _ct = (self.headers.get("Content-Type") or "").lower()
+                if "application/json" not in _ct:
+                    self._json({"ok": False, "err": "Content-Type 必须为 application/json"}, 415)
+                    return
+                _origin = self.headers.get("Origin") or ""
+                if _origin:
+                    from urllib.parse import urlparse as _up0
+                    if (_up0(_origin).netloc or "") != (self.headers.get("Host") or ""):
+                        self._json({"ok": False, "err": "跨站诊断请求已拒绝"}, 403)
+                        return
+                length = int(self.headers.get("Content-Length", 0))
+                if length > 16384:
+                    self._json({"ok": False, "err": "请求体过大"}, 413)
+                    return
+                body = json.loads(self.rfile.read(length) or b"{}")
+                plat = str((body or {}).get("plat") or "")
+                if plat not in _LOGIN_PLATS:
+                    raise ValueError("未知渠道")
+                out = _health_state(24)
+                card = next((c for c in (out.get("diag") or [])
+                             if c.get("plat") == plat), None)
+                if not card:
+                    raise ValueError("诊断数据未到")
+                _append_channel_evidence(card, str((body or {}).get("user") or ""))
+                self._json({"ok": True, "card": card,
+                            "evidence_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)[:160]}, 400)
         elif self.path.startswith("/api/logtail"):
             try:
                 from urllib.parse import urlparse, parse_qs
@@ -23714,6 +25458,10 @@ class _Handler(BaseHTTPRequestHandler):
                                   user_data_dir=str(
                                       cfg.get("user_data_dir")
                                       or "user_data"))
+                try:
+                    _radar_save_result(out)
+                except Exception as _e:
+                    _State.logger.warning("[雷达] 监控快照写入失败: %s", _e)
                 self._json(out)
             except ValueError as e:
                 self._json({"ok": False, "err": str(e)}, 400)
@@ -23919,6 +25667,28 @@ class _Handler(BaseHTTPRequestHandler):
                 if _PROBE_LOCK.locked():
                     self._json({"ok": False, "err": "已有探针在采集，请稍后再试"}, 409)
                     return
+                # 逐腿渠道：失败重试只重跑该腿失败的渠道，不再把整个
+                # 渠道复制到所有腿（旧实现一个失败会触发五倍上游请求）。
+                _leg_wants = {}
+                for _i, _p in enumerate(_plans):
+                    _lp = None
+                    if _raw is not None and isinstance(_raw[_i], dict):
+                        _lp = _raw[_i].get("plats")
+                    if isinstance(_lp, list) and _lp:
+                        _lw = [q for q in _lp if q in _REG]
+                        _lw.sort(key=_plat_rank)
+                        if not _lw:
+                            raise ValueError("第 %d 条未选择有效渠道" % (_i + 1))
+                    else:
+                        _lw = list(_want)
+                    if _retry:
+                        _lw = [q for q in _lw if q in _want]
+                        if not _lw:
+                            raise ValueError(
+                                "第 %d 条渠道均在验证冷却中" % (_i + 1))
+                    _leg_wants[_i] = _lw
+                _want_all = sorted({q for _v in _leg_wants.values() for q in _v},
+                                   key=_plat_rank)
                 _tid = "%x" % _t.time_ns()
                 _now = _t.time()
                 _legs_t = []
@@ -23930,13 +25700,16 @@ class _Handler(BaseHTTPRequestHandler):
                         "status": "queued", "rows": 0, "detail": 0, "cal": 0,
                         "channels": {q: {"status": "queued", "phase": "排队",
                                          "n": 0, "detail": 0, "cal": 0,
-                                         "ms": 0, "err": ""} for q in _want}})
+                                         "ms": 0, "err": ""}
+                                     for q in _leg_wants[_i]}})
                 _task = {"id": _tid, "status": "running", "created": _now,
                          "updated": _now, "started": _now, "finished": None,
-                         "plans": _plans, "want": _want,
+                         "plans": _plans, "want": _want_all,
+                         "leg_wants": _leg_wants,
                          "skipped": list(_skipped),
                          "parent": str(body.get("parent") or ""),
-                         "total": len(_plans) * len(_want), "legs": _legs_t,
+                         "total": sum(len(_v) for _v in _leg_wants.values()),
+                         "legs": _legs_t,
                          "rows": [], "rowkeys": set(), "events": [],
                          "cancel": threading.Event(), "truncated": False,
                          "err": ""}
@@ -23950,7 +25723,8 @@ class _Handler(BaseHTTPRequestHandler):
                 threading.Thread(
                     target=_probe_start_task,
                     args=(_tid, body.get("from"), body.get("to"),
-                          body.get("date"), _raw, _want, _retry),
+                          body.get("date"), _raw, _want_all, _retry,
+                          _leg_wants),
                     daemon=True).start()
                 self._json({"ok": True, "task": _probe_task_view(_tid)})
             except ValueError as e:
@@ -24074,14 +25848,103 @@ def _page_snap(version):
         return body, etag, _PAGE_SNAP["gz"]
 
 
+_RADAR_AUTO_STARTED = False
+
+
+def _radar_auto_query(r, today=None):
+    """Build the auto-loop query; clamp a stale start to today.
+
+    The user's saved range may start yesterday while the end is still in the
+    future. parse_query() correctly rejects past starts for ad-hoc queries,
+    but the background loop must keep monitoring the remaining range instead
+    of failing forever after midnight.
+    """
+    from datetime import date as _date
+    frm = str((r or {}).get("from_name") or (r or {}).get("from") or "").strip()
+    start = str((r or {}).get("start") or "").strip()
+    end = str((r or {}).get("end") or "").strip()
+    if not (frm and start and end):
+        return None, "incomplete"
+    today = today or _date.today().isoformat()
+    try:
+        _date.fromisoformat(start)
+        _date.fromisoformat(end)
+    except ValueError:
+        return None, "invalid"
+    if end < today:
+        return None, "ended"
+    why = ""
+    if start < today:
+        start, why = today, "clamped"
+    return {
+        "from": frm,
+        "to": str((r or {}).get("to_name") or (r or {}).get("to") or ""),
+        "nationwide": bool((r or {}).get("nationwide")),
+        "start": start, "end": end,
+        "channels": (r or {}).get("channels") or [],
+    }, why
+
+
+def _radar_auto_loop():
+    """Best-effort radar monitoring: every 2h while the console runs.
+
+    Skips while a scan holds the job lock (avoid browser/profile contention),
+    records only official calendar/board prices, and never invents rows.
+    """
+    from core.special_radar import build_radar
+    first = True
+    while True:
+        # 首轮 90s 后即积累一次快照，之后每 2 小时；旧实现先睡 2 小时
+        # 才第一次取数，控制台刚启动时监控日历会长时间空窗。
+        time.sleep(90 if first else 7200)
+        first = False
+        try:
+            if DEMO["on"] or not _State.users:
+                continue
+            if _State.lock.locked():
+                _State.logger.info("[雷达监控] 扫描进行中，跳过本轮快照")
+                continue
+            cfg = _effective_crawler_config()
+            for u in list(_State.users)[:3]:
+                r = (u.get("special_radar") if isinstance(u, dict)
+                     else getattr(u, "special_radar", None)) or {}
+                q, why = _radar_auto_query(r)
+                if not q:
+                    _State.logger.info("[雷达监控] 跳过 %s（%s）",
+                                       (u.get("name") if isinstance(u, dict)
+                                        else getattr(u, "name", "")), why)
+                    continue
+                if why == "clamped":
+                    _State.logger.warning(
+                        "[雷达监控] 开始日期已过，自动从 %s 继续", q["start"])
+                try:
+                    out = build_radar({
+                        "user": (u.get("name") if isinstance(u, dict)
+                                 else getattr(u, "name", "")),
+                        **q,
+                    }, _State.logger, proxy=str(cfg.get("proxy") or ""),
+                        user_data_dir=str(cfg.get("user_data_dir") or "user_data"))
+                    n = _radar_save_result(out, source="auto")
+                    _State.logger.info("[雷达监控] 快照 %d 条", n)
+                except Exception as e:
+                    _State.logger.warning("[雷达监控] 单用户失败: %s", e)
+                time.sleep(60)
+        except Exception as e:
+            try:
+                _State.logger.warning("[雷达监控] 循环异常: %s", e)
+            except Exception:
+                pass
+
+
 def start_web(cfg, job, report_push, logger=None, users=None,
               reload_cb=None, config_path="config.yaml", version="",
-              login_saved_cb=None):
+              login_saved_cb=None, alerters=None):
     """在守护线程里启动本地控制台；失败只告警不中断监控。"""
     _State.cfg = cfg
     import copy as _copy
     _State.boot_cfg = _copy.deepcopy(cfg)
     _State.users = users
+    _State.alerters = list(alerters or [])
     _State.job = job
     _State.report_push = report_push
     _State.reload_cb = reload_cb
@@ -24110,6 +25973,11 @@ def start_web(cfg, job, report_push, logger=None, users=None,
             time.sleep(1.5)
             _state_rebuild_async()
         threading.Thread(target=_warm, daemon=True, name="state-warm").start()
+        global _RADAR_AUTO_STARTED
+        if not _RADAR_AUTO_STARTED and not DEMO["on"]:
+            _RADAR_AUTO_STARTED = True
+            threading.Thread(target=_radar_auto_loop, daemon=True,
+                             name="radar-auto").start()
         return srv
     except Exception as e:
         _State.logger.warning("[控制台] 启动失败: %s", e)

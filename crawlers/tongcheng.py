@@ -25,6 +25,23 @@ class TongchengCrawler(BaseCrawler):
     login_suspect = False
     name = "tongcheng"
     use_mobile = True
+    # 确保 parse_error 可入账（不依赖 base 白名单版本；重复项去重）
+    PATH_STATUS = tuple(dict.fromkeys(
+        BaseCrawler.PATH_STATUS + ("parse_error",)))
+
+    @staticmethod
+    def _exc_status(exc) -> str:
+        """异常 → 路径状态：超时（含 Playwright/httpx 同名族）、
+        解码/JSON 失败与其他请求/上下文异常分开记账，禁止一起落成
+        empty。"""
+        if isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError)):
+            return "parse_error"
+        name = type(exc).__name__.lower()
+        if "json" in name or "decode" in name:
+            return "parse_error"
+        if isinstance(exc, TimeoutError) or "timeout" in name:
+            return "timeout"
+        return "error"
 
     # 同程旅行 H5 机票单程预订页（用户提供的真实入口）
     URL_TPL = (
@@ -281,9 +298,14 @@ class TongchengCrawler(BaseCrawler):
         url = self._intl_h5_url(fc, tc, date, from_name, to_name)
         flights, need_login, blocked = [], False, False
         body_head = ""
+        # 导航/读取异常证据（调用方在无卡片且非门拒时据此如实分层，
+        # 不再把「没读到」冒充「无票」）
+        self._intl_list_fail = None
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
         except Exception as e:
+            self._intl_list_fail = (
+                self._exc_status(e), f"H5 列表导航异常: {e}")
             self.logger.warning("[tongcheng][intl] %s H5 列表导航异常: %s",
                                 date, e)
         deadline = time.monotonic() + 25
@@ -291,6 +313,9 @@ class TongchengCrawler(BaseCrawler):
             try:
                 cards = page.evaluate(self._INTL_CARDS_JS)
             except Exception as e:
+                if self._intl_list_fail is None:
+                    self._intl_list_fail = (
+                        self._exc_status(e), f"H5 卡片读取异常: {e}")
                 self.logger.warning(
                     "[tongcheng][intl] %s H5 卡片读取异常: %s", date, e)
                 cards = []
@@ -374,10 +399,12 @@ class TongchengCrawler(BaseCrawler):
         with self.browser(headless=(False if self.probe_mode else None)) as ctx:
             page = self.new_page(ctx)
             # 入口页养会话（as-sdk 初始化 + cookie 下发；缺这步=444）
+            nav_fail = None
             try:
                 page.goto(self.INTL_HOME, wait_until="domcontentloaded")
                 page.wait_for_timeout(5000)
             except Exception as e:
+                nav_fail = (self._exc_status(e), f"会话预热导航异常: {e}")
                 self.logger.warning(
                     "[tongcheng][intl] 会话预热失败（后续请求可能 444）: %s", e)
             for date in dates:
@@ -428,10 +455,17 @@ class TongchengCrawler(BaseCrawler):
                                     else "同程国际 H5 需登录"),
                             ms=int((time.time() - t_list) * 1000))
                     else:
-                        self.path_note(
-                            "H5列表", "empty", date=date,
-                            detail="同程国际 H5 未解析到航班",
-                            ms=int((time.time() - t_list) * 1000))
+                        _lf = getattr(self, "_intl_list_fail", None)
+                        if _lf:
+                            self.path_note(
+                                "H5列表", _lf[0], date=date,
+                                detail=_lf[1],
+                                ms=int((time.time() - t_list) * 1000))
+                        else:
+                            self.path_note(
+                                "H5列表", "empty", date=date,
+                                detail="同程国际 H5 未解析到航班",
+                                ms=int((time.time() - t_list) * 1000))
                     # 列表失败后页面停在 m.ly.com，日历页内 fetch 跨域
                     # 会失败；回到国际入口再走既有日历兜底。
                     try:
@@ -445,6 +479,11 @@ class TongchengCrawler(BaseCrawler):
                 url = self._calendar_url(fc, tc, date,
                                          ret_date=ret_date or "")
                 body = ""
+                # 失败证据链：导航/请求异常与解析失败分开记账，只有
+                # 「请求成功 + JSON 合法 + data 为对象 + 该日无点位」
+                # 才允许落 empty（真源边界），其余如实落 timeout/
+                # error/parse_error（§5/§10 诚实分层）。
+                cal_fail = nav_fail
                 # 主路径=页内 credentials fetch（调研探针 p7 桌面上下文
                 # 成功实证；as-sdk 签名随页内会话）。兜底 ctx.request
                 # （共享 cookie 但缺 as-sdk 页面签名面，444 形态见
@@ -467,10 +506,15 @@ class TongchengCrawler(BaseCrawler):
                     if r and r.get("status") == 200:
                         body = r.get("body") or ""
                     else:
+                        _hs = (r or {}).get("status")
+                        cal_fail = ("login" if _hs == 444 else "error",
+                                    f"国际日历 HTTP {_hs}")
                         self.logger.warning(
                             "[tongcheng][intl] %s 日历 HTTP %s（疑会话层拒绝）",
-                            date, (r or {}).get("status"))
+                            date, _hs)
                 except Exception as e:
+                    cal_fail = (self._exc_status(e),
+                                f"页内 fetch 异常: {e}")
                     self.logger.warning(
                         "[tongcheng][intl] %s 页内 fetch 异常: %s", date, e)
                 if not body:
@@ -478,20 +522,28 @@ class TongchengCrawler(BaseCrawler):
                         ar = ctx.request.get(url)
                         if ar.status == 200:
                             body = ar.text() or ""
+                        else:
+                            cal_fail = (
+                                "login" if ar.status == 444 else "error",
+                                f"国际日历 ctx.request HTTP {ar.status}")
                     except Exception as e:
+                        cal_fail = (self._exc_status(e),
+                                    f"ctx.request 兜底异常: {e}")
                         self.logger.warning(
                             "[tongcheng][intl] %s ctx.request 兜底异常: %s",
                             date, e)
                 row = self._parse_intl_calendar(body, date,
                                                 ret_date=ret_date or "")
                 if row is None:
-                    _code = _msg = ""
+                    _o = None
                     try:
-                        _o = json.loads(body or "")
-                        _code = str(_o.get("code") or "")
-                        _msg = str(_o.get("message") or "")
+                        _o = json.loads(body) if body else None
                     except Exception:
-                        pass
+                        _o = None
+                    _parsed = isinstance(_o, dict)
+                    _code = str((_o or {}).get("code") or "") if _parsed else ""
+                    _msg = (str((_o or {}).get("message") or "")
+                            if _parsed else "")
                     if _code == "444" or "非法链接" in (body or ""):
                         # 会话层门拒（不是无航班）：给健康页/用户可执行的
                         # 重登提示，禁止混同为「日历无价」。
@@ -502,6 +554,40 @@ class TongchengCrawler(BaseCrawler):
                             "[tongcheng][intl] %s 会话门拒（code=%s %s，"
                             "body %dB）——请在配置页「渠道登录」重登 tongcheng",
                             date, _code, _msg, len(body))
+                    elif not body:
+                        status, detail = cal_fail or (
+                            "parse_error", "国际日历空响应体")
+                        if status == "login":
+                            type(self).login_suspect = True
+                        self.path_note("日历", status, date=date,
+                                       detail=detail)
+                        self.logger.warning(
+                            "[tongcheng][intl] %s 未拿到日历响应（%s，body 0B）",
+                            date, detail)
+                    elif not _parsed:
+                        self.path_note("日历", "parse_error", date=date,
+                                       detail="国际日历响应非 JSON（body %dB）"
+                                              % len(body))
+                        self.logger.warning(
+                            "[tongcheng][intl] %s 日历响应非 JSON（body %dB）",
+                            date, len(body))
+                    elif _code and _code not in ("0", "200"):
+                        status = "login" if _code == "444" else "error"
+                        if status == "login":
+                            type(self).login_suspect = True
+                        self.path_note("日历", status, date=date,
+                                       detail="国际日历异常响应 code=%s %s"
+                                              % (_code, _msg))
+                        self.logger.warning(
+                            "[tongcheng][intl] %s 日历异常响应 code=%s %s",
+                            date, _code, _msg)
+                    elif not isinstance(_o.get("data"), dict):
+                        self.path_note("日历", "parse_error", date=date,
+                                       detail="国际日历响应缺 data 对象"
+                                              "（body %dB）" % len(body))
+                        self.logger.warning(
+                            "[tongcheng][intl] %s 日历响应缺 data 对象"
+                            "（body %dB）", date, len(body))
                     else:
                         self.path_note("日历", "empty", date=date,
                                        detail="国际日历未拿到该日报价")

@@ -71,9 +71,9 @@ def test_montabs_390_padding_tightened():
     src = _page_src()
     i = src.index("@media(max-width:390px){#montabs")
     seg = src[i:src.index("@media", i + 40)]
-    assert "#montabs .mtab{padding:9px 8px}" in seg, (
-        "390 块缺 ID 特异性 mtab padding 收窄：#montabs 3px 隐藏溢出"
-        "低于 xhint 阈值(+4)，末位 tab 微裁且无横滚暗示")
+    assert "#montabs .mtab{height:32px;padding:0 2px;font-size:11px;gap:4px}" in seg, (
+        "390 块缺 3×2 网格内的格子压缩：六视图在 320-390 单行必重叠，"
+        "网格化后每格仍需收字号/图标，末位 tab 才能完整可点")
 
 
 # ---------- F4: 跨天分隔竖线/日期标签中性化 ----------

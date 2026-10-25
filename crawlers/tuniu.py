@@ -145,9 +145,41 @@ def _ladder(streak: int, attempts: int, polls: int) -> tuple:
     return attempts, polls
 
 
+class IntlFailure:
+    """国际通道的带类型失败结果（替代裸 None，防调用方一律落 empty）。
+
+    status ∈ timeout/error/parse_error；detail 进 path_note 证据链。
+    仅在「请求未成功」时替代 raw 数据返回，成功路径契约不变。
+    """
+    __slots__ = ("status", "detail")
+
+    def __init__(self, status: str, detail: str = ""):
+        self.status = status
+        self.detail = str(detail or "")
+
+    def __repr__(self) -> str:
+        return f"IntlFailure({self.status!r}, {self.detail!r})"
+
+
 class TuniuCrawler(BaseCrawler):
     name = "tuniu"
     use_mobile = True
+    # 确保 parse_error 可入账（不依赖 base 白名单版本；重复项去重）
+    PATH_STATUS = tuple(dict.fromkeys(
+        BaseCrawler.PATH_STATUS + ("parse_error",)))
+
+    @staticmethod
+    def _exc_status(exc) -> str:
+        """异常 → 路径状态：httpx 超时族、解码/JSON 失败与其他请求
+        异常分开记账，禁止一起落成 empty。"""
+        if isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError)):
+            return "parse_error"
+        name = type(exc).__name__.lower()
+        if "json" in name or "decode" in name:
+            return "parse_error"
+        if isinstance(exc, TimeoutError) or "timeout" in name:
+            return "timeout"
+        return "error"
     # 国内 listFlight 710114 登录墙证据（webui /api/login-state 消费）；
     # 国际通道独立，不受该标记影响
     login_suspect = False
@@ -705,8 +737,10 @@ class TuniuCrawler(BaseCrawler):
                           polls: Optional[int] = None):
         """国际 queryFlight 单圈：列表页取会话+GUID → tokenSecret →
         轮询（needQueryMore='1'=异步聚合中，续拍取最新非空 productList）。
-        返回 (ok, data, blocked)：blocked=token 门持续拒绝/会话异常
-        （外层退避加倍）。"""
+        返回 (ok, data, blocked)：ok=True 且 data=完整聚合响应（即使
+        productList 为空——只有这种干净响应才允许调用方落 empty）；
+        ok=False 时 data 为带类型的 IntlFailure（timeout/error/
+        parse_error），blocked 仅保留给外层退避加倍。"""
         client = httpx.Client(
             headers={
                 "User-Agent": self._ua() or UA,
@@ -740,16 +774,26 @@ class TuniuCrawler(BaseCrawler):
                     self.logger.warning(
                         "[tuniu][intl] %s 列表页未取到 #token（疑改版）",
                         date)
-                    return False, None, True
+                    return False, IntlFailure(
+                        "error", "国际列表页未取到 #token（疑改版）"), True
                 d = self._intl_query_body(fc, tc, date, poll, secret)
                 r = client.get(self.INTL_QF_API,
                                params={"d": json.dumps(d, ensure_ascii=False)},
                                headers=api_hdrs)
                 try:
                     obj = r.json()
-                except Exception:
-                    return False, None, False
-                data = obj.get("data") or {}
+                except Exception as ex:
+                    return False, IntlFailure(
+                        "parse_error", f"queryFlight 响应非 JSON: {ex}"), False
+                if not isinstance(obj, dict):
+                    return False, IntlFailure(
+                        "parse_error", "queryFlight 响应非 JSON 对象"), False
+                data = obj.get("data")
+                if data is None:
+                    data = {}
+                if not isinstance(data, dict):
+                    return False, IntlFailure(
+                        "parse_error", "queryFlight 响应 data 非对象"), False
                 # 观察哨（report §6b）：国际通道预留登录门 needLogin
                 # 未启用——翻 true 即停采报事件（勿绕，同国内 710114 纪律）
                 if data.get("needLogin"):
@@ -769,20 +813,34 @@ class TuniuCrawler(BaseCrawler):
                     last_msg = msg
                     time.sleep(1.5)
                     continue
-                plist = data.get("productList") or []
+                plist = data.get("productList")
+                if plist is None:
+                    plist = []
+                if not isinstance(plist, list):
+                    return False, IntlFailure(
+                        "parse_error", "productList 非数组"), False
                 if plist:
                     last_data = data
                 if str(data.get("needQueryMore")) != "1":
-                    # 聚合完成（或明确无数据）——最新非空盘出
-                    return (last_data is not None), last_data, False
+                    # 聚合完成（含明确空盘）：优先最新非空盘，整份响应
+                    # 交调用方分层——空 productList 才是真源边界证据
+                    return True, (last_data if last_data is not None
+                                  else data), False
                 time.sleep(1.5)
             # 拍数用尽：聚合未完结时以已拿到的最新非空盘兜底
-            if last_data is None and last_msg:
+            if last_data is not None:
+                return True, last_data, bool(last_msg)
+            if last_msg:
                 self._last_challenge_intl = blocked_signal("waf", "token门")
-            return (last_data is not None), last_data, bool(last_msg)
+                return False, IntlFailure(
+                    "error", f"国际 token 门持续拒绝: {last_msg}"), True
+            return False, IntlFailure(
+                "timeout", "国际聚合超时（needQueryMore=1 轮询耗尽，"
+                           "productList 为空）"), False
         except Exception as ex:
             self.logger.warning("[tuniu][intl] 请求异常: %s", ex)
-            return False, None, False
+            return False, IntlFailure(
+                self._exc_status(ex), f"国际请求异常: {ex}"), False
         finally:
             client.close()
 
@@ -803,6 +861,10 @@ class TuniuCrawler(BaseCrawler):
                 if self.rate_limit:
                     self._rate_record()
                 return raw
+            if isinstance(raw, IntlFailure):
+                # 保留最近一次带类型失败证据（调用方按此落
+                # timeout/error/parse_error，不得回落 empty）
+                self._last_intl_failure = raw
             if (self._last_challenge_intl is not None
                     and self._last_challenge_intl.status == "login"):
                 # needLogin 是确定性账号门，重试只会空转。
@@ -1000,17 +1062,25 @@ class TuniuCrawler(BaseCrawler):
         for date in dates:
             t_h5 = time.time()
             self._last_challenge_intl = None
+            self._last_intl_failure = None
             raw = self._hoop_intl(fc, tc, date)
             self._dump_raw(raw, f"tuniu_intl_{date}")
-            if raw is None:
+            if raw is None or isinstance(raw, IntlFailure):
                 self.logger.warning("[tuniu][intl] %s 未拿到真实价格", date)
                 _sig = getattr(self, "_last_challenge_intl", None)
+                _fail = (raw if isinstance(raw, IntlFailure)
+                         else getattr(self, "_last_intl_failure", None))
+                if _sig is not None:
+                    status, detail = _sig.status, _sig.detail
+                elif isinstance(_fail, IntlFailure):
+                    # 超时/请求异常/解析失败按类型落账（不是无票）
+                    status, detail = _fail.status, _fail.detail
+                elif type(self).login_suspect:
+                    status, detail = "login", "国际接口要求登录"
+                else:
+                    status, detail = "error", "国际接口未返回价格（无失败证据）"
                 self.path_note(
-                    "H5/API",
-                    _sig.status if _sig else
-                    ("login" if type(self).login_suspect else "empty"),
-                    date=date,
-                    detail=(_sig.detail if _sig else "国际接口未返回价格"),
+                    "H5/API", status, date=date, detail=detail,
                     ms=int((time.time() - t_h5) * 1000))
                 self._sleep()
                 continue
@@ -1039,9 +1109,25 @@ class TuniuCrawler(BaseCrawler):
                     len(flights), n_d, len(flights) - n_d)
             else:
                 self.logger.warning("[tuniu][intl] %s 未解析到价格", date)
-                self.path_note("H5/API", "empty", date=date,
-                               detail="国际接口有响应但未解析出价格",
-                               ms=int((time.time() - t_h5) * 1000))
+                _plist = (raw.get("productList")
+                          if isinstance(raw, dict) else None)
+                if _plist is not None and not isinstance(_plist, list):
+                    self.path_note(
+                        "H5/API", "parse_error", date=date,
+                        detail="国际接口 productList 非数组",
+                        ms=int((time.time() - t_h5) * 1000))
+                elif isinstance(_plist, list) and _plist:
+                    # 有行但全被解析门剔除=解析失败，不是真源无票
+                    self.path_note(
+                        "H5/API", "parse_error", date=date,
+                        detail="国际接口 %d 行均未解析出价格" % len(_plist),
+                        ms=int((time.time() - t_h5) * 1000))
+                else:
+                    # 干净聚合响应（needQueryMore != '1'）且空 productList
+                    # 才允许落 empty：真源边界
+                    self.path_note("H5/API", "empty", date=date,
+                                   detail="国际接口聚合完成但无报价",
+                                   ms=int((time.time() - t_h5) * 1000))
             self._sleep()
         return results
 

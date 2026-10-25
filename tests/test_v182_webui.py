@@ -50,8 +50,9 @@ class TestWebuiV182Pins:
     def test_empty_state_teaching(self):
         src = self._src()
         i0 = src.index("没有符合条件的航班")
-        seg = src[max(0, i0 - 260):i0]
-        assert "u.flights.length?" in seg or "flights.length?" in seg.replace(" ", ""), \
+        seg = src[max(0, i0 - 900):i0]
+        assert "if(!rows.length){" in seg, "空态未在行渲染前分型"
+        assert "if(!u.flights.length)_why=" in src, \
             "erow 未按「零数据 vs 筛选空」分叉"
         assert "本轮尚无采集数据" in src, "零轮次教学句不在场"
 

@@ -347,6 +347,10 @@ def build_demo_db(path, seed=20260909):
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
     conn.execute("DELETE FROM flight_prices")
+    # 演示库是临时文件、会被复用；快照不清会让每次启动叠加同刻重复行，
+    # 走势的“较上次”被同刻副本覆盖成 0。
+    conn.execute("DELETE FROM radar_snapshots")
+    conn.execute("DELETE FROM radar_runs")
     now = datetime.now().replace(second=0, microsecond=0)
     # ---- 14 天历史：每 30min 一轮（长坡缓降，末段刺破阈值；
     # 供 48h 走势图 / 7d 范围 / 14 天价格日历三个视图共用） ----
@@ -453,6 +457,48 @@ def build_demo_db(path, seed=20260909):
                 (plat, r["from"], r["to"], r["dates"][0],
                  min(f["price"] for f in fs), "", "", ts_s,
                  json.dumps(fs, ensure_ascii=False)))
+    # ---- 特价监控：3 次合成快照（公开演示明确标 DEMO，非真实报价） ----
+    # 低价日落在 SHA→URC 首个演示日期，点开可读到上面当轮明细；
+    # 逐日最低渠道轮换，覆盖三个官方日历来源。
+    _r0 = routes[0]
+    _rdays = [now.date() + timedelta(days=15 + i) for i in range(7)]
+    _runs = [
+        (now - timedelta(hours=4), [1860, 1720, 1790, 1750, 1830, 2010, 2160]),
+        (now - timedelta(hours=2), [1830, 1680, 1750, 1710, 1790, 1980, 2130]),
+        (now, [1800, 1640, 1710, 1670, 1750, 1950, 2100]),
+    ]
+    _rrows = []
+    _rrunrows = []
+    for _at, _prices in _runs:
+        _atx = _at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        _rrunrows.append((
+            "演示用户", "", "ok", "演示合成快照", len(_rdays) * 3,
+            json.dumps({"from": _r0["from"], "to": _r0["to"],
+                        "nationwide": False,
+                        "start": _rdays[0].strftime("%Y-%m-%d"),
+                        "end": _rdays[-1].strftime("%Y-%m-%d"),
+                        "channels": ["ctrip", "fliggy", "tongcheng"]},
+                       ensure_ascii=False),
+            _atx, _atx))
+        for _di, _day in enumerate(_rdays):
+            _extra = (0, 35, 70) if _di % 3 == 0 else (
+                (35, 0, 70) if _di % 3 == 1 else (70, 35, 0))
+            for _ci, _ch in enumerate(("ctrip", "fliggy", "tongcheng")):
+                _rrows.append((
+                    "演示用户", _r0["from"], _r0["to"], 0,
+                    _day.strftime("%Y-%m-%d"), _ch,
+                    _prices[_di] + _extra[_ci], 0, "bare", "calendar", "",
+                    _rdays[0].strftime("%Y-%m-%d"),
+                    _rdays[-1].strftime("%Y-%m-%d"), _atx))
+    conn.executemany(
+        "INSERT INTO radar_snapshots (user,from_city,to_city,nationwide,"
+        "depart_date,channel,price,tax_included,basis,kind,link,"
+        "query_start,query_end,fetched_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", _rrows)
+    conn.executemany(
+        "INSERT INTO radar_runs (user,query_key,status,note,rows,"
+        "query_json,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?)",
+        _rrunrows)
     conn.commit()
     conn.close()
     # ---- 半年走势日桶：派生自同一套明细（PriceStorage.refresh_daily

@@ -136,7 +136,7 @@ def test_expand_state_persisted():
     # r339 起 bkg（托运 kg）/wb（仅大型机明细门）随两 facet 入排成尾键）
     assert ("chr:CHR,exp:EXP,tg:TGOPEN,pmin:FLT.pmin||0,pmax:FLT.pmax||0,"
             in webui.PAGE)
-    assert "wb:FLT.wb}" in webui.PAGE
+    assert "wb:FLT.wb,so:FLT.shareOnly,st:FLT.stopOnly,ro:FLT.riskOnly,hc:FLT.hideCal,oq:FLT.onlyQual,wo:WATCH_ONLY}" in webui.PAGE
     assert "if(typeof j.exp==='string')EXP=j.exp;" in webui.PAGE
     assert "if(typeof j.tg==='string')TGOPEN=j.tg;" in webui.PAGE
 

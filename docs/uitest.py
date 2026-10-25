@@ -57,6 +57,12 @@ def free_port():
 
 
 def main():
+    # GBK 控制台打不出 ✓/✗ 会让收尾 print 抛异常、吞掉 os._exit 判定；
+    # 输出去不掉的字符用 ? 代替，门禁结果本身保持原样。
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except Exception:
+        pass
     from playwright.sync_api import sync_playwright
     free_port()
     srv = subprocess.Popen(
@@ -408,7 +414,11 @@ def main():
                 "return cs.length>0&&Math.max(...cs.map("
                 "e=>e.getBoundingClientRect().width))>6.5;}"))
             if cells:
-                cells[0].click(); pg.wait_for_timeout(600)
+                # 健康格随轮询整带重渲：ElementHandle 在 query 与 click
+                # 之间可能已脱离 DOM（偶发中断），改在页面内取当前格点击。
+                pg.evaluate("()=>{const c=document.querySelector('.hc');"
+                            "if(c)c.click()}")
+                pg.wait_for_timeout(600)
                 ck("日志弹层", pg.query_selector(".logpre") is not None)
                 # showLog 入口 aria-label 随可见标题切换
                 ck("日志弹层 aria-label 随入口", pg.get_attribute(
@@ -1424,6 +1434,33 @@ def main():
             pg.click('#cfgnav .cnav[data-p="login"]')
             pg.wait_for_timeout(300)
             pg.evaluate("()=>switchView('mon')"); pg.wait_for_timeout(300)
+            # ---- 320 档：六视图、横向溢出、图标/文字与层级 ----
+            pg.set_viewport_size({"width": 320, "height": 844})
+            pg.evaluate("showMonTab('overview')")
+            pg.wait_for_timeout(350)
+            ck("320 无横向滚动", pg.evaluate(
+                "document.documentElement.scrollWidth") <= 321)
+            ck("320 六视图全部在视口内", pg.evaluate(
+                "()=>{const ns=[...document.querySelectorAll('#montabs .mtab')];"
+                "if(ns.length<6)return false;"
+                "return ns.every(n=>{const r=n.getBoundingClientRect();"
+                "return r.width>20&&r.left>=-1&&r.right<=innerWidth+1;});}"))
+            ck("320 切换器 3×2 网格", pg.evaluate(
+                "()=>{const s=getComputedStyle(document.getElementById('montabs'));"
+                "return s.display==='grid'&&s.gridTemplateColumns.split(' ').length===3;}"))
+            ck("320 头部状态 pill 不裁字", pg.evaluate(
+                "()=>{const p=document.querySelector('.pill');if(!p)return true;"
+                "const s=getComputedStyle(p);return s.overflow==='visible'"
+                "&&s.textOverflow==='clip'&&s.whiteSpace==='normal';}"))
+            ck("toast 层级高于登录弹层", pg.evaluate(
+                "()=>parseInt(getComputedStyle(document.getElementById('toasts')).zIndex||0)"
+                ">parseInt(getComputedStyle(document.getElementById('lgMask')).zIndex||0)"))
+            pg.evaluate("showMonTab('health')"); pg.wait_for_timeout(300)
+            ck("健康状态不只靠颜色", pg.evaluate(
+                "()=>{const p=document.querySelector('.hc.part'),f=document.querySelector('.hc.fail');"
+                "if(!p||!f)return true;"
+                "return getComputedStyle(p).backgroundImage!==getComputedStyle(f).backgroundImage;}"))
+            pg.evaluate("showMonTab('overview')"); pg.wait_for_timeout(200)
             # ---- 审计 P2 行为固防（源码钉只验「声明在场」，层叠胜负
             # 与断点档位由 computed 行为钉定谳）----
             # 391-509 截断带中点 450px：ssub「时间戳 · 用时」复合信息
@@ -6720,6 +6757,349 @@ def main():
                 pg.wait_for_timeout(800)
             _cb = pg.evaluate("""()=>{const e=document.querySelector('#srxCapbar');if(!e||e.hidden)return null;const r=e.getBoundingClientRect();return{h:+r.height.toFixed(1),chips:e.querySelectorAll('.capchip').length,text:e.innerText.slice(0,120),scroll:e.scrollWidth>e.clientWidth}}""")
             ck("goal 渠道/会话单行不换行", bool(_cb) and _cb["h"] <= 40 and _cb["chips"] == 5 and "会话" not in _cb["text"], str(_cb))
+
+            # v294 特价监控：演示快照 3 次，日历/走势/低价日真实航班不空
+            pg.evaluate("switchView('mon');showMonTab('specials')")
+            pg.wait_for_timeout(1600)
+            _sm = pg.evaluate("""()=>{const d=[...document.querySelectorAll('#spMonCal .spmon-day')];
+              const c=document.getElementById('spMonChart');
+              return{days:d.length,sel:document.querySelectorAll('#spMonCal .spmon-day.sel').length,
+               low:!!document.querySelector('#spMonLow .spmon-lowday'),chart:c?c.width:0,
+               empty:!!document.querySelector('#spMonCal .spmon-empty'),
+               delta:(document.querySelector('.spmon-day .b')||{}).textContent||''}}""")
+            ck("v294 特价监控日历年/走势/低价日",
+               _sm["days"] == 7 and _sm["sel"] == 1 and _sm["low"]
+               and _sm["chart"] > 0 and not _sm["empty"], str(_sm))
+            # v294 渠道诊断：五渠道都有分型卡与动作说明
+            pg.evaluate("showMonTab('health')")
+            pg.wait_for_timeout(1200)
+            _dg = pg.evaluate("""()=>{const c=[...document.querySelectorAll(
+              '#healthDiagBody .hdiag-card')];return{n:c.length,
+               labels:c.map(x=>(x.querySelector('.hdiag-st')||{}).textContent||''),
+               acts:c.filter(x=>(x.querySelector('.hdiag-a')||{}).textContent).length}}""")
+            ck("v294 渠道诊断五渠道分型",
+               _dg["n"] == 5 and len(set(_dg["labels"])) >= 1
+               and _dg["acts"] == 5, str(_dg))
+            _dgl = pg.evaluate("""()=>{const s=[...document.querySelectorAll(
+              '#healthDiagBody .hdiag-l span')],
+              c=[...document.querySelectorAll('#healthDiagBody .hdiag-card')];
+              return{n:s.length,
+               multi:s.filter(x=>x.getBoundingClientRect().height>18).length,
+               over:c.filter(x=>x.scrollWidth>x.clientWidth+1).length}}""")
+            ck("v297 诊断证据标签不拆词",
+               _dgl["n"] == 15 and _dgl["multi"] == 0 and _dgl["over"] == 0,
+               str(_dgl))
+            # v294 检索首屏大块均可折叠（说明/价带/五源）
+            pg.evaluate("switchView('search')")
+            pg.wait_for_timeout(900)
+            _fd = pg.evaluate("""()=>{
+              const has=s=>!!document.querySelector(s);
+              return{hero:has('[onclick*="srxHeroCopy"]'),
+               band:has('[onclick*="srxBand"]'),
+               brief:has('[data-foldtarget="srxBrief"]')}}""")
+            ck("v294 检索大块折叠入口", _fd["hero"] and _fd["band"]
+               and _fd["brief"], str(_fd))
+            # v297 雷达：多日期曲线/低日/编号/来源状态
+            pg.evaluate("switchView('mon');showMonTab('specials')")
+            pg.wait_for_timeout(1600)
+            _r297 = pg.evaluate("""()=>({
+              days:document.querySelectorAll('#spMonCal .spmon-day').length,
+              low:document.querySelectorAll('#spMonCal .spmon-day.low').length,
+              note:(document.getElementById('spMonChartNote')||{}).textContent||'',
+              lowdate:(document.querySelector('.spmon-lowdate')||{}).innerText||'',
+              nums:[...document.querySelectorAll('#montab-specials .seclab .no')].map(x=>x.textContent.trim()),
+              src:(document.getElementById('spMonSources')||{}).innerText||'',
+              overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth+1})""")
+            ck("v297 雷达多日期/低日/编号",
+               _r297["days"] == 7 and _r297["low"] == 1
+               and "每线=一个出发日期" in _r297["note"]
+               and "最低日" in _r297["lowdate"]
+               and _r297["nums"] == ["01", "02", "03"]
+               and "来源" in _r297["src"] and not _r297["overflow"], str(_r297))
+            # v297 选中非最低日时，详情卡不得继续冒充「最低日」
+            _r297b = pg.evaluate("""()=>{const low=(SPMON.data.lowest||{}).date||'';
+              const other=[...document.querySelectorAll('#spMonCal .spmon-day')]
+                .map(b=>b.dataset.spmday).find(d=>d&&d!==low);
+              if(other)spMonPick(other);
+              return{low:low,other:other||''}}""")
+            pg.wait_for_timeout(400)
+            _r297c = pg.evaluate("""()=>({
+              head:(document.querySelector('.spmon-lowh')||{}).textContent||'',
+              date:(document.querySelector('.spmon-lowdate')||{}).innerText||''})""")
+            ck("v297 选中非最低日标记选中而非最低",
+               bool(_r297b["low"] and _r297b["other"])
+               and _r297c["head"].startswith("选中日")
+               and "非最低" in _r297c["date"]
+               and "最低日" not in _r297c["date"], str([_r297b, _r297c]))
+            if _r297b["low"]:
+                pg.evaluate("d=>spMonPick(d)", _r297b["low"])
+                pg.wait_for_timeout(400)
+                _r297d = pg.evaluate("""()=>({
+                  head:(document.querySelector('.spmon-lowh')||{}).textContent||'',
+                  date:(document.querySelector('.spmon-lowdate')||{}).innerText||''})""")
+                ck("v297 选回最低日恢复低价日",
+                   _r297d["head"].startswith("低价日") and "最低日" in _r297d["date"],
+                   str(_r297d))
+            _srt297 = pg.evaluate("""()=>{const rows=[...document.querySelectorAll(
+              '#spMonTable tbody tr')],mk=r=>((r.children[4]||{}).textContent||'');
+              return{n:rows.length,
+               low:rows.filter(r=>mk(r).includes('最低日')).length,
+               sel:rows.filter(r=>mk(r).includes('选中')).length}}""")
+            ck("v297 雷达低日/选中对读屏有标记",
+               _srt297["n"] > 0 and _srt297["low"] > 0
+               and _srt297["sel"] > 0, str(_srt297))
+            # v297 采集记录：每次运行的时间/状态/行数可见且可展开
+            _runs297 = pg.evaluate("""()=>({
+              n:(document.getElementById('spMonHistN')||{}).textContent||'',
+              rows:document.querySelectorAll('#spMonHistBody .spmon-run:not(.head)').length,
+              labels:[...document.querySelectorAll('#spMonHistBody .spmon-run .st')]
+                .map(x=>x.textContent),
+              note:(document.getElementById('spMonChartNote')||{}).textContent||''})""")
+            ck("v297 采集记录逐次可见",
+               _runs297["rows"] == 3 and "3 次" in _runs297["n"]
+               and _runs297["labels"].count("成功") == 3
+               and "线尾标日期/价格" in _runs297["note"], str(_runs297))
+            pg.click('#spMonHist summary')
+            pg.wait_for_timeout(300)
+            _hist297 = pg.evaluate("""()=>({
+              open:!!document.getElementById('spMonHist').open,
+              h:document.querySelector('#spMonHistBody .spmon-run:not(.head)')
+                .getBoundingClientRect().height})""")
+            ck("v297 采集记录可展开", _hist297["open"] and _hist297["h"] > 10,
+               str(_hist297))
+            pg.evaluate("()=>{SPMON.data.runs=[];spMonRender()}")
+            _hemp297 = pg.evaluate("""()=>{const e=document.querySelector(
+              '.spmon-histempty');return{ok:!!e,
+               w:e?Math.round(e.getBoundingClientRect().width):0,
+               text:e?e.textContent:''}}""")
+            ck("v297 空采集记录全宽",
+               _hemp297["ok"] and _hemp297["w"] > 200
+               and "暂无运行记录" in _hemp297["text"], str(_hemp297))
+            pg.evaluate("()=>{spMonLoad(true)}")
+            pg.wait_for_timeout(800)
+            pg.evaluate("""()=>{SPMON.data.date_series
+              .forEach(x=>x.basis_changed=true);spMonRender()}""")
+            _bc297 = pg.evaluate("""()=>({
+              src:(document.getElementById('spMonSources')||{}).innerText||'',
+              low:(document.querySelector('.spmon-lowmeta')||{}).innerText||'',
+              note:(document.getElementById('spMonChartNote')||{}).textContent||''})""")
+            ck("v297 口径变化可辨",
+               "口径变化" in _bc297["src"]
+               and "口径较上次变化" in _bc297["low"]
+               and "含口径变化日" in _bc297["note"], str(_bc297))
+            pg.evaluate("()=>{spMonLoad(true)}")
+            pg.wait_for_timeout(800)
+            _hov297 = pg.evaluate("""()=>{const g=SPMON.geo,
+              c=document.getElementById('spMonChart'),r=c.getBoundingClientRect();
+              const s=g.series.find(x=>x.date!==g.selDate&&x.date!==g.lowDate)
+                ||g.series[0],p=s.pts[s.pts.length-1];
+              return{x:r.left+g.X(p.t),y:r.top+g.Y(p.p),
+               date:s.date,price:Math.round(p.p)}}""")
+            pg.mouse.move(_hov297["x"], _hov297["y"])
+            pg.wait_for_timeout(300)
+            _tip297 = pg.evaluate("""()=>{const t=document.getElementById('spMonTip'),
+              r=t.getBoundingClientRect(),c=document.getElementById('spMonChart');
+              return{hidden:t.hidden,text:t.innerText,
+               left:Math.round(r.left),top:Math.round(r.top),
+               right:Math.round(r.right),bottom:Math.round(r.bottom),
+               wrapR:Math.round(c.parentElement.getBoundingClientRect().right),
+               vw:innerWidth,vh:innerHeight}}""")
+            ck("v297 图表悬停显示任意日期",
+               not _tip297["hidden"] and _hov297["date"] in _tip297["text"]
+               and str(_hov297["price"]) in _tip297["text"]
+               and _tip297["left"] >= 0 and _tip297["top"] >= 0
+               and _tip297["right"] <= _tip297["wrapR"] + 1
+               and _tip297["bottom"] <= _tip297["vh"],
+               str([_hov297, _tip297]))
+            pg.mouse.move(2, 2)
+            pg.wait_for_timeout(200)
+            _tiphide = pg.evaluate(
+                "()=>document.getElementById('spMonTip').hidden")
+            ck("v297 图表悬停离场收起", bool(_tiphide), str(_tiphide))
+            pg.evaluate("""()=>{const d=SPMON.data;d.dates=[];d.date_series=[];
+              d.series=[];d.lowest={};d.channels_status={};d.runs=[];
+              d.snapshots=0;d.last_at='';SPMON.date='';spMonRender()}""")
+            _remp297 = pg.evaluate("""()=>({
+              cal:(document.querySelector('#spMonCal .spmon-empty')||{}).innerText||'',
+              low:(document.getElementById('spMonLow')||{}).innerText||'',
+              lowdate:!!document.querySelector('.spmon-lowdate'),
+              note:(document.getElementById('spMonChartNote')||{}).textContent||'',
+              mainD:getComputedStyle(document.querySelector(
+                '#spRadarMonitor .spmon-main')).display,
+              srcD:getComputedStyle(document.getElementById('spMonSources')).display,
+              histD:getComputedStyle(document.getElementById('spMonHist')).display,
+              calW:Math.round(document.getElementById('spMonCal')
+                .getBoundingClientRect().width),
+              cardW:Math.round(document.getElementById('spRadarMonitor')
+                .getBoundingClientRect().width)})""")
+            ck("v297 雷达零快照不伪造日期",
+               "还没有监控记录" in _remp297["cal"]
+               and "暂无日期价" in _remp297["low"]
+               and not _remp297["lowdate"]
+               and "监控次数不足" in _remp297["note"]
+               and _remp297["mainD"] == "none"
+               and _remp297["srcD"] == "none"
+               and _remp297["histD"] == "none"
+               and _remp297["calW"] > _remp297["cardW"] * 0.8,
+               str(_remp297))
+            pg.evaluate("()=>{spMonLoad(true)}")
+            pg.wait_for_timeout(800)
+            # v297 画布随视口重绘，不再把旧像素横向拉伸
+            _vp297 = pg.viewport_size
+            _cw1 = pg.evaluate("""()=>{const c=document.getElementById('spMonChart');
+              return{cw:c.clientWidth,w:c.width}}""")
+            pg.set_viewport_size({"width": 1200, "height": _vp297["height"]})
+            pg.wait_for_timeout(500)
+            _cw2 = pg.evaluate("""()=>{const c=document.getElementById('spMonChart');
+              return{cw:c.clientWidth,w:c.width}}""")
+            ck("v297 雷达画布随视口重绘",
+               abs(_cw2["cw"] - _cw1["cw"]) > 20
+               and abs(_cw2["w"] - _cw2["cw"]) <= 2, str([_vp297, _cw1, _cw2]))
+            pg.set_viewport_size(_vp297)
+            pg.wait_for_timeout(500)
+            # v297 关注台 legend 不再把代码压成色块
+            pg.evaluate("showMonTab('watch')")
+            pg.wait_for_timeout(1200)
+            _lg297 = pg.evaluate("""()=>{const c=document.querySelector('.ws-lg'),
+              b=c&&c.querySelector('b'),p=c&&c.querySelector('span');
+              if(!b||!p)return{ok:false,n:0};
+              const br=b.getBoundingClientRect(),pr=p.getBoundingClientRect();
+              return{ok:br.width>14&&br.height>10&&!(br.left<pr.right&&br.right>pr.left&&br.top<pr.bottom&&br.bottom>pr.top),
+               n:document.querySelectorAll('.ws-lg').length,bw:br.width}}""")
+            ck("v297 关注台 legend 无叠字", _lg297["ok"], str(_lg297))
+            # v297 渠道登录/入口：一块表面、30 条入口、无嵌套边框
+            pg.evaluate("switchView('cfg')")
+            pg.wait_for_timeout(700)
+            pg.click('#cfgnav .cnav[data-p="login"]')
+            pg.wait_for_timeout(700)
+            _ch297 = pg.evaluate("""()=>{const bands=[...document.querySelectorAll('#panel-login .chband')],
+              links=[...document.querySelectorAll('#panel-login .chlink')],
+              slot=document.querySelector('#loginRows .lgslot');
+              return{bands:bands.length,links:links.length,
+               border:links[0]?getComputedStyle(links[0]).borderTopWidth:'',
+               slotBg:slot?getComputedStyle(slot).backgroundColor:'',
+               overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth+1}}""")
+            ck("v297 渠道入口扁平 30 链接",
+               _ch297["bands"] == 5 and _ch297["links"] == 30
+               and _ch297["border"] == "0px"
+               and _ch297["slotBg"] in ("rgba(0, 0, 0, 0)", "transparent")
+               and not _ch297["overflow"], str(_ch297))
+            pg.set_viewport_size({"width": 390, "height": 844})
+            pg.wait_for_timeout(600)
+            _ch390 = pg.evaluate("""()=>({sw:document.documentElement.scrollWidth,
+              cw:document.documentElement.clientWidth,
+              linkH:(document.querySelector('#panel-login .chlink')||{}).getBoundingClientRect?
+                +(document.querySelector('#panel-login .chlink')||{getBoundingClientRect:()=>({height:0})}).getBoundingClientRect().height.toFixed(1):0})""")
+            ck("v297 渠道入口 390 无横溢", _ch390["sw"] <= _ch390["cw"] + 1, str(_ch390))
+            pg.evaluate("()=>lgOpenFliggy()")
+            pg.wait_for_timeout(300)
+            _lm390 = pg.evaluate("""()=>{const m=document.getElementById('lgModal'),
+              r=m.getBoundingClientRect(),x=m.querySelector('.x');
+              return{open:m.classList.contains('open'),
+               left:Math.round(r.left),right:Math.round(r.right),
+               vw:document.documentElement.clientWidth,
+               sw:m.scrollWidth,cw:m.clientWidth,
+               close:!!x&&x.getBoundingClientRect().width>20}}""")
+            ck("v297 登录弹窗 390 不溢出",
+               _lm390["open"] and _lm390["left"] >= 0
+               and _lm390["right"] <= _lm390["vw"]
+               and _lm390["sw"] <= _lm390["cw"] + 1
+               and _lm390["close"], str(_lm390))
+            pg.click('#lgModal .x')
+            pg.wait_for_timeout(250)
+            _lmclosed = pg.evaluate("""()=>({
+              open:document.getElementById('lgModal').classList.contains('open'),
+              mask:document.getElementById('lgMask').classList.contains('open')})""")
+            ck("v297 登录弹窗可关闭",
+               not _lmclosed["open"] and not _lmclosed["mask"], str(_lmclosed))
+            pg.click('#cfgnav .cnav[data-p="users"]')
+            pg.wait_for_timeout(900)
+            _rad390 = pg.evaluate("""()=>{const W=document.documentElement.clientWidth,
+              ins=[...document.querySelectorAll('#panel-users input[data-rad]')],
+              fs=[...document.querySelectorAll('#panel-users .cfgfieldset')]
+                .find(f=>f.innerText.includes('官方特价机票'));
+              return{n:ins.length,
+               over:ins.filter(e=>e.getBoundingClientRect().right>W+1).length,
+               fsOver:fs?(fs.scrollWidth>fs.clientWidth+1):true}}""")
+            ck("v297 特价雷达表单 390 不裁切",
+               _rad390["n"] >= 4 and _rad390["over"] == 0
+               and not _rad390["fsOver"], str(_rad390))
+            pg.evaluate("switchView('search')")
+            pg.wait_for_timeout(900)
+            if not pg.evaluate("()=>document.getElementById('srxProbe')"
+                               ".classList.contains('open')"):
+                pg.click('#srxProbeToggle')
+                pg.wait_for_timeout(300)
+            _f390 = pg.evaluate("""()=>{const f=document.querySelector(
+              '#searchview .srx-probefoot'),s=f.querySelector('.srx-probestatus'),
+              c=f.querySelector('.srx-chlinks'),fr=f.getBoundingClientRect(),
+              sr=s.getBoundingClientRect(),cr=c.getBoundingClientRect();
+              return{fw:fr.width,sw:sr.width,rows:cr.top>sr.top+4,
+               overflow:document.documentElement.scrollWidth>
+                 document.documentElement.clientWidth+1}}""")
+            ck("v297 探针脚注 390 全宽分行",
+               _f390["sw"] > _f390["fw"] * 0.85 and _f390["rows"]
+               and not _f390["overflow"], str(_f390))
+            pg.evaluate("switchView('mon');showMonTab('specials')")
+            pg.wait_for_timeout(1300)
+            pg.evaluate("document.getElementById('spRadarCfg').open=true")
+            pg.wait_for_timeout(300)
+            _al390 = pg.evaluate("""()=>{const W=document.documentElement.clientWidth,
+              cfg=document.getElementById('spRadarCfg'),
+              ls=[...cfg.querySelectorAll('.sprad-fld')],
+              ins=[...cfg.querySelectorAll('input,select')];
+              return{labels:ls.map(x=>x.innerText.replace(/\\s+/g,' ').trim()),
+               over:ins.filter(e=>e.getBoundingClientRect().right>W+1).length,
+               sw:cfg.scrollWidth,cw:cfg.clientWidth}}""")
+            ck("v297 雷达提醒字段 390 有标签不裁切",
+               len(_al390["labels"]) == 3
+               and any("降幅" in x for x in _al390["labels"])
+               and any("阈值" in x for x in _al390["labels"])
+               and any("冷却" in x for x in _al390["labels"])
+               and _al390["over"] == 0
+               and _al390["sw"] <= _al390["cw"] + 1, str(_al390))
+            pg.evaluate("""()=>{SPMON.data.runs=[{status:'error',rows:0,
+              finished_at:'2026-10-25 12:55:00',
+              note:'去哪儿签名失败；飞猪超时；携程风控冷却中，错误信息较长用于验证换行不裁切'}];
+              spMonRender();document.getElementById('spMonHist').open=true}""")
+            pg.wait_for_timeout(300)
+            _note390 = pg.evaluate("""()=>{const n=document.querySelector(
+              '#spMonHistBody .spmon-run:not(.head) .note'),
+              r=n.getBoundingClientRect();
+              return{text:n.textContent,h:Math.round(r.height),
+               over:n.scrollWidth>n.clientWidth+1,
+               sw:document.documentElement.scrollWidth,
+               cw:document.documentElement.clientWidth}}""")
+            ck("v297 移动端失败说明完整换行",
+               "验证换行不裁切" in _note390["text"]
+               and _note390["h"] > 12 and not _note390["over"]
+               and _note390["sw"] <= _note390["cw"] + 1, str(_note390))
+            pg.evaluate("()=>{spMonLoad(true)}")
+            pg.wait_for_timeout(700)
+            _tap297 = pg.evaluate("""()=>{const c=document.getElementById('spMonChart'),
+              g=SPMON.geo;c.scrollIntoView({block:'center'});
+              const s=g.series[0],p=s.pts[s.pts.length-1],
+              r=c.getBoundingClientRect();
+              return{x:r.left+g.X(p.t),y:r.top+g.Y(p.p)}}""")
+            pg.wait_for_timeout(300)
+            pg.evaluate("""p=>{const c=document.getElementById('spMonChart');
+              c.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,
+                clientX:p.x,clientY:p.y,pointerType:'touch'}));
+              c.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,
+                clientX:p.x,clientY:p.y,pointerType:'touch'}))}""", _tap297)
+            pg.wait_for_timeout(300)
+            _tapTip = pg.evaluate("""()=>{const t=document.getElementById('spMonTip'),
+              r=t.getBoundingClientRect();return{hidden:t.hidden,text:t.innerText,
+               left:Math.round(r.left),top:Math.round(r.top),
+               right:Math.round(r.right),bottom:Math.round(r.bottom),
+               vw:innerWidth,vh:innerHeight}}""")
+            ck("v297 图表点按显示明细",
+               not _tapTip["hidden"] and "¥" in _tapTip["text"]
+               and _tapTip["left"] >= 0 and _tapTip["top"] >= 0
+               and _tapTip["right"] <= _tapTip["vw"]
+               and _tapTip["bottom"] <= _tapTip["vh"], str(_tapTip))
+            pg.set_viewport_size({"width": 1512, "height": 1042})
+            pg.wait_for_timeout(400)
 
             bad0 = [n for n, v in checks if not v]
             prog.write("JS 错误: %s\n" % (errors[:3] if errors else "无"))

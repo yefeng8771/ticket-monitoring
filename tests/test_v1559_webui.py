@@ -183,7 +183,9 @@ console.log(JSON.stringify(r));"""
         page = self._page()
         m = re.search(r"const head=\[(.*?)\];", page, re.S)
         assert m, "CSV 列头锚点丢失"
-        assert m.group(1).count(",") + 1 == 46          # 列数锚（…r269 +往返推荐；r51 +税费列，贴价格）
+        # 列数锚（…r269 +往返推荐；r51 +税费列，贴价格；v295 +采集入口/
+        # 证据级别，贴渠道 = 48）
+        assert m.group(1).count(",") + 1 == 48
         assert "'机场/航站楼'" in m.group(1)             # 列名原位
         assert "_ttc(f.depAirport,f.depTerminal,f.depAirportCode)" in page
         assert "_ttc(f.arrAirport,f.arrTerminal,f.arrAirportCode)" in page

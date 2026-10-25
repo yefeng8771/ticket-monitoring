@@ -72,7 +72,8 @@ class TestWebuiV192Pins:
         """.tw 滚动近底预取下一切片（passive 不阻塞滚动合成）。"""
         src = self._src()
         assert ("#tablecard .tw") in src, "缺滚动容器监听锚"
-        i0 = src.index("addEventListener('scroll'")
+        i0 = src.index(
+            "document.querySelector('#tablecard .tw').addEventListener('scroll'")
         # 窗口锚到监听器块边界而非固定字符数（LESSONS 卅一§3：块内合法
         # 增厚——如 r314 P3-1 滚动态投影开关行——不该把钉面推出窗口）
         i1 = src.index("},{passive:true});", i0) + len("},{passive:true});")

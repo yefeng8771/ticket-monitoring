@@ -267,8 +267,11 @@ def test_audit_fixes_counts_filters_status_and_exit():
     # retry must keep submitted scope and batch view
     assert "keepScope:!!o.merge,forceBatch:!!o.merge" in src
     assert "if(!prev&&!opt.keepScope)" in src
-    # exiting probe stops polling and closes the probe panel
-    assert "function srxExitProbe(){\n srxTaskStop();" in src
+    # exiting probe cancels a running backend task, clears the task view and
+    # closes the probe panel (no unpolled "采集中" shell)
+    assert "function srxExitProbe(){\n const running=" in src
+    assert "if(running)srxTaskCancel();" in src
+    assert "SRX_TASK_GEN++" in src
     assert "_pp.classList.remove('open')" in src
     # session chip must not claim recent detail while current run is rejected
     assert "会话 本次需登录" in src

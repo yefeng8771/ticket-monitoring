@@ -183,5 +183,5 @@ class TestWebuiV180Pins:
         # catch/论证注推出旧 400 字窗；意图不变：失败落点须带静默论证）
         i0 = src.index("async function pulse()")
         seg = src[i0:i0 + 700]
-        assert "catch(e){}" in seg and ("有则显示" in seg or "静默" in seg), \
-            "/api/pulse catch 缺静默论证注释"
+        assert "catch(e){PU_ETAG=''" in seg and ("有则显示" in seg or "静默" in seg), \
+            "/api/pulse catch 缺静默论证注释或 ETag 作废"

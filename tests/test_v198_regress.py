@@ -175,8 +175,9 @@ class TestCsvOntimeColumn:
         m = re.search(r"const head=\[(.*?)\];", self._page(), re.S)
         assert m, "CSV 列头锚点丢失"
         head = m.group(1)
-        assert head.count(",") + 1 == 46, \
-            f"列数锚应随批内增列保持同步（r269 往返推荐=45；r51 税费列（国际行 tax 构成，贴价格）=46）：{head.count(',') + 1}"
+        # v295：采集入口/证据级别（路径级溯源，贴渠道）= 48
+        assert head.count(",") + 1 == 48, \
+            f"列数锚应随批内增列保持同步（r269 往返推荐=45；r51 税费=46；v295 入口/证据=48）：{head.count(',') + 1}"
         assert "'准点率'" in head
         assert head.index("'准点率'") < head.index("'取消率'"), \
             "准点率应就近插位贴取消率（次行并提同序）"

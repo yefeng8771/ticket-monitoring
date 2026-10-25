@@ -11,6 +11,7 @@ Usage:
 Exit code 0 only when every check passes. Intended to run after the release
 assets and body have been updated (see docs/RELEASE_PROCESS.md).
 """
+import hashlib
 import json
 import os
 import re
@@ -174,6 +175,19 @@ def main():
     ck("no nested screenshot junk", not os.path.exists(nested),
        "docs/screenshots/docs exists")
 
+    site = read("docs/site/index.html")
+    sm = re.search(r'<meta name="tm-build" content="([^"]+)"', site)
+    stamp_ok = False
+    stamp_txt = sm.group(1) if sm else "missing"
+    if sm:
+        parts = sm.group(1).split()
+        if len(parts) >= 2 and ver in parts[0]:
+            code_hash = "code:" + hashlib.sha256(
+                open(os.path.join(ROOT, "webui.py"), "rb").read()
+            ).hexdigest()[:12]
+            stamp_ok = parts[1] == code_hash
+    ck("site build stamp current", stamp_ok, stamp_txt)
+
     if not online:
         return finish()
 
@@ -219,6 +233,7 @@ def main():
         sums = ""
         print("  (SHA256SUMS fetch failed: %r)" % e)
     sum_lines = [l for l in sums.splitlines() if l.strip()]
+    digests = {a["name"]: (a.get("digest") or "") for a in assets}
     ck("SHA256SUMS has four lines", len(sum_lines) == 4, str(len(sum_lines)))
     for line in sum_lines:
         m = re.match(r"([0-9a-f]{64})\s+(\S+\.zip)$", line.strip())
@@ -226,6 +241,9 @@ def main():
         if m:
             ck("release body has sha256 for " + m.group(2), m.group(1) in body)
             ck("sha256 asset exists: " + m.group(2), m.group(2) in zips)
+            ck("remote digest matches " + m.group(2),
+               digests.get(m.group(2)) == "sha256:" + m.group(1),
+               digests.get(m.group(2), "missing"))
 
     ck("release source SHA matches HEAD", head[:7] in body, head[:7])
     try:
@@ -246,6 +264,15 @@ def main():
     except Exception as e:
         print("  (tag content read failed: %r)" % e)
     ck("tag v1.0 carries current version", tag_ver == ver, tag_ver or "unreadable")
+    try:
+        ref = gh("/git/ref/tags/v1.0")
+        tag_sha = (ref.get("object") or {}).get("sha") or ""
+        ck("tag v1.0 target == HEAD", tag_sha == head, tag_sha[:7])
+    except Exception as e:
+        ck("tag target readable", False, repr(e))
+    ck("release target == HEAD",
+       (rel.get("target_commitish") or "") in (head, "main"),
+       str(rel.get("target_commitish")))
 
     # CI must be green on the exact source SHA before publishing.
     ci_state = ""
@@ -258,15 +285,25 @@ def main():
     except Exception as e:
         ci_state = "unreadable:%r" % (e,)
     ck("CI green on HEAD", ci_state == "completed/success", ci_state)
-
-    # Live console (optional): if 8765 is up it must report the same version.
+    rb_state = "missing"
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8765/api/state", timeout=2) as r:
+        runs = gh("/actions/runs?head_sha=%s&per_page=50" % head).get(
+            "workflow_runs") or []
+        rb = [x for x in runs if x.get("name") == "release-build"]
+        if rb:
+            rb_state = "%s/%s" % (rb[0].get("status"), rb[0].get("conclusion"))
+    except Exception as e:
+        rb_state = "unreadable:%r" % (e,)
+    ck("release-build green on HEAD", rb_state == "completed/success", rb_state)
+
+    # Live console is required for alignment; no silent skip.
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8765/api/state", timeout=3) as r:
             live = json.loads(r.read().decode("utf-8"))
         ck("live 8765 version == source", str(live.get("version") or "") == ver,
            str(live.get("version") or ""))
-    except Exception:
-        print("  SKIP live 8765 not running")
+    except Exception as e:
+        ck("live 8765 reachable", False, repr(e))
 
     return finish()
 

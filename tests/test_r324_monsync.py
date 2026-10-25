@@ -139,7 +139,7 @@ def test_source_pins_monsync():
     src = open(os.path.join(ROOT, "webui.py"), encoding="utf-8").read()
     pi = src.find("async function pulse(")
     assert pi >= 0, "pulse 应在案"
-    pbody = src[pi:pi + 300]
+    pbody = src[pi:pi + 800]
     guard = "if(!(S&&S.users&&S.users.length))return;"
     assert guard in pbody and pbody.index(guard) < pbody.index("PU=t"), (
         "pulse 空守卫应先于签名记账（F3）")

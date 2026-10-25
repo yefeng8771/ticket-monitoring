@@ -123,6 +123,11 @@ class SpecialDeal:
     discount: str = ""        # 「2.1折」词面
     link: str = ""            # 购买深链（往返=round 模板）
     to_name: str = ""
+    # 价格口径（发现层必须随价标注；未知不得假设含税）：
+    # tax_included=None 表示源未声明口径，True/False 为源可核实口径。
+    tax_included: Optional[bool] = None
+    price_basis: str = "unknown"       # tax_included / bare / unknown
+    price_basis_label: str = "口径未标注"
 
 
 def _to_int(v, default=0):
@@ -274,6 +279,8 @@ def deals_from_tuniu(payload: dict, watch: SpecialWatch,
             discount=(f"{disc:g}折" if 0 < disc < 10 else ""),
             link=tuniu_link(org, dst, d, ret),
             to_name=str(r.get("dstCityName") or ""),
+            tax_included=False, price_basis="bare",
+            price_basis_label="裸价不含税",
         ))
     return out
 
@@ -346,6 +353,8 @@ def ctrip_calendar_deals(payload: dict, from_code: str, to_code: str,
             to_name=to_name,
             discount=("年度最低" if year_min is not None
                       and price <= year_min * 1.01 else ""),
+            tax_included=None, price_basis="unknown",
+            price_basis_label="口径未标注",
         ))
     return out
 
@@ -396,7 +405,9 @@ def deals_from_ctrip_board(payload: dict, watch: SpecialWatch,
             out.append(SpecialDeal(
                 src=SRC_CTRIP_BD, from_code=org, to_code=dst, date=d,
                 src_price=price, link=link, to_name=to_name,
-                discount=(f"{_zk * 10:g}折" if 0 < _zk < 1 else "")))
+                discount=(f"{_zk * 10:g}折" if 0 < _zk < 1 else ""),
+                tax_included=False, price_basis="bare",
+                price_basis_label="裸价不含税"))
     return out
 
 
@@ -438,6 +449,8 @@ def deals_from_fliggy_board(payload: dict, watch: SpecialWatch,
             link=("https://sjipiao.fliggy.com/flight_search_result.htm"
                   f"?depCity={org}&arrCity={dst}&tripType=0&depDate={d}"
                   "&searchBy=1314"),
+            tax_included=None, price_basis="unknown",
+            price_basis_label="口径未标注",
         ))
     return out
 

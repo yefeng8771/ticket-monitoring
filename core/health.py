@@ -39,6 +39,10 @@ _AUTH_MARKS = ("未登录硬拒", "需登录", "请登录", "登录失效", "会
 _GATE_MARKS = ("会话门拒", "非法链接", "请求环境拒绝")
 _EXC_MARK = "请求异常"
 _RETRY_MARKS = ("命中风控", "疑似限流", "后第")
+# 原站明确“没有符合条件的航班”是空结果，不是抓取失败；1999 既可能
+# 是登录墙也可能是无票，只有带这些消息词才归 empty。
+_EMPTY_MARKS = ("没有查询到符合条件的航班", "未查询到符合条件的航班",
+                "没有查询到", "未查询到", "无航班", "no flight")
 _MAINT_MARK = "进入维护模式"
 _ROUND_BEGIN = "开始一轮扫描"
 _ROUND_END = "本轮扫描结束"
@@ -103,6 +107,7 @@ def parse_health(log_text, now=None, hours=24):
         plats = {}
         for plat, ev in cur["events"].items():
             ok_n, fail_n = len(ev["ok"]), len(ev["fail"])
+            empty_n = int(ev.get("empty", 0))
             tot = ok_n + fail_n + ev["generic_fail"]
             cal_n = sum(1 for k in ev["kinds"].values() if k == "cal")
             detail_n = ok_n - cal_n
@@ -122,11 +127,15 @@ def parse_health(log_text, now=None, hours=24):
                     note = note or "日历价 %d（无航班明细）" % cal_n
                 elif cal_n and detail_n:
                     note = note or "航班级 %d · 日历 %d" % (detail_n, cal_n)
+            elif empty_n and not need_login:
+                s = "empty"
+                note = note or "无符合条件的航班"
             else:
                 s = "fail"
                 note = note or ("需登录 · 会话失效" if need_login
                                 else "抓取失败")
             plats[plat] = {"s": s, "ok": ok_n, "tot": tot, "note": note,
+                           "empty": empty_n,
                            "cal": cal_n, "detail": detail_n,
                            "cal_only": bool(cal_n and not detail_n),
                            "need_login": need_login}
@@ -168,8 +177,8 @@ def parse_health(log_text, now=None, hours=24):
                     cur = _new_round(ts)
                 ev = cur["events"].setdefault(plat, {
                     "ok": set(), "fail": set(), "retry": 0,
-                    "generic_fail": 0, "note": "", "kinds": {},
-                    "auth": False})
+                    "generic_fail": 0, "empty": 0, "note": "",
+                    "kinds": {}, "auth": False})
                 if not ev["note"]:
                     ev["note"] = ("哨兵: " + sm.group(2))[:60]
             continue
@@ -178,7 +187,7 @@ def parse_health(log_text, now=None, hours=24):
             cur = _new_round(ts)
         ev = cur["events"].setdefault(plat, {
             "ok": set(), "fail": set(), "retry": 0,
-            "generic_fail": 0, "note": "", "kinds": {},
+            "generic_fail": 0, "empty": 0, "note": "", "kinds": {},
             "auth": False})
         dm = _DATE.search(rest)
         d = dm.group(1) if dm else None
@@ -213,20 +222,24 @@ def parse_health(log_text, now=None, hours=24):
                 ev["generic_fail"] += 1
             if not ev["note"]:
                 ev["note"] = "请求被拒（认证状态未确认）"
+        elif any(k in msg for k in _EMPTY_MARKS):
+            ev["empty"] += 1
+            if not ev["note"]:
+                ev["note"] = "无符合条件的航班"
         elif any(k in msg for k in _FAIL_DATED):
             if d:
                 ev["fail"].add(d)
             else:
                 ev["generic_fail"] += 1
             if not ev["note"]:
-                ev["note"] = rest[:40]
+                ev["note"] = rest[:160]
         elif _EXC_MARK in msg:
             if d:
                 ev["fail"].add(d)
             else:
                 ev["generic_fail"] += 1
             if not ev["note"]:
-                ev["note"] = rest[:40]
+                ev["note"] = rest[:160]
         elif any(k in msg for k in _RETRY_MARKS):
             ev["retry"] += 1
     _flush()
@@ -236,7 +249,7 @@ def parse_health(log_text, now=None, hours=24):
         for plat, p in r["plats"].items():
             st = stats.setdefault(
                 plat, {"ok": 0, "part": 0, "fail": 0, "maint": 0,
-                       "rate": 0.0, "detail_rate": 0.0,
+                       "empty": 0, "rate": 0.0, "detail_rate": 0.0,
                        "detail_ok": 0, "cal_only": 0,
                        "cal": 0, "detail": 0, "auth": 0})
             st[p["s"]] += 1

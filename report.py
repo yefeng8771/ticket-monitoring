@@ -225,6 +225,14 @@ def _rounds(db_path, from_city, to_city, date, arrival_max, hours=48,
     「真达标」点，行情破线未达标点画描绿环区分（与明细表「价格
     绿=达标」同一语义，口径收口）。
     th_d/th_t 未传时旗标恒 False（仅旧式取值方使用，无环渲染）。"""
+    def _rc_get(k, d=None):
+        if rc is None:
+            return d
+        if isinstance(rc, dict):
+            return rc.get(k, d)
+        return getattr(rc, k, d)
+
+    direct_only = bool(_rc_get("direct_only"))
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -282,6 +290,19 @@ def _rounds(db_path, from_city, to_city, date, arrival_max, hours=48,
                 continue
             if dep_mismatch(f, date):
                 continue
+            # 航线适用条件必须与列表/告警同源：旧曲线只吃到达/衔接，
+            # 父航线配了只要直飞/排除经停/航司名单/价格上限时，图上仍
+            # 画被列表剔除的班次（同对象两套结论）。先归一化再筛，
+            # 否则 lcc/crossDayN 等键在原始元素上缺席导致门形同虚设。
+            if f.get("transCity"):
+                normalize(f, date)
+            try:
+                if rc is not None and not Alerter._route_filters([f], rc):
+                    continue
+            except Exception:
+                pass
+            if direct_only and f.get("transCity"):
+                continue
             _alive = True
             break
         if not _alive:
@@ -314,6 +335,13 @@ def _rounds(db_path, from_city, to_city, date, arrival_max, hours=48,
                     _pad_hhmm(f.get("depTime")), dep_win[0], dep_win[1]):
                 continue
             if dep_mismatch(f, date):
+                continue
+            try:
+                if rc is not None and not Alerter._route_filters([f], rc):
+                    continue
+            except Exception:
+                pass
+            if direct_only and f.get("transCity"):
                 continue
             if f.get("transCity"):
                 normalize(f, date)

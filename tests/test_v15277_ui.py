@@ -42,8 +42,11 @@ def test_stale_is_six_hour_not_any_nonzero_age():
 def test_cabin_filter_and_watch_use_one_classifier():
     s = _ui()
     assert "function srxWatchCabin(f){const c=srxCabinClass(f)" in s
-    assert "if(F.cabin==='eco'&&!(cab==='经济'||cab==='超级经济'))return false;" in s
-    assert "if(F.cabin==='biz'&&!(cab==='公务'||cab==='头等'))return false;" in s
+    # 检索与明细同一空值律：缺舱位维度的行不被指定舱位档静默滤除
+    assert "const _cabMissing=!cab||cab==='未知'||String(cab).indexOf('票种:')===0;" in s
+    assert "if(F.cabin==='eco'&&!_cabMissing&&!(cab==='经济'||cab==='超级经济'))return false;" in s
+    assert "if(F.cabin==='biz'&&!_cabMissing&&!(cab==='公务'||cab==='头等'))return false;" in s
+    assert "if(FLT.cabins.size&&cabinOf(f)&&!FLT.cabins.has(cabinOf(f)))return false;" in s
 
 
 def test_row_watch_defaults_to_source_channel():
@@ -85,7 +88,7 @@ def test_overlay_top_layer_and_z_order():
     s = _ui()
     assert "#searchview #srxModalmask{z-index:139}" in s
     assert "#searchview .srx-modal{z-index:140}" in s
-    assert "#toasts{z-index:170}" in s   # toast 抬到详情/浮层之上（r357 z=170）
+    assert "#toasts{z-index:300}" in s   # toast 必须高于登录/推送弹层（220/221）
     assert "if(srxTopLayer()==='detail')srxCloseDetail();" in s
     assert "if(srxTopLayer()==='gallery')srxCloseGallery();" in s
     assert "function srxLockBody()" in s and "function srxUnlockBody()" in s

@@ -84,6 +84,42 @@ def test_batch_probe_rejects_over_limit_and_bad_leg(fake_plat):
         ])
 
 
+def test_per_leg_channels_only_run_requested_leg():
+    """失败重试逐腿渠道：每条腿只跑自己的失败渠道，不复制到全腿。"""
+    calls_a, calls_b = [], []
+
+    def _mk(label, sink):
+        class _C:
+            def __init__(self, cfg, logger):
+                pass
+
+            def fetch(self, fc, tc, dates):
+                sink.append((fc, tc, dates[0]))
+                return []
+        return _C
+
+    crawlers.REGISTRY["legacy_a"] = _mk("a", calls_a)
+    crawlers.REGISTRY["legacy_b"] = _mk("b", calls_b)
+    old = getattr(webui._State, "cfg", None)
+    webui._State.cfg = {"crawler": {}}
+    webui._PROBE_LAST = 0
+    try:
+        j = webui._probe_search(
+            None, None, None, ["legacy_a", "legacy_b"],
+            legs=[{"from": "上海", "to": "北京", "date": "2026-10-25"},
+                  {"from": "上海", "to": "广州", "date": "2026-10-25"}],
+            leg_wants={0: ["legacy_a"], 1: ["legacy_b"]})
+        assert calls_a == [("SHA", "BJS", "2026-10-25")]
+        assert calls_b == [("SHA", "CAN", "2026-10-25")]
+        assert j["legs"][0]["channels"].keys() == {"legacy_a"}
+        assert j["legs"][1]["channels"].keys() == {"legacy_b"}
+    finally:
+        crawlers.REGISTRY.pop("legacy_a", None)
+        crawlers.REGISTRY.pop("legacy_b", None)
+        webui._State.cfg = old
+        webui._PROBE_LAST = 0
+
+
 def test_single_probe_response_keeps_legacy_shape(fake_plat):
     j = webui._probe_search("上海", "北京", "2026-10-25", [fake_plat])
     assert j["ok"] and "batch" not in j

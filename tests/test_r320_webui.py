@@ -61,7 +61,8 @@ class TestSourcePins(unittest.TestCase):
         for s in ('FLT.airlines.size&&!FLT.airlines.has(carrierKeyOf(f))',
                   'if(FLT.few&&!(f.fewTicket||(f.leftTickets>0&&f.leftTickets<10)))return false',
                   'if(FLT.nostop&&f.stop)return false',
-                  'if(FLT.noshare&&f.shareCarrier)return false',
+                  'if(FLT.noshare&&(f.shareCarrier||f.shareAirline))return false',
+                  'if(FLT.cross&&!(Number(f.crossDayN)>0)&&!String(f.cross||\'\').trim())return false',
                   'if(FLT.safe&&(f.agePolicy||f.riskPolicy||f.lurePrice!=null||f.ticketRisk))return false',
                   'if((FLT.laymin||FLT.laymax)&&f.transfer){const m=f.layoverM',
                   'if(FLT.durmin&&(!f.durM||f.durM<FLT.durmin))return false',
@@ -70,7 +71,7 @@ class TestSourcePins(unittest.TestCase):
                   'if(FLT.bag&&!_hasFreeBag(f))return false',
                   'if(FLT.meal&&!f.meal)return false',
                   'if(FLT.nolcc&&f.lcc)return false',
-                  'if(FLT.cross&&!(Number(f.crossDayN)>0))return false',   # r339 B2-1：跨天判定改 crossDayN（normalize 恒落键，arrDate 仅 tuniu 产恒死档）
+                  'if(FLT.cross&&!(Number(f.crossDayN)>0)&&!String(f.cross||\'\').trim())return false',   # 跨天=crossDayN 或文本 cross（两源同判）
                   'if(FLT.child&&f.childPrice==null)return false',
                   # r329 M-1 起筛选门带空值放行（cabinOf 连串档返回
                   # 空串=缺维度行不被任何舱位档静默滤除）

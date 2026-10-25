@@ -93,7 +93,7 @@ class BaseCrawler:
     # ── 采集链路观测（PC/H5/API/日历 逐路径尝试账本）──
     # 只记代码真实走过的尝试，不按结果反推路径；探针面板与渠道状态共用。
     PATH_STATUS = ("ok", "empty", "login", "blocked", "timeout",
-                   "error", "calendar")
+                   "error", "parse_error", "unsupported", "calendar")
 
     def path_reset(self):
         self.paths = []
@@ -266,7 +266,6 @@ class BaseCrawler:
                 # 可选本地代理（r319）：全部渠道采集出口统一走它
                 proxy=({"server": self.proxy} if self.proxy else None),
                 args=launch_args + [
-                    "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                 ],
@@ -282,9 +281,6 @@ class BaseCrawler:
                         missing = [c for c in saved if key(c) not in existing]
                         if missing:
                             ctx.add_cookies(missing)
-                ctx.add_init_script(
-                    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
-                )
                 yield ctx
                 state = ctx.storage_state() if save_session else None
             finally:

@@ -14,7 +14,7 @@
 import argparse
 import json
 
-__version__ = "1.5.292"
+__version__ = "1.5.297"
 import os
 import subprocess
 import sys
@@ -146,18 +146,20 @@ def build_users(cfg: dict) -> list:
         raw_users = cfg["users"] or []
     else:
         raw_users = [{"name": "default", **{
-            k: cfg[k] for k in ("routes", "specials", "platforms",
-                                "schedule", "notifier")
+            k: cfg[k] for k in ("routes", "specials", "special_radar",
+                                "platforms", "schedule", "notifier")
             if k in cfg}}]
     users = []
     for i, u in enumerate(raw_users):
         # 特价订阅可独立于航线存在（r319）：只订特价的用户同样入运行时
-        if not u.get("routes") and not u.get("specials"):
+        if not u.get("routes") and not u.get("specials") \
+                and not u.get("special_radar"):
             continue
         users.append({
             "name": str(u.get("name") or f"user{i+1}"),
             "routes": build_routes(u.get("routes")),
             "specials": u.get("specials") or [],
+            "special_radar": u.get("special_radar") or {},
             "platforms": u.get("platforms") or cfg.get(
                 "platforms", ["qunar", "fliggy", "tongcheng", "tuniu"]),
             "notifier": u.get("notifier") or {},
@@ -676,7 +678,8 @@ def _channel_login_alert_sentinel(user_notifiers, logger):
         if not hasattr(cls, "login_suspect"):
             continue
         targets = [(u, al.notifier) for u, al in user_notifiers
-                   if plat in (u.get("platforms") or [])]
+                   if plat in (u.get("platforms") or [])
+                   and getattr(al, "notifier", None) is not None]
         if not targets:
             _LOGIN_ALERT_STREAK.pop(plat, None)
             continue
@@ -1830,6 +1833,31 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                 with channel_slot(c.name):
                     prices.extend(c.safe_fetch(fc_, tc_, [d_],
                                                ret_date=_rd))
+            paths = list(getattr(c, "paths", []) or [])
+            ok_paths = [x for x in paths
+                        if x.get("status") in ("ok", "calendar")]
+            selected = ok_paths[-1] if ok_paths else None
+            pid = 0
+            for rec in paths:
+                rid = storage.save_fetch_path(
+                    c.name, fc_, tc_, d_, rec.get("path", ""),
+                    rec.get("status", ""), rows=rec.get("rows", 0),
+                    note=rec.get("detail", ""), evidence_level="path")
+                if rec is selected:
+                    pid = rid
+            prov = json.dumps({
+                "entryPath": (selected or {}).get("path", ""),
+                "pathId": pid,
+                "pathStatus": (selected or {}).get("status", "unknown"),
+                "evidenceLevel": "path" if selected else "unknown",
+                "kind": ("calendar" if selected and
+                         selected.get("status") == "calendar" else "detail"),
+            }, ensure_ascii=False)
+            for p in prices:
+                try:
+                    p.prov = prov
+                except AttributeError:
+                    pass
             try:
                 PULSE.channel(c.name, len(prices), time.time() - t0)
             except Exception:
@@ -2380,6 +2408,7 @@ def main():
                 return ok
 
             start_web(cfg, sweep, _report_push, logger, users=rt["users"],
+                      alerters=rt["alerters"],
                       reload_cb=reload_config, config_path=str(cfg_path),
                       version=__version__, login_saved_cb=rt["clear_crawlers"])
             rt["web_port"] = int((cfg.get("web") or {}).get("port", 8765))

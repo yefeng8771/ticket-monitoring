@@ -55,6 +55,11 @@ class CtripCrawler(BaseCrawler):
     name = "ctrip"
     use_mobile = True  # 移动端 H5
 
+    # 采集路径状态超集：base 表无 unsupported，path_note 会把它降级
+    # 成 error（假失败）——往返不支持的证据必须原样落账（§5/§10 诚实
+    # 数据；webui 对 unsupported 已渲染「本端不供」，非 error 面）
+    PATH_STATUS = BaseCrawler.PATH_STATUS + ("unsupported",)
+
     # 携程 H5 机票单程列表（taro 版，用户提供的真实入口）
     URL_TPL = ("https://m.ctrip.com/html5/flight/taro/first?from=inner"
                "&tripType=ONE_WAY"
@@ -118,6 +123,17 @@ class CtripCrawler(BaseCrawler):
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
         self.path_reset()
+        # 往返诚实（§5/§10）：Ctrip 未实现回程查询，忽略 ret_date 返回
+        # 单程价会被告警/走势当成往返总价（Fliggy/同程已真往返）。不发
+        # 单程查询，直接以 unsupported 落账，宁缺勿错。
+        if ret_date:
+            self.logger.warning(
+                "[ctrip] 往返明细暂不支持（返程 %s），未发起单程查询",
+                ret_date)
+            self.path_note(
+                "TRIP", "unsupported",
+                detail="往返明细暂不支持，未发起单程查询")
+            return []
         # 国际分流（r325→R44b 定谳改道）：14488 列表端点对国际查询
         # 业务性拒答（请求体与国内逐字段同构仍 30212，r39_reqdiff
         # 实证），国际真价面=FlightIntlAndInlandLowestPriceSearch
@@ -155,6 +171,17 @@ class CtripCrawler(BaseCrawler):
                     for item in captured:
                         flights.extend(self._extract_ctrip_flights(
                             item.get("text", "")))
+                    # 起飞日门（§5 日期诚实）：H5 部分日期返回滚动/推荐
+                    # 位行（ddate 非目标日），按请求日打标=日期错位价。
+                    # 仅在行内有日期字段时过滤，无日期字段不臆造。
+                    _drop_date = 0
+                    if flights:
+                        flights, _drop_date = self._filter_date_scope(
+                            flights, date)
+                        if _drop_date:
+                            self.logger.warning(
+                                "[ctrip] %s 剔除 %d 条非目标日起飞行"
+                                "（滚动/推荐位）", date, _drop_date)
                     if price is not None and not flights:
                         # 仅头条价无明细：拒落价防污染（对齐 qunar/tongcheng
                         # 同款守卫）——裸价曾绕过 0.5x 幻觉价守卫直入阈值
@@ -202,12 +229,17 @@ class CtripCrawler(BaseCrawler):
                             r"whaleguard|验证码|安全验证|访问验证|滑块", _body))
                         _login = bool(re.search(
                             r"登录|扫码|账号密码", _body))
+                        if _blocked:
+                            _detail = "风控验证页"
+                        elif _drop_date:
+                            _detail = ("滚动/推荐行日期不符已剔除 %d 行"
+                                       % _drop_date)
+                        else:
+                            _detail = "H5 列表未解析到价格"
                         self.path_note(
                             "H5", "blocked" if _blocked
                             else ("login" if _login else "empty"),
-                            date=date,
-                            detail=("风控验证页" if _blocked
-                                    else "H5 列表未解析到价格"),
+                            date=date, detail=_detail,
                             ms=int((time.time() - t_h5) * 1000))
                         self._debug_snapshot(page, f"nopx_{date}")
                 except Exception as e:
@@ -251,10 +283,25 @@ class CtripCrawler(BaseCrawler):
         # 机场码直传=全窗 380 行零报价实锤，同程/飞猪 _fetch_intl 同律）
         fc, tc = (airport_city_code(from_city.upper()),
                   airport_city_code(to_city.upper()))
+        # 机场级航线判定：请求码与城市归并码不同（PVG→SHA/NRT→TYO）。
+        # 日历端点无机场维度，城市日历价挂到机场级航线即跨机场串价
+        # （PVG→NRT 的缺口被 SHA→TYO 日历价补上，混入虹桥/羽田面），
+        # 机场级缺口不做日历回填（宁空勿错，逐日留空证据）。
+        apt_scope = (from_city.strip().upper() != fc
+                     or to_city.strip().upper() != tc)
         results = self._fetch_intl_list(from_city, to_city, fc, tc, dates)
         got = {r.depart_date for r in results}
         missing = [d for d in dates if d not in got]
         if missing:
+            if apt_scope:
+                self.logger.warning(
+                    "[ctrip][intl] 机场级航线 %s→%s 缺 %d 日，不回填城市"
+                    "日历（%s）", from_city, to_city, len(missing),
+                    ",".join(missing))
+                for d in missing:
+                    self.path_note("日历", "empty", date=d,
+                                   detail="机场级航线不回填城市日历价")
+                return results
             self.logger.warning(
                 "[ctrip][intl] PC 列表覆盖 %d/%d 天，日历兜底: %s",
                 len(got), len(dates), ",".join(missing))
@@ -431,6 +478,32 @@ class CtripCrawler(BaseCrawler):
                        if str(f.get(key) or "").upper() == want]
             dropped += before - len(flights)
         return flights, dropped
+
+    @staticmethod
+    def _filter_date_scope(flights: list, date: str):
+        """国内 H5 起飞日门：行内日期异于请求日即剔；返回 (kept, dropped)。
+
+        渠道在部分日期返回滚动/推荐位行（dateinfo.ddate 非目标日），
+        解析器照收后按请求日打标=日期错位价（§5 诚实数据）。只在行内
+        确有日期字段（depDate/date，解析器原生输出 depDate）时过滤：
+        无日期字段的行保持原行为，不臆造日期。非法日期串不硬判。
+        """
+        dropped = 0
+        kept = []
+        for f in flights:
+            raw = ""
+            if isinstance(f, dict):
+                for k in ("depDate", "date"):
+                    v = f.get(k)
+                    if v:
+                        raw = str(v).strip()
+                        break
+            day = raw[:10]
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and day != date:
+                dropped += 1
+                continue
+            kept.append(f)
+        return kept, dropped
 
     @staticmethod
     def _extract_intl_list(body: str, date: str):

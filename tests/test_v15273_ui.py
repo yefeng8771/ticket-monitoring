@@ -202,7 +202,7 @@ def test_health_login_action_keeps_channel():
 
 
 def test_overlay_and_input_ime_contracts():
-    assert "#toasts{position:fixed;bottom:78px;right:18px;z-index:170" in SRC
+    assert "#toasts{position:fixed;bottom:78px;right:18px;z-index:300" in SRC
     assert SRC.count("ev.isComposing||ev.keyCode===229") == 3
     assert "window.open(url,'_blank','noopener')" not in SRC
     assert "a.target='_blank';a.rel='noopener'" in SRC

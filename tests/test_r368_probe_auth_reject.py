@@ -2,7 +2,7 @@
 """r368: probe login refusal must reach the session slot (not only ticket)."""
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import crawlers
 import webui
@@ -46,8 +46,10 @@ def test_probe_login_refusal_marks_login_required(tmp_path, monkeypatch):
     crawlers.REGISTRY["qunar"] = _Wall
     webui._PROBE_LAST = 0
     try:
+        # 探针计划拒绝过去日期；用未来日避免跨日把门禁变成日期过期失败
+        future = (date.today() + timedelta(days=7)).isoformat()
         webui._probe_search(None, None, None, ["qunar"], legs=[{
-            "from": "上海", "to": "曼谷", "date": "2026-10-24"}])
+            "from": "上海", "to": "曼谷", "date": future}])
         per = webui._PROBE_AUTH["qunar"]["international"]
         assert per.get("auth_ts")
         assert per["auth_reason"].startswith("国际列表")
