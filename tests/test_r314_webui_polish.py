@@ -163,30 +163,27 @@ def test_pill_bad_dressed_red(pg):
 
 # ---------- P2-1: .cnav.on 辉光 + focus reclaim ----------
 
-def test_cnav_on_glow_and_focus_reclaim(pg):
-    """行为钉：配置左导航选中项 computed boxShadow 须含 --glow 辉光；
-    程序化 focusVisible 直焦时须被 reclaim 环（0 0 0 2px --blue）接管
-    （无 reclaim 时同特异度后者的辉光会吃掉焦点环，rngchip.on 先例）。"""
+def test_cnav_on_flat_marker_and_focus_reclaim(pg):
+    """行为钉：配置左导航选中项走“左 2px 蓝线 + 蓝字”，不再用辉光/白卡；
+    程序化 focusVisible 直焦时仍须呈现 0 0 0 2px --blue 键盘环。"""
     got = pg.evaluate("""()=>{
       switchView('cfg');
       const el=document.querySelector('.cnav.on');
       if(!el)return {miss:true};
-      const d=document.createElement('div');
-      d.style.boxShadow='0 2px 8px -2px var(--glow)';
-      document.body.appendChild(d);
-      const glow=getComputedStyle(d).boxShadow;d.remove();
-      const rest=getComputedStyle(el).boxShadow;
+      const rest=getComputedStyle(el);
+      const box=rest.boxShadow;
+      const bl=rest.borderLeftWidth+' '+rest.borderLeftColor;
       el.focus({focusVisible:true});
       const foc=getComputedStyle(el).boxShadow;
       el.blur();
-      return {glow:glow,rest:rest,foc:foc};}""")
+      return {box:box,bl:bl,foc:foc};}""")
     assert not got.get("miss"), "配置左导航无选中项（demo 态缺 .cnav.on）"
-    assert got["rest"] == got["glow"], (
-        ".cnav.on 选中态无辉光：computed %s ≠ 家族辉光 %s "
-        "（实底选中家族唯一缺口）" % (got["rest"], got["glow"]))
+    assert got["box"] == "none", (
+        ".cnav.on 仍带卡片投影：%s（v298 起选中态只留左线）" % got["box"])
+    assert "2px" in got["bl"] and "rgb(26, 99, 216)" in got["bl"], (
+        ".cnav.on 左线标记缺席：%s" % got["bl"])
     assert "0px 0px 0px 2px" in got["foc"], (
-        ".cnav.on 聚焦时 reclaim 环缺席（辉光同属性覆盖焦点环）: %s"
-        % got["foc"])
+        ".cnav.on 聚焦时键盘环缺席: %s" % got["foc"])
 
 
 # ---------- P2-2: body 孤苗过渡删除 ----------

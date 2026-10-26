@@ -5806,6 +5806,7 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
 #calcard .calcell .cd{font-size:12px;color:var(--r-ink-3)}
 #calcard .calcell .cp{font-size:14px;color:var(--r-ink)}
 #calcard .calcell .cx{font-size:12px;color:var(--r-ink-3)}
+#calcard .calcell{border-radius:3px!important}   /* 数据格不是卡：保留语义色，收圆角 */
 #calcard #calStats{font-size:12px;color:var(--r-ink-3)}
 #calcard #calStats b{color:var(--r-ink)}
 @media(max-width:760px){
@@ -6729,6 +6730,528 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
 .ws-routebar-h span{font-size:11px!important;color:var(--r-ink-3)!important}
 .ws-focus,.ws-roster{background:var(--r-surface-2)!important;border:0!important;border-radius:var(--r10)!important;box-shadow:none!important}
 .ws-ranges{gap:4px!important}
+/* ===== v298 flat surface language =====
+   一张页面平面：大容器不再画白卡/圆角/阴影，只用 hairline 分行；
+   控件保留边界，语义标签保留颜色。 */
+.hdcard{background:transparent!important;border:0!important;
+ border-bottom:1px solid var(--r-hair)!important;box-shadow:none!important;border-radius:0!important}
+.ucard,.mon-card,.ws-card,.cfgfieldset,#cfgview .ucard{
+ background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important;margin:0!important;padding:14px 0!important}
+.ucard:first-child,.mon-card:first-child,.cfgfieldset:first-child{border-top:0!important}
+.uhead{padding:0 0 10px!important;border-bottom:0!important}
+.tabs{background:transparent!important;border-radius:0!important;
+ border-bottom:1px solid var(--r-hair)!important;padding:0!important;gap:2px!important}
+.tabs>span,.tabs>button{border-radius:0!important;background:transparent!important;box-shadow:none!important}
+.tabs>span.on,.tabs>button.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+.kpi,.ws-kpi{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important;padding:8px 12px!important}
+.monroute{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-left:3px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important;padding:10px 12px!important}
+.monroute-svg{background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important}
+.ws-routebar,.ws-routewatch,.ws-empty-hero{background:transparent!important;border:0!important;
+ border-radius:0!important;box-shadow:none!important}
+.hdiag-card{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-radius:0!important;padding:10px 0!important}
+.hdiag{gap:0 18px!important}
+.spmon-chartwrap,.spmon-low{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important;padding:10px 0!important}
+.spmon-day{background:transparent!important;border:0!important;border-bottom:2px solid transparent!important;
+ border-radius:0!important;box-shadow:none!important}
+.spmon-day.low{border-bottom-color:var(--r-red)!important}
+.spmon-day.sel{border-bottom-color:var(--r-blue)!important}
+.spmon-empty{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-radius:0!important}
+.spmon-srcchip{background:transparent!important;padding:0!important;border-radius:0!important}
+#searchview .srx-hero,#searchview .srx-probe,#searchview .srx-band,
+#searchview .srx-brief,#searchview .srx-context,#searchview .srx-list,
+#searchview .srx-mirror{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#searchview .srx-hero{border-top:0!important}
+#searchview .srx-sp{background:transparent!important;border:0!important;
+ border-left:2px solid var(--c,var(--r-hair))!important;border-radius:0!important}
+#searchview .srx-thead,#searchview .srx-mchrome{background:transparent!important;
+ border-radius:0!important;border-bottom:1px solid var(--r-hair)!important}
+#searchview .srx-kpi-empty,#searchview .srx-footnote{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important}
+.srccap{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;border-radius:0!important}
+#searchview .srx-src{background:transparent!important;border:0!important;
+ border-top:2px solid var(--pc,var(--r-hair))!important;border-radius:0!important;
+ box-shadow:none!important;padding:8px 10px 6px!important}
+#searchview .srx-src::before{display:none!important}
+#searchview .srx-src.on{box-shadow:inset 0 -2px 0 var(--pc,var(--r-blue))!important}
+#searchview .srx-src{border-top:0!important;padding:8px 10px 6px!important}
+#searchview .srx-src+.srx-src{border-left:1px solid var(--r-hair)!important;padding-left:12px!important}
+#searchview .srx-capbar{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important}
+#searchview .srx-src:hover{transform:none!important;border-top-color:var(--pc,var(--r-blue))!important}
+#searchview .srx-kpi{background:transparent!important;border:0!important;
+ border-left:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#searchview .srx-kpi:first-child{border-left:0!important}
+.monroute{background:transparent!important}
+
+.cfgchrome{background:transparent!important;border:0!important;border-bottom:1px solid var(--r-hair)!important;border-radius:0!important}
+.btn2{background:transparent!important;border:1px solid var(--r-hair)!important;
+ border-radius:6px!important;box-shadow:none!important}
+.btn2.primary{background:var(--r-blue)!important;border-color:var(--r-blue)!important;color:#fff!important}
+/* 渠道登录：从 5 个卡改为 5 行信息表，操作降为文字链接 */
+#loginRows .lggrid{display:grid;grid-template-columns:1fr!important;gap:0!important}
+#loginRows .lgcard{display:grid;grid-template-columns:170px minmax(0,1fr) auto!important;
+ align-items:center!important;gap:6px 14px!important;background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important;
+ padding:10px 0!important;min-height:0!important}
+#loginRows .lgcard:first-child{border-top:0!important}
+#loginRows .lgcard>.lgname{grid-column:1;grid-row:1}
+#loginRows .lgcard>.lgsection{grid-column:2;grid-row:1;color:var(--r-ink-3)!important;font-size:11px!important}
+#loginRows .lgcard>.lgname+.lgsection{grid-row:1}
+#loginRows .lgcard>.lgname+.lgsection+.lgsection{grid-row:2}
+#loginRows .lgcard>.lgsection+.lgslots{grid-column:2;grid-row:2}
+#loginRows .lgcard>.lgslots{grid-column:2;grid-row:1;min-width:0}
+#loginRows .lgcard>.lgsection+.lgslots{grid-column:2;grid-row:2}
+#loginRows .lgcard>.btn2{grid-column:3;grid-row:1/span 2;justify-self:end;align-self:center}
+#loginRows .lgslots{display:grid;grid-template-columns:minmax(0,1fr)!important;gap:0!important}
+#loginRows .lgslot{display:grid;grid-template-columns:minmax(0,1fr) auto!important;
+ grid-template-areas:"h a" "sub a"!important;align-items:center!important;gap:1px 12px!important;
+ padding:0!important;border:0!important;background:transparent!important}
+#loginRows .lgslot-h{grid-area:h}
+#loginRows .lgslot .lgsub{grid-area:sub}
+#loginRows .lgslot .btn2{grid-area:a;margin:0!important}
+#loginRows .lgcard .btn2{background:transparent!important;border:0!important;color:var(--r-blue)!important;
+ padding:0 4px!important;min-height:28px!important;font-size:11px!important}
+#loginRows .lgnote{border-top:1px solid var(--r-hair)!important;margin-top:8px!important;padding-top:8px!important}
+/* 渠道入口：行对齐，特价两条并排，不再跨半宽空腔 */
+.chband-links.spec{display:flex!important;flex-wrap:wrap!important;
+ grid-template-columns:none!important;gap:4px 22px!important}
+#tabs{background:transparent!important;border-radius:0!important;border:0!important;
+ border-bottom:1px solid var(--r-hair)!important;padding:0!important}
+#healthcard{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important;padding:14px 0!important}
+#montab-watch .ws-card{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important;padding:14px 0!important}
+.ws-head{background:transparent!important;box-shadow:none!important}
+.ws-route{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important}
+.ws-route.on{background:var(--r-blue-soft)!important;border-top-color:var(--r-blue)!important}
+.ws-chartwrap,.ws-focus,.ws-focus-main,.sector-strip{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+.monwatch{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-radius:0!important;padding:10px 0!important}
+.monwatch-svg{background:transparent!important;border:0!important;border-radius:0!important}
+.statline{background:transparent!important;border:0!important;border-radius:0!important}
+#searchview .srx-mrow{background:transparent!important;border:0!important;
+ border-bottom:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#searchview .srx-mrow.sel{background:var(--r-blue-soft)!important}
+#searchview .srx-more-rows{background:transparent!important;box-shadow:none!important;border-radius:0!important}
+.demoBar{border-radius:0!important}
+.chlink{justify-content:flex-start!important;text-align:left!important}
+a.chlink .chlink-go{font-size:0!important}
+a.chlink .chlink-go::after{content:'↗';font-size:10px!important}
+.chlink-go{font-size:9px!important;color:var(--r-ink-3)!important}
+@media(max-width:700px){
+ #loginRows .lgcard{grid-template-columns:1fr auto!important;gap:4px 10px!important}
+ #loginRows .lgcard>.lgname{grid-column:1;grid-row:1}
+ #loginRows .lgcard>.btn2{grid-column:2;grid-row:1}
+ #loginRows .lgcard>.lgsection,#loginRows .lgcard>.lgslots{grid-column:1/-1;grid-row:2}
+ #loginRows .lgcard>.lgname+.lgsection{grid-column:1/-1;grid-row:2}
+ #loginRows .lgcard>.lgname+.lgsection+.lgsection{grid-column:1/-1;grid-row:3}
+ #loginRows .lgcard>.lgsection+.lgslots{grid-column:1/-1;grid-row:3}
+ #loginRows .lgcard>.lgname+.lgsection+.lgsection{grid-row:3}
+ #loginRows .lgcard>.lgsection+.lgslots{grid-column:1/-1;grid-row:3}
+ .chband-links.spec{display:flex!important;gap:4px 16px!important}
+}
+
+/* ===== 检索页信息密度收口：标题/探针/价带/五源/筛选全压成紧凑行 ===== */
+#searchview .srx-ovbar{display:flex;align-items:center;gap:12px;padding:4px 0;margin:2px 0 4px;
+ border-top:1px solid var(--r-hair);border-bottom:1px solid var(--r-hair);font-size:11px;min-width:0}
+#searchview .srx-ovsum{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--r-ink-2)}
+#searchview .srx-ovbtn{flex:0 0 auto;background:transparent!important;border:0!important;color:var(--r-blue)!important;
+ padding:0 2px!important;height:24px!important;font-size:11px!important;box-shadow:none!important;cursor:pointer}
+#searchview.srx-ov-collapsed .srx-brief,#searchview.srx-ov-collapsed .srx-capbar,
+#searchview.srx-ov-collapsed .srx-audit{display:none!important}
+#searchview .srx-hero{padding:5px 0 7px!important;margin-bottom:2px!important;min-height:0!important}
+#searchview .srx-hero h1{font-size:18px!important;margin:1px 0 0!important;line-height:1.3!important}
+#searchview .srx-hero-copy.srx-folded h1{display:block!important}
+#searchview .srx-hero-copy.srx-folded p{display:none!important}
+#searchview .srx-hero p{font-size:11px!important;margin:2px 0 0!important}
+#searchview .srx-eyebrow{font-size:11px!important;gap:6px!important}
+#searchview .srx-foldbtn{height:22px!important;padding:0 6px!important;font-size:11px!important}
+#searchview .srx-probe:not(.open){display:block!important;padding:0!important}
+#searchview .srx-probe .srx-probehead{padding:2px 0!important;min-height:30px!important}
+#searchview .srx-band{padding:3px 10px!important;margin:2px 0!important}
+#searchview .srx-band-h{margin-bottom:2px!important;gap:7px!important}
+#searchview .srx-band-h b{font-size:13px!important}
+#searchview .srx-band-h span{font-size:11px!important}
+#searchview .srx-bandlogin{background:transparent!important;border:0!important;color:var(--r-blue)!important;
+ padding:0 4px!important;height:24px!important;font-size:11px!important;box-shadow:none!important;cursor:pointer}
+#searchview .srx-brief{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;
+ gap:0!important;margin:2px 0 5px!important}
+#searchview .srx-src{padding:4px 8px 4px!important;min-height:0!important}
+#searchview .srx-src .srx-srcname,.searchview .srx-src-name{font-size:11px!important}
+#searchview .srx-capbar{display:flex!important;background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;padding:3px 0!important;margin:1px 0 4px!important}
+#searchview .srx-probefoot{margin:0!important;padding:2px 0!important}
+#searchview .srx-probe:not(.open) .srx-probeacts>*:not(.srx-probe-toggle){display:none!important}
+#searchview .srx-probe:not(.open) .srx-probe-mini{display:none!important}
+#searchview .srx-probe:not(.open) .srx-probehead{min-height:30px!important;height:30px!important;overflow:hidden!important}
+#searchview .srx-chips{gap:2px!important}
+#searchview .srx-chip{min-height:25px!important;padding:0 8px!important;font-size:11px!important}
+#searchview .srx-kpi.on{background:var(--r-blue-soft)!important;box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+#searchview .srx-audit{display:flex!important;flex-wrap:wrap;align-items:center;gap:4px 18px!important;
+ margin:2px 0 5px!important;padding:4px 0!important;border-top:1px solid var(--r-hair)!important;
+ border-bottom:1px solid var(--r-hair)!important}
+#searchview .srx-kpi{display:inline-flex!important;align-items:baseline!important;gap:5px!important;
+ width:auto!important;min-height:0!important;padding:0!important;border:0!important;
+ background:transparent!important;border-radius:0!important;box-shadow:none!important}
+#searchview .srx-kpi .k{display:inline!important;font-size:11px!important;letter-spacing:0!important;
+ text-transform:none!important;color:var(--r-ink-3)!important}
+#searchview .srx-kpi .v{display:inline!important;font-size:16px!important;line-height:1.1!important;margin:0!important}
+#searchview .srx-kpi .s,#searchview .srx-kpi .bar{display:none!important}
+#searchview .srx-kpi.on{background:transparent!important;box-shadow:none!important;color:var(--r-blue)!important}
+#searchview .srx-kpi.on .k,#searchview .srx-kpi.on .v{color:var(--r-blue)!important}
+#searchview .srx-kpi-sub{flex-basis:100%;font-size:11px!important;color:var(--r-ink-3)!important;margin:2px 0 0!important}
+#searchview .srx-src-a{display:none!important}
+#searchview .srx-src-bar{height:2px!important;margin-top:2px!important}
+#searchview .srx-src{height:50px!important;overflow:hidden!important}
+#searchview .srx-src-h{font-size:11px!important}
+#searchview .srx-src-big{font-size:17px!important;line-height:1.1!important}
+#searchview .srx-src-sub{font-size:11px!important;line-height:1.2!important;white-space:nowrap!important}
+#searchview .srx-brieffold{position:absolute!important;right:8px!important;bottom:4px!important;height:20px!important;font-size:11px!important}
+#searchview .srx-brief{position:relative!important;padding-bottom:18px!important}
+#searchview .srx-grid{margin-top:2px!important}
+/* v298b：平面收口——头部/视图切换同页平面，选中态走文字色+2px 下划线；
+   控件只留 1px 边界与实心主操作；渠道入口链接退成纯文本列，不再套卡。 */
+#hdcard{background:var(--r-canvas)!important;border-bottom:1px solid var(--r-hair)!important}
+#mainnav{background:transparent!important;border:0!important;border-radius:0!important;
+ padding:0!important;gap:22px!important;margin:6px 0 0!important}
+#mainnav span{height:34px!important;padding:0 1px!important;border-radius:0!important;
+ background:transparent!important;color:var(--r-ink-3)!important;box-shadow:none!important}
+#mainnav span:hover{background:transparent!important;color:var(--r-ink)!important}
+#mainnav span.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+#montabs{background:transparent!important;border:0!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;padding:0!important;gap:2px!important}
+#montabs .mtab{border-radius:0!important;background:transparent!important;box-shadow:none!important}
+#montabs .mtab:hover{background:transparent!important;color:var(--r-ink)!important}
+#montabs .mtab.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+#montabs{background:var(--r-canvas)!important}
+#montab-details .tabs{background:var(--r-canvas)!important;
+ border-bottom:1px solid var(--r-hair)!important;box-shadow:none!important}
+#montabs .uchip{background:transparent!important;border:0!important;border-radius:0!important;
+ box-shadow:none!important;padding:0 6px!important;height:34px!important;
+ display:inline-flex!important;align-items:center!important;color:var(--r-ink-2)!important}
+#montabs .uchip:hover{color:var(--r-blue)!important}
+.tabs>span{border:0!important}
+#tabs span{border-radius:0!important;background:transparent!important;box-shadow:none!important}
+#tabs span:hover:not(.on){background:var(--r-surface-2)!important;color:var(--r-ink)!important}
+#tabs span.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+.kpi.hit,.ws-kpi.hit{background:transparent!important;box-shadow:none!important;
+ border-top-color:rgba(var(--okrgb),.34)!important}
+.kpi.clk:hover{transform:none!important;box-shadow:none!important}
+.kpi.clk:hover:not(.hit){background:var(--r-surface-2)!important}
+button{box-shadow:none!important}
+button:hover{box-shadow:none!important}
+button:focus-visible,.chip:focus-visible,nav span:focus-visible,.tabs span:focus-visible,
+.cnav:focus-visible,.rngchip:focus-visible,.hbtn:focus-visible,[role="button"]:focus-visible,
+a.vw:focus-visible,a.numlink:focus-visible,.kpisum a:focus-visible,#foot a:focus-visible,
+.demoBar a:focus-visible,.verbar a:focus-visible,.pvbody a:focus-visible,
+#chart:focus-visible,.kpi.clk:focus-visible{
+ box-shadow:0 0 0 2px var(--blue)!important;outline:none!important;transition:box-shadow 0s!important}
+#opscard .opsbtns>button:focus-visible,#opscard .opsbtns>button:first-child:focus-visible,
+#montab-watch .ws-route:focus-visible,#montab-watch .ws-ranges button:focus-visible,
+#montabs .mtab:focus-visible,#mainnav span:focus-visible,#tabs span:focus-visible,
+#cfgnav .cnav:focus-visible,.ws-btn:focus-visible,.btn2:focus-visible{
+ box-shadow:0 0 0 2px var(--blue)!important;outline:none!important;transition:box-shadow 0s!important}
+button.warn{background:transparent!important;color:var(--r-ink-2)!important;
+ border:1px solid var(--r-hair)!important;border-radius:6px!important;box-shadow:none!important}
+button.warn:hover{background:var(--r-blue-soft)!important;border-color:var(--r-blue)!important;
+ color:var(--r-blue)!important;filter:none!important}
+#opscard .opsbtns>button{height:32px!important;background:transparent!important;
+ border:1px solid var(--r-hair)!important;border-radius:6px!important;box-shadow:none!important;
+ color:var(--r-ink-2)!important;font-weight:600!important;padding:0 13px!important}
+#opscard .opsbtns>button:hover{background:var(--r-blue-soft)!important;
+ border-color:var(--r-blue)!important;color:var(--r-blue)!important}
+#opscard .opsbtns>button:first-child{background:var(--r-blue)!important;
+ border-color:var(--r-blue)!important;color:#fff!important}
+#opscard .opsbtns>button:first-child:hover{background:var(--r-blue-hover)!important;
+ color:#fff!important}
+.btn2{background:transparent!important;color:var(--r-ink-2)!important;
+ border:1px solid var(--r-hair)!important;border-radius:6px!important;box-shadow:none!important}
+.btn2:hover{background:var(--r-blue-soft)!important;border-color:var(--r-blue)!important;
+ color:var(--r-blue)!important;box-shadow:none!important}
+.btn2.primary{background:var(--r-blue)!important;border-color:var(--r-blue)!important;color:#fff!important}
+.btn2.primary:hover{background:var(--r-blue-hover)!important;filter:none!important}
+.ws-btn{background:transparent!important;border:1px solid var(--r-hair)!important;
+ border-radius:6px!important;box-shadow:none!important}
+.ws-btn:hover{background:var(--r-blue-soft)!important;border-color:var(--r-blue)!important;
+ color:var(--r-blue)!important}
+.ws-btn.primary{background:var(--r-blue)!important;border-color:var(--r-blue)!important;color:#fff!important}
+.ws-btn.primary:hover{background:var(--r-blue-hover)!important}
+.hbtn{box-shadow:none!important}
+.demoBar,.verbar{border-radius:0!important;border-left:0!important;border-right:0!important;margin:0!important}
+/* 渠道入口：从带框胶囊退成表格里的文本列，只留渠道名与登录要求 */
+.chlink{background:transparent!important;border:0!important;border-radius:0!important;
+ padding:3px 0!important;color:var(--r-ink-2)!important;gap:0!important}
+a.chlink:hover{background:transparent!important;border:0!important;color:var(--r-blue)!important}
+.chlink.off{background:transparent!important;border:0!important;color:var(--r-ink-4)!important}
+.chlink-auth{height:15px!important;padding:0 4px!important;border:0!important;
+ border-radius:3px!important;background:var(--r-surface-2)!important;color:var(--r-ink-3)!important}
+.chlink-auth.req{background:var(--warnbg)!important;color:var(--warn-deep)!important}
+/* 登录行状态从浮动圆点收到行左缘，避免圆点与右侧按钮基线错位 */
+#loginRows .lgdot{display:none!important}
+#loginRows .lgcard{border-left:3px solid var(--r-hair)!important}
+#loginRows .lgcard:has(.lgdot.on){border-left-color:var(--r-green)!important}
+#loginRows .lgcard:has(.lgdot.stale),#loginRows .lgcard:has(.lgdot.mid){border-left-color:var(--warn)!important}
+#loginRows .lgcard:has(.lgdot:not(.on):not(.stale):not(.mid)){border-left-color:var(--r-hair)!important}
+#loginRows .lgcard:hover{background:transparent!important;box-shadow:none!important}
+#loginRows .lgcard:hover>.lgname{color:var(--r-blue)!important}
+/* 明细表：外层容器不再是一张白卡，表格线与行底色自己承担分隔 */
+#tablecard .tw{background:transparent!important;border:0!important;border-top:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important}
+#ftable{background:transparent!important}
+/* 关注航线的可选航线：退成可点行，选中用下划线+淡蓝底，不再套圆角卡 */
+#montab-watch .ws-route{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#montab-watch .ws-route.on{background:var(--r-blue-soft)!important;color:var(--r-ink)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+
+/* 关注台信息密度：统计一行、航线选择紧凑、空态/图表不再占半屏 */
+#montab-watch .ws-head{padding:6px 0 4px!important;min-height:0!important}
+#montab-watch .ws-kpis{display:flex!important;flex-wrap:wrap!important;gap:0!important;
+ border-top:1px solid var(--r-hair)!important;border-bottom:1px solid var(--r-hair)!important;margin:0!important}
+#montab-watch .ws-kpi{flex:1 1 0!important;min-width:0!important;padding:6px 10px!important;
+ border:0!important;border-left:1px solid var(--r-hair)!important;border-radius:0!important;background:transparent!important}
+#montab-watch .ws-kpi:first-child{border-left:0!important}
+#montab-watch .ws-kpi .k{font-size:10px!important;color:var(--r-ink-3)!important}
+#montab-watch .ws-kpi .v{font-size:18px!important;line-height:1.1!important;margin:0!important}
+#montab-watch .ws-kpi .f{font-size:11px!important;line-height:1.2!important;margin-top:1px!important;
+ white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+#montab-watch .ws-routebar{padding:4px 0 2px!important}
+#montab-watch .ws-route{min-height:44px!important;padding:5px 8px!important}
+#montab-watch .ws-chart-h{min-height:36px!important;padding:3px 0!important}
+#montab-watch .ws-chartwrap{height:200px!important;min-height:160px!important}
+#montab-watch #wsChart{height:200px!important}
+#montab-watch .ws-empty{padding:18px 12px!important;min-height:0!important}
+@media(max-width:760px){
+ #searchview .srx-brief{display:grid!important;grid-auto-flow:column!important;
+  grid-auto-columns:132px!important;grid-template-columns:none!important;
+  overflow-x:auto!important;gap:0!important;padding-bottom:3px!important;scrollbar-width:thin!important}
+ #searchview .srx-src{height:44px!important}
+ #searchview .srx-src-sub{display:none!important}
+ #searchview .srx-src-bar{display:none!important}
+ #searchview .srx-brieffold{display:none!important}
+ #searchview .srx-hero-act{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  gap:4px!important}
+}
+#montab-watch .ws-kpi .f{display:none!important}
+#montab-watch .ws-kpi{padding:4px 10px!important}
+#montab-watch .ws-routewatch{display:none!important}
+#searchview .srx-band-note{display:none!important}
+#montab-watch .ws-ranges{background:transparent!important;border:0!important;border-radius:0!important;
+ padding:0!important;gap:2px!important}
+#montab-watch .ws-ranges button{border:0!important;border-radius:0!important;background:transparent!important;
+ box-shadow:none!important;color:var(--r-ink-3)!important}
+#montab-watch .ws-ranges button.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+#montab-watch .ws-lg{border:0!important;border-radius:0!important;background:transparent!important;
+ box-shadow:none!important;padding:4px 0!important}
+#montab-watch .ws-lg.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+/* 检索页的行程/镜像切换同样走文字+下划线 */
+#searchview .srx-axis{background:transparent!important;border-radius:0!important;padding:0!important;gap:2px!important}
+#searchview .srx-axis button{border-radius:0!important;background:transparent!important;
+ box-shadow:none!important;color:var(--r-ink-3)!important}
+#searchview .srx-axis button.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+#searchview .srx-mtab{border-radius:0!important;background:transparent!important;box-shadow:none!important}
+#searchview .srx-mtab.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+/* 配置侧栏选中：左侧 2px 蓝线，不铺整块底色 */
+#cfgnav .cnav{border-radius:0!important;background:transparent!important;box-shadow:none!important;
+ border-left:2px solid transparent!important}
+#cfgnav .cnav.on{background:transparent!important;color:var(--r-blue)!important;
+ border-left-color:var(--r-blue)!important;box-shadow:none!important}
+#cfgnav .cnav:hover{background:transparent!important;color:var(--r-blue)!important}
+#cfgnav .cfgsearch{background:transparent!important;border:1px solid var(--r-hair)!important;border-radius:6px!important}
+/* 配置用户区：统计台/用户头/分组头/关注面板/工具条全部回到页面平面 */
+#cfgview .cfgdeck{background:transparent!important;border:0!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important}
+#cfgview .uhead2{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important}
+#cfgview .grouplab{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#cfgview .rline{box-shadow:none!important;border-radius:0!important}
+#cfgview #cfgWatch{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#cfgview .cfgwatch-toolbar{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important}
+#cfgview .cfgw-route{background:transparent!important;border:0!important;border-radius:0!important;
+ padding:0 10px 0 0!important;box-shadow:none!important;color:var(--r-ink-3)!important}
+#cfgview .cfgw-route+.cfgw-route{border-left:1px solid var(--r-hair)!important;padding-left:10px!important}
+#cfgview .cfgw-route.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+#cfgview .cfgseg{background:transparent!important;border:0!important;border-radius:0!important;
+ padding:0!important;gap:2px!important}
+#cfgview .cfgseg .chip{background:transparent!important;border:0!important;border-radius:0!important;
+ box-shadow:none!important;color:var(--r-ink-3)!important}
+#cfgview .cfgseg .chip.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+#cfgview .fld{background:var(--r-surface-2)!important;border:1px solid var(--r-hair)!important;
+ border-radius:6px!important;box-shadow:none!important}
+#cfgview .chcard{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#cfgview .glcell{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#cfgview .storehead{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#cfgview .pathcard{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#montab-trend .chartwrap,#montab-trend .mon-chartwrap{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+/* 关注页筛选段/检索移动端页签/演示态提示：同样只留文字与发丝线 */
+#montab-watch .ws-seg{background:transparent!important;border:0!important;border-radius:0!important;overflow:visible!important}
+#montab-watch .ws-seg button{border:0!important;border-radius:0!important;background:transparent!important;
+ box-shadow:none!important;color:var(--r-ink-3)!important}
+#montab-watch .ws-seg button.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+#searchview .srx-mtabs,#searchview .srx-mirror .srx-mtabs{background:transparent!important;
+ border:0!important;border-bottom:1px solid var(--r-hair)!important;border-radius:0!important;padding:4px 0 6px!important}
+#searchview .srx-mtabs button{background:transparent!important;border:0!important;border-radius:0!important;
+ box-shadow:none!important;color:var(--r-ink-3)!important}
+#searchview .srx-mtabs button.on{background:transparent!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+.ws-live{border-radius:0!important;background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-bottom:1px solid var(--r-hair)!important}
+.spmon-sum{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;
+ border-top:1px solid var(--r-hair);border-bottom:1px solid var(--r-hair);
+ font-size:12px;color:var(--r-ink-3);min-height:0}
+.spmon-sum:empty{display:none}
+.spmon-sum b{font-family:var(--num);font-size:18px;color:var(--r-ink);font-weight:800}
+.spmon-sum .k{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--r-ink-3)}
+.spmon-sum .sep{color:var(--r-hair-2)}
+.spmon-tools{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:2px 0 6px}
+.spmon-range,.spmon-mode{display:inline-flex;align-items:center;gap:2px}
+.spmon-tools button{background:transparent;border:0;border-radius:0;padding:2px 6px;
+ font-size:11px;font-weight:600;color:var(--r-ink-3);box-shadow:none;cursor:pointer}
+.spmon-tools button.on{color:var(--r-blue);box-shadow:inset 0 -2px 0 var(--r-blue)}
+.spmon-chartwrap{overflow-x:auto;overflow-y:hidden}
+.spmon-chartwrap{position:relative}
+.spmon-cross{position:absolute;width:1px;background:var(--r-blue);opacity:.35;pointer-events:none;display:none;z-index:1}
+#spMonChart{max-width:none}
+/* 雷达条件表单的原生控件并轨到细边框控件语言 */
+#spRadarForm input:not([type=checkbox]),#spRadarForm input[type=date]{height:30px!important;
+ background:var(--r-surface-2)!important;border:1px solid var(--r-hair)!important;border-radius:6px!important;
+ box-shadow:none!important;color:var(--r-ink)!important;padding:0 8px!important;font-size:12px!important}
+#spRadarForm input:not([type=checkbox]):focus{border-color:var(--r-blue)!important;
+ box-shadow:0 0 0 2px var(--r-blue-ring)!important;background:var(--r-canvas)!important}
+/* 关注页的航班名册/筛选条：平面行，不再铺整块浅色底 */
+.ws-roster{background:transparent!important;border-radius:0!important;box-shadow:none!important}
+.ws-filterbar{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;padding:8px 0!important}
+.ws-filterbar input[type=text],.ws-filterbar input[type=number],.ws-filterbar select{
+ background:var(--r-surface-2)!important;border-color:var(--r-hair)!important}
+.ws-ch{background:transparent!important;border:0!important;border-radius:0!important;padding:0 8px 0 0!important}
+.ws-ch+.ws-ch{border-left:1px solid var(--r-hair)!important;padding-left:8px!important}
+/* 概览全线最低：渠道名读成行内文本，不再是小胶囊 */
+#users .mchip{background:transparent!important;border:0!important;border-radius:0!important;
+ padding:0!important;box-shadow:none!important;transform:none!important}
+#users .mchip.best{background:transparent!important;border:0!important;color:var(--r-blue)!important}
+#users .mchip.best .pdot{background:var(--r-blue)!important;opacity:1!important}
+#users .mchip+.mchip::before{content:'·';color:var(--r-ink-4);margin:0 6px}
+/* 趋势页顶部航线筛选：文字行 + 选中下划线 */
+.monwatch-route{background:transparent!important;border:0!important;border-radius:0!important;
+ padding:0 8px 0 0!important;min-height:24px!important}
+.monwatch-route+.monwatch-route{border-left:1px solid var(--r-hair)!important;padding-left:8px!important}
+.monwatch-route.on{background:transparent!important;border:0!important;color:var(--r-blue)!important;
+ box-shadow:inset 0 -2px 0 var(--r-blue)!important}
+.monwatch-route i{border:0!important;border-radius:4px!important;background:var(--r-surface-2)!important}
+/* 检索页标题右侧操作簇：去掉整块浅底 */
+#searchview .srx-hero-act{background:transparent!important;border:0!important;border-radius:0!important;
+ padding:0!important;box-shadow:none!important;gap:2px!important}
+/* 关注页航班行：平面行，选中用左侧 3px 蓝线 */
+#montab-watch .ws-row{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-radius:0!important;box-shadow:none!important}
+#montab-watch .ws-row:hover{background:var(--r-surface-2)!important;box-shadow:none!important}
+#montab-watch .ws-row.on{background:var(--r-blue-soft)!important;
+ box-shadow:inset 3px 0 0 var(--r-blue)!important;border-top-color:var(--r-blue)!important}
+#montab-watch .ws-row.hit{border-top-color:rgba(var(--okrgb),.4)!important}
+#montab-watch .ws-row.out{border-top-style:dashed!important}
+#searchview .srx-mobilebar{background:transparent!important;border:0!important;
+ border-top:1px solid var(--r-hair)!important;border-bottom:1px solid var(--r-hair)!important;
+ border-radius:0!important;box-shadow:none!important}
+#searchview .srx-listhead{background:transparent!important}
+#searchview .srx-mmore{background:transparent!important}
+.stat{background:transparent!important;border-top:1px solid var(--r-hair)!important}
+html[data-theme="dark"] .btn2.primary,
+html[data-theme="dark"] .ws-btn.primary,
+html[data-theme="dark"] #opscard .opsbtns>button:first-child{color:#0b1220!important}
+@media(max-width:700px){
+ #mainnav{gap:18px!important}
+ #montabs{margin:2px -12px 10px!important}
+ #opscard .opsbtns>button{height:34px!important}
+}
+@media(max-width:390px){
+ html #montabs{width:auto!important;margin:2px -12px 10px!important}
+}
+/* 检索首屏收口（必须置末，覆盖 640/760 断点的两列网格回退）：
+   窄屏概览交给移动栏「概览」控制；工具条单行横滚，标题与来源一行。 */
+@media(max-width:1100px){
+ #searchview .srx-ovbar{display:none!important}
+ #searchview:not(.show-overview) .srx-brief,
+ #searchview:not(.show-overview) .srx-audit,
+ #searchview:not(.show-overview) .srx-capbar{display:none!important}
+ #searchview.show-overview .srx-brief{display:grid!important}
+ #searchview.show-overview .srx-audit{display:flex!important}
+ #searchview.show-overview .srx-capbar{display:flex!important}
+}
+@media(max-width:560px){
+ #searchview .srx-hero{padding:2px 2px 4px!important;margin-bottom:4px!important;align-items:center!important;flex-wrap:wrap!important;gap:4px!important}
+ #searchview .srx-hero-copy{flex:1 1 100%!important;display:block!important;min-width:0!important;overflow:hidden}
+ #searchview .srx-hero-copy .srx-eyebrow{display:flex!important;flex-wrap:nowrap!important;min-width:0;font-size:10px!important;margin:0!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ #searchview .srx-hero-copy .srx-eyebrow>#srxHeroMeta{overflow:hidden;text-overflow:ellipsis}
+ #searchview .srx-hero h1{font-size:17px!important;margin:1px 0 0!important;line-height:1.3!important;white-space:nowrap}
+ #searchview .srx-hero p,#searchview .srx-hero-copy .srx-foldbtn{display:none!important}
+ #searchview .srx-hero-act{display:flex!important;grid-template-columns:none!important;flex-wrap:nowrap!important;width:100%!important;
+  gap:4px!important;padding:0 0 2px!important;overflow-x:auto!important;overflow-y:visible!important;background:transparent!important;scrollbar-width:thin}
+ #searchview .srx-hero-act>label{display:none!important}
+ #searchview .srx-hero-act select{height:30px!important;font-size:11px!important;max-width:104px}
+ #searchview .srx-hero-act .srx-btn{flex:0 0 auto!important;width:auto!important;height:30px!important;padding:0 9px!important;
+  font-size:11px!important;justify-content:center!important;background:var(--r-surface)!important}
+ #searchview .srx-hero-act .srx-btn svg{width:14px;height:14px}
+ #searchview .srx-hero-act .srx-btn[data-sec],
+ #searchview .srx-hero-act:not(.open) .srx-btn[data-sec].srx-keep{display:none!important}
+ #searchview .srx-hero-act.open .srx-btn[data-sec],
+ #searchview .srx-hero-act.open .srx-btn.srx-keep[data-sec]{display:inline-flex!important}
+ #searchview .srx-hero-act .srx-more-btn{display:inline-flex!important;background:var(--r-surface-2)!important}
+}
+@media(max-width:360px){
+ #searchview .srx-hero-act{gap:3px!important}
+ #searchview .srx-hero-act select{max-width:86px}
+ #searchview .srx-hero-act .srx-btn{padding:0 7px!important}
+ /* 320 四格 KPI：渠道覆盖 3.5/5 不得折成两行 */
+ #montab-watch .ws-kpi{padding:5px 6px!important}
+ #montab-watch .ws-kpi .k{font-size:10px!important}
+ #montab-watch .ws-kpi .v{font-size:15px!important;white-space:nowrap!important}
+}
+/* 关注走势窄屏同律：说明文字让位给图表，标题/状态与动作保持一行。 */
+@media(max-width:560px){
+ #montab-watch .ws-sub{display:none!important}
+ #montab-watch .ws-head{padding:2px 0 4px!important;min-height:0!important;gap:4px!important}
+ #montab-watch .ws-head-act{width:100%!important;justify-content:flex-end!important;gap:5px!important}
+ #montab-watch .ws-head-act .ws-btn{height:28px!important;font-size:11px!important}
+ /* 首屏让图：航线副标题与图表脚注均已在 KPI/标题中重复，窄屏收起 */
+ #montab-watch .ws-routebar-h{display:none!important}
+ #montab-watch .ws-chart-title span{display:none!important}
+ #montab-watch .ws-chart-foot{display:none!important}
+ #montab-watch .ws-chart-h{min-height:32px!important}
+}
 </style></head><body><div class="wrap">
 <svg class="svgdefs" aria-hidden="true" focusable="false"><defs>
  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M2 20h20"/></symbol>
@@ -6856,10 +7379,17 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
   <span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">01</span><span class="zh">特价监控</span><span class="en">RADAR TREND</span></span><span class="muted" id="spMonMeta">读取监控记录…</span></span>
   <span class="muted"><button class="btn2" type="button" onclick="spMonRefresh()">刷新监控</button></span>
  </div>
+ <div id="spMonSum" class="spmon-sum"></div>
+ <span class="spmon-tools" role="group" aria-label="雷达走势工具">
+  <span class="spmon-range" id="spMonRange" role="group" aria-label="雷达走势时间范围">
+   <button type="button" data-spmrange="2">48h</button><button type="button" data-spmrange="7">7 天</button><button type="button" data-spmrange="30" class="on">30 天</button><button type="button" data-spmrange="90">90 天</button><button type="button" data-spmrange="180">半年</button>
+  </span>
+  <span class="spmon-mode" id="spMonMode" role="group" aria-label="雷达走势模式"><button type="button" data-spmmode="line" class="on">折线</button><button type="button" data-spmmode="kline">K线</button></span>
+ </span>
  <div class="spmon-body">
   <div id="spMonCal" class="spmon-cal" aria-label="特价日历"></div>
   <div class="spmon-main">
-   <div class="spmon-chartwrap"><canvas id="spMonChart" role="img" aria-label="特价监控走势"></canvas><div id="spMonTip" class="spmon-tip" aria-hidden="true" hidden></div><div id="spMonTable" class="sr-only"><table><caption>特价监控时间轴数据</caption><thead><tr><th>采集时间</th><th>最低价</th><th>低价日</th><th>渠道</th><th>标记</th></tr></thead><tbody></tbody></table></div><div id="spMonChartNote" class="spmon-note"></div></div>
+   <div class="spmon-chartwrap"><canvas id="spMonChart" role="img" aria-label="特价监控走势"></canvas><span id="spMonCross" class="spmon-cross" aria-hidden="true"></span><div id="spMonTip" class="spmon-tip" aria-hidden="true" hidden></div><div id="spMonTable" class="sr-only"><table><caption>特价监控时间轴数据</caption><thead><tr><th>采集时间</th><th>最低价</th><th>低价日</th><th>渠道</th><th>标记</th></tr></thead><tbody></tbody></table></div><div id="spMonChartNote" class="spmon-note"></div></div>
    <div id="spMonLow" class="spmon-low"></div>
   </div>
   <div id="spMonSources" class="spmon-src"></div>
@@ -7097,13 +7627,13 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
 </div><!-- /montab-health -->
 </div><!-- /monview -->
 
-<div id="searchview" role="main" style="display:none">
+<div id="searchview" role="main" class="srx-ov-collapsed" style="display:none">
  <section class="srx-hero" aria-label="检索台">
-  <div class="srx-hero-copy" id="srxHeroCopy">
+  <div class="srx-hero-copy srx-folded" id="srxHeroCopy">
    <div class="srx-eyebrow"><span class="srx-live" id="srxLiveTag"><i></i>LIVE</span><span id="srxModeLabel">监控数据</span><span>·</span><span id="srxHeroMeta">等待真实数据</span></div>
    <h1>多平台实时检索</h1>
    <p id="srxHeroSub">五渠道真实采集行 · 解析 ⇄ 镜像 ⇄ RAW 三重对齐 · 缺失一律标未供/未采，不伪造截图与同班。</p>
-   <button type="button" class="srx-foldbtn" onclick="srxFold('srxHeroCopy',this)" aria-expanded="true">收起说明</button>
+   <button type="button" class="srx-foldbtn" onclick="srxFold('srxHeroCopy',this)" aria-expanded="false">说明</button>
   </div>
   <div class="srx-hero-act">
    <label for="srxUser">用户</label><select id="srxUser" onchange="srxSwitchUser(this.value)" aria-label="切换检索用户"></select>
@@ -7230,7 +7760,8 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
   <span class="srx-msum" id="srxMobileSummary">—</span>
  </div>
 
- <section class="srx-band" id="srxBand" aria-label="价格日历带">
+ <span class="srx-ovbar" id="srxOvBar" aria-label="检索概览摘要"><span class="srx-ovsum" id="srxOvSum">概览加载中…</span><button type="button" class="srx-ovbtn" id="srxOvToggle" onclick="srxToggleOverview()" aria-expanded="false">展开概览</button></span>
+<section class="srx-band" id="srxBand" aria-label="价格日历带">
   <div class="srx-band-h"><b id="srxBandTitle">14 日出发价带</b><span id="srxBandMeta">按出发日 · 真实落库最低价</span>
    <span class="srx-bandnav" role="group" aria-label="价带日期窗口翻页">
     <button type="button" onclick="srxBandShift(-14)" aria-label="查看前 14 天" title="往前翻 14 天"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
@@ -7241,7 +7772,7 @@ html[data-theme="dark"] .bic-air{box-shadow:0 0 0 1px rgba(255,255,255,.18)!impo
     <button type="button" data-axis="observation" onclick="srxAxis('observation')">采集日</button>
    </span>
    <button type="button" class="srx-bandreset" id="srxBandReset" onclick="srxBandReset()" hidden>回到所选日</button>
-   <button type="button" class="srx-foldbtn" style="margin-left:6px" onclick="srxFold('srxBand',this)" aria-expanded="true">收起价带</button></div>
+   <button type="button" class="srx-bandlogin" onclick="srxGoLogin()" title="打开渠道登录/会话">渠道登录</button><button type="button" class="srx-foldbtn" style="margin-left:6px" onclick="srxFold('srxBand',this)" aria-expanded="true">收起价带</button></div>
   <div id="srxBandBody" class="srx-foldbody">
   <div class="srx-band-days" id="srxBandDays"><div class="srx-skel" style="height:48px;margin:0"></div></div>
   <div class="srx-band-note" id="srxBandNote">正在读取真实日桶…</div>
@@ -11585,7 +12116,7 @@ function srxRadarSyncForm(){
 }
 /* ===== 特价监控：官方日历/榜单的逐日价 → 持久化走势 + 低价日真实航班 ===== */
 const SPMON_RUN_LABEL={ok:'成功',cache_hit:'缓存',fallback:'回退',partial:'部分',empty:'空结果',error:'失败',demo:'演示'};
-let SPMON={data:null,user:'',date:'',busy:false,alertCfg:null,lastAlert:null,chart:null,rt:0};
+let SPMON={data:null,user:'',date:'',busy:false,alertCfg:null,lastAlert:null,chart:null,rt:0,range:30,mode:'line'};
 async function spAlertLoad(){
  const u=(S&&S.users||[])[U];if(!u||!$('spRadarAlertOn'))return;
  try{
@@ -11651,6 +12182,24 @@ function spMonRender(){
  const _runTxt=lr.status&&lr.status!=='ok'?(' · 最近运行 '+(SPMON_RUN_LABEL[lr.status]||lr.status)):'';
  if(meta)meta.textContent=(S&&S.demo?'DEMO · 合成监控 · ':'')+spMonCfgText(q)+' · '+(j.snapshots||0)+' 次监控'+(j.last_at?' · 最近 '+j.last_at.slice(5,16):' · 尚未采集')+' · 自动每 '+he(String(j.auto_interval_h||2))+' 小时'+_alertTxt+_runTxt;
  if(cfg)cfg.textContent=spMonCfgText(q);
+ const sum=$('spMonSum');
+ if(sum){
+  if(!dates.length||!low||low.price==null){sum.innerHTML='';}
+  else{
+   const _ch=SRX_RADAR_NAMES[low.channel]||low.channel||'—';
+   const _dt=spMonDeltaTxt(low.prev_price,low.price);
+   const _cs=j.channels_status||{};
+   const _nCh=Object.keys(_cs).filter(x=>_cs[x]&&_cs[x].rows>0).length;
+   const _qCh=(q.channels||[]).length||5;
+   sum.innerHTML='<span class="k">最低</span><b>¥'+he(String(low.price))+'</b>'
+    +'<span>'+he(String(low.date||'').slice(5))+'</span><span class="sep">/</span>'
+    +'<span>'+srxPlatIcon(low.channel)+he(_ch)+'</span>'
+    +(_dt?'<span class="sep">/</span><span>较上次 '+he(_dt)+'</span>':'')
+    +'<span class="sep">/</span><span>覆盖 '+_nCh+'/'+_qCh+' 渠道</span>'
+    +'<span class="sep">/</span><span>'+(j.snapshots||0)+' 次监控</span>'
+    +'<span class="sep">/</span><span>提醒 '+((SPMON.alertCfg&&SPMON.alertCfg.enabled)?'开':'关')+'</span>';
+  }
+ }
  const cal=$('spMonCal');
  if(cal){
   if(!dates.length){
@@ -11742,19 +12291,55 @@ function spMonCalFit(){
  if(sel)try{sel.scrollIntoView({inline:'nearest',block:'nearest'})}catch(e){}
 }
 function spMonPick(date){SPMON.date=date;spMonRender();setTimeout(spMonCalFit,0);}
+function spMonSyncTools(){
+ document.querySelectorAll('#spMonRange button').forEach(b=>b.classList.toggle('on',+b.dataset.spmrange===SPMON.range));
+ document.querySelectorAll('#spMonMode button').forEach(b=>b.classList.toggle('on',b.dataset.spmmode===SPMON.mode));
+}
+function spMonSetRange(v){
+ SPMON.range=+v||30;
+ try{localStorage.setItem('jpspmrange',String(SPMON.range))}catch(e){}
+ spMonSyncTools();
+ const s=SPMON.chart;if(s)spMonDraw(s.dateSeries,s.selDate,s.lowDate);
+}
+function spMonSetMode(m){
+ SPMON.mode=m==='kline'?'kline':'line';
+ try{localStorage.setItem('jpspmmode',SPMON.mode)}catch(e){}
+ spMonSyncTools();
+ const s=SPMON.chart;if(s)spMonDraw(s.dateSeries,s.selDate,s.lowDate);
+}
 function spMonDraw(dateSeries,selDate,lowDate){
  const c=$('spMonChart'),note=$('spMonChartNote');if(!c)return;
  const tip=$('spMonTip');if(tip)tip.hidden=true;
  SPMON.geo=null;
  SPMON.chart={dateSeries:dateSeries||[],selDate:selDate||'',lowDate:lowDate||''};
+ spMonSyncTools();
+ const rangeMs=SPMON.range>0?SPMON.range*24*3600*1000:0;
+ const cutoff=Date.now()-rangeMs;
  const series=(dateSeries||[]).map(x=>({
   date:String(x.date||''),
   pts:(x.points||[]).map(p=>({t:new Date(String(p.at).replace(' ','T')).getTime(),
-   p:Number(p.price),at:p.at,ch:p.channel,basis:p.basis})).filter(p=>isFinite(p.t)&&isFinite(p.p))
+   p:Number(p.price),at:p.at,ch:p.channel,basis:p.basis}))
+   .filter(p=>isFinite(p.t)&&isFinite(p.p)&&p.p>0&&(!rangeMs||p.t>=cutoff))
  })).filter(x=>x.pts.length);
  const all=series.flatMap(x=>x.pts);
  const times=[...new Set(all.map(p=>p.t))].sort((a,b)=>a-b);
- const dpr=window.devicePixelRatio||1,W=c.clientWidth||600,H=c.clientHeight||180;
+ const focus=series.find(x=>x.date===selDate)||series.find(x=>x.date===lowDate)||series[0];
+ let candles=[];
+ if(SPMON.mode==='kline'&&focus){
+  const byDay={};
+  focus.pts.forEach(p=>{const d=String(p.at||'').slice(0,10);if(!d)return;
+   (byDay[d]=byDay[d]||[]).push(p)});
+  candles=Object.keys(byDay).sort().map(d=>{
+   const ps=byDay[d].map(x=>x.p);
+   return {d,o:ps[0],c:ps[ps.length-1],h:Math.max(...ps),l:Math.min(...ps)};
+  });
+ }
+ const wrap=c.parentElement;
+ const baseW=Math.max(320,wrap.clientWidth||600);
+ const units=SPMON.mode==='kline'?candles.length:times.length;
+ const W=units>5?Math.max(baseW,Math.min(2600,units*54)):baseW;
+ c.style.width=W+'px';
+ const H=c.clientHeight||180,dpr=window.devicePixelRatio||1;
  c.width=Math.max(1,Math.round(W*dpr));c.height=Math.max(1,Math.round(H*dpr));
  const ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
  const tb=$('spMonTable')&&$('spMonTable').querySelector('tbody');
@@ -11762,29 +12347,65 @@ function spMonDraw(dateSeries,selDate,lowDate){
   const mk=x.date===lowDate?(x.date===selDate?'最低日 · 选中':'最低日'):(x.date===selDate?'选中':'');
   return '<tr><td>'+he(String(p.at||''))+'</td><td>¥'+he(String(p.p))+'</td><td>'+he(x.date)+'</td><td>'+he(SRX_RADAR_NAMES[p.ch]||p.ch||'')+'</td><td>'+he(mk)+'</td></tr>';
  })).join('');
+ const padL=44,padR=10,padT=12,padB=22;
+ ctx.strokeStyle=cssv('--grid')||'#d7dee8';ctx.lineWidth=1;ctx.fillStyle=cssv('--mut')||'#5a6c7d';ctx.font='10px var(--num)';
+ const fmtAt=t=>{const d=new Date(t);return String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+ if(SPMON.mode==='kline'){
+  if(!candles.length){
+   if(note)note.textContent='当前范围无采集快照 · 切到更大范围或继续积累后显示 K 线（'+(focus?focus.date:'')+'）';
+   return;
+  }
+  let lo=Math.min(...candles.map(x=>x.l)),hi=Math.max(...candles.map(x=>x.h));
+  const pad=Math.max(1,(hi-lo)*0.08);lo-=pad;hi+=pad;
+  const Y=p=>padT+(hi-p)/(hi-lo)*(H-padT-padB);
+  for(let i=0;i<4;i++){const p=hi-(hi-lo)*i/3,yy=Y(p);ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(W-padR,yy);ctx.stroke();ctx.fillText('¥'+Math.round(p),4,yy+3)}
+  const bw=Math.max(4,Math.min(18,(W-padL-padR)/candles.length*0.55));
+  candles.forEach((cd,i)=>{
+   const x=padL+(i+0.5)/candles.length*(W-padL-padR);
+   const up=cd.c>=cd.o;
+   const col=up?(cssv('--red')||'#c22a2e'):(cssv('--green')||'#0e8345');
+   ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=1;
+   ctx.beginPath();ctx.moveTo(x,Y(cd.h));ctx.lineTo(x,Y(cd.l));ctx.stroke();
+   const y1=Y(Math.max(cd.o,cd.c)),y2=Y(Math.min(cd.o,cd.c));
+   ctx.fillRect(x-bw/2,y1,bw,Math.max(1.5,y2-y1));
+  });
+  ctx.fillStyle=cssv('--mut')||'#5a6c7d';ctx.textAlign='left';
+  ctx.fillText(candles[0].d.slice(5),padL,H-6);
+  if(candles.length>1){ctx.textAlign='right';ctx.fillText(candles[candles.length-1].d.slice(5),W-padR,H-6);ctx.textAlign='left'}
+  if(note)note.textContent='K线='+(focus.date||'最低日')+' 的监控快照按日聚合（开/收/高/低）· '+candles.length+' 日 · 红涨绿跌 · 范围 '+SPMON.range+' 天';
+  return;
+ }
  if(times.length<2||all.length<2){
-  if(note)note.textContent='监控次数不足（'+times.length+' 次采集）· 继续积累后显示每个出发日的走势';
+  if(note)note.textContent='当前范围监控次数不足（'+times.length+' 次采集）· 切到更大范围或继续积累后显示每个出发日的走势';
   return;
  }
  const ps=all.map(x=>x.p);let mn=Math.min(...ps),mx=Math.max(...ps);
- const pad=Math.max(1,(mx-mn)*0.08);mn-=pad;mx+=pad;
- const padL=44,padR=10,padT=12,padB=22;
- const fmtAt=t=>{const d=new Date(t);return String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+ const pad=Math.max(1,(mx-mn)*0.08);mn=Math.max(0,mn-pad);mx+=pad;
  const X=t=>padL+(t-times[0])/Math.max(1,times[times.length-1]-times[0])*(W-padL-padR);
  const Y=p=>padT+(mx-p)/(mx-mn)*(H-padT-padB);
  SPMON.geo={W,H,padL,padR,padT,padB,times,series,X,Y};
- ctx.strokeStyle=cssv('--grid')||'#d7dee8';ctx.lineWidth=1;ctx.fillStyle=cssv('--mut')||'#5a6c7d';ctx.font='10px var(--num)';
  for(let i=0;i<4;i++){const p=mx-(mx-mn)*i/3,yy=Y(p);ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(W-padR,yy);ctx.stroke();ctx.fillText('¥'+Math.round(p),4,yy+3)}
  series.forEach(x=>{
   const low=x.date===lowDate,sel=x.date===selDate;
   ctx.strokeStyle=low?(cssv('--red')||'#c22a2e'):(sel?(cssv('--blue')||'#0b62d6'):'#aab4c0');
-  ctx.lineWidth=low||sel?2.4:1.2;ctx.globalAlpha=low||sel?1:.75;
+  ctx.lineWidth=low||sel?2.4:1;ctx.globalAlpha=low||sel?1:.38;
   ctx.beginPath();x.pts.forEach((p,i)=>{const xx=X(p.t),yy=Y(p.p);i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy)});ctx.stroke();
   const last=x.pts[x.pts.length-1];
   if(low||sel){ctx.fillStyle=low?(cssv('--red')||'#c22a2e'):(cssv('--blue')||'#0b62d6');ctx.beginPath();ctx.arc(X(last.t),Y(last.p),3.2,0,Math.PI*2);ctx.fill()}
   ctx.globalAlpha=1;
  });
- ctx.fillStyle=cssv('--mut')||'#5a6c7d';ctx.fillText(fmtAt(times[0]),padL,H-6);ctx.textAlign='right';ctx.fillText(fmtAt(times[times.length-1]),W-padR,H-6);
+ ctx.fillStyle=cssv('--mut')||'#5a6c7d';
+ const ticks=Math.max(2,Math.min(4,times.length));
+ let lastRight=-1e9;
+ for(let i=0;i<ticks;i++){
+  const t=times[Math.round(i*(times.length-1)/Math.max(1,ticks-1))];
+  const label=fmtAt(t), tw=ctx.measureText(label).width;
+  let xx=X(t), align=i===0?'left':(i===ticks-1?'right':'center');
+  const left=align==='left'?xx:(align==='right'?xx-tw:xx-tw/2);
+  if(left<lastRight+8)continue;
+  ctx.textAlign=align;ctx.fillText(label,xx,H-6);lastRight=left+tw;
+ }
+ ctx.textAlign='left';
  const marks=[];
  if(lowDate){const s=series.find(x=>x.date===lowDate);if(s)marks.push({s,c:cssv('--red')||'#c22a2e'})}
  if(selDate&&selDate!==lowDate){const s=series.find(x=>x.date===selDate);if(s)marks.push({s,c:cssv('--blue')||'#0b62d6'})}
@@ -11801,23 +12422,25 @@ function spMonDraw(dateSeries,selDate,lowDate){
    });
   ctx.textAlign='left';
  }
- if(note)note.textContent='每线=一个出发日期 · 红=最低日'+(lowDate===selDate?'/选中':'')+' · 蓝=选中 · 线尾标日期/价格'+((dateSeries||[]).some(x=>x.basis_changed)?' · 含口径变化日':'')+' · '+times.length+' 次采集 · 最近 '+fmtAt(times[times.length-1]);
+ if(note)note.textContent='每线=一个出发日期 · 红=最低日'+(lowDate===selDate?'/选中':'')+' · 蓝=选中 · 线尾标日期/价格'+((dateSeries||[]).some(x=>x.basis_changed)?' · 含口径变化日':'')+' · 范围 '+SPMON.range+' 天 · '+times.length+' 次采集 · 最近 '+fmtAt(times[times.length-1]);
 }
 window.addEventListener('resize',function(){
  clearTimeout(SPMON.rt);
  SPMON.rt=setTimeout(function(){const s=SPMON.chart;if(s)spMonDraw(s.dateSeries,s.selDate,s.lowDate)},180);
 });
 function spMonHover(e){
- const c=$('spMonChart'),t=$('spMonTip'),g=SPMON.geo;
+ const c=$('spMonChart'),t=$('spMonTip'),g=SPMON.geo,cross=$('spMonCross');
  if(!c||!t||!g||!g.series.length)return;
  const r=c.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+ if(mx<g.padL||mx>g.W-g.padR||my<g.padT||my>g.H-g.padB){t.hidden=true;if(cross)cross.style.display='none';return}
  let best=null;
  g.series.forEach(s=>s.pts.forEach(p=>{
   const dx=g.X(p.t)-mx,dy=g.Y(p.p)-my,d=dx*dx+dy*dy;
-  if(d<=441&&(!best||d<best.d))best={d,p,s};
+  if(!best||d<best.d)best={d,p,s};
  }));
- if(!best){t.hidden=true;return}
+ if(!best){t.hidden=true;if(cross)cross.style.display='none';return}
  const p=best.p,basis=p.basis==='tax_included'?'含税':(p.basis==='bare'?'裸价':(p.basis?'口径未标':''));
+ if(cross){const gx=g.X(p.t);cross.style.display='block';cross.style.left=Math.round(c.offsetLeft+gx)+'px';cross.style.top=(c.offsetTop+g.padT)+'px';cross.style.height=(g.H-g.padT-g.padB)+'px'}
  t.innerHTML='<b>'+he(best.s.date)+'</b> · ¥'+he(String(Math.round(p.p)))
   +'<br>'+he(String(p.at||'').slice(5,16))+' · '+he(SRX_RADAR_NAMES[p.ch]||p.ch||'—')
   +(basis?' · '+he(basis):'');
@@ -11832,7 +12455,7 @@ function spMonHover(e){
 (function(){
  const c=$('spMonChart');if(!c)return;
  let tipT=0;
- const hideTip=function(){const t=$('spMonTip');if(t)t.hidden=true};
+ const hideTip=function(){const t=$('spMonTip');if(t)t.hidden=true;const x=$('spMonCross');if(x)x.style.display='none'};
  c.addEventListener('pointermove',spMonHover);
  c.addEventListener('pointerdown',function(e){clearTimeout(tipT);spMonHover(e)});
  c.addEventListener('pointerup',function(){
@@ -11842,6 +12465,13 @@ function spMonHover(e){
  c.addEventListener('pointerleave',function(e){
   if(e&&e.pointerType==='touch')return;hideTip()});
  window.addEventListener('scroll',hideTip,{passive:true});
+})();
+(function(){
+ try{const r=+localStorage.getItem('jpspmrange');if([2,7,30,90,180].includes(r))SPMON.range=r;
+  const m=localStorage.getItem('jpspmmode');if(m==='kline'||m==='line')SPMON.mode=m;}catch(e){}
+ document.querySelectorAll('#spMonRange button').forEach(b=>b.addEventListener('click',()=>spMonSetRange(b.dataset.spmrange)));
+ document.querySelectorAll('#spMonMode button').forEach(b=>b.addEventListener('click',()=>spMonSetMode(b.dataset.spmmode)));
+ spMonSyncTools();
 })();
 async function spMonRefresh(){
  const q=(SPMON.data&&SPMON.data.query)||{};
@@ -17037,7 +17667,7 @@ function renderSearch(){
   }
   srxEnsure();
   const _sv=$('searchview');if(_sv)_sv.classList.toggle('srx-neutral',!SRX.date&&!SRX.probe);
- srxRenderRestore();srxRenderHero();srxRenderBand();srxRenderBrief();srxRenderCapbar();srxRenderKpis();srxRenderChips();srxRenderFacets();srxRenderQuick();srxRenderAbar();srxRenderCtx();srxRenderMobileSummary();
+ srxRenderRestore();srxRenderHero();srxRenderBand();srxRenderBrief();srxRenderCapbar();srxRenderKpis();srxRenderChips();srxRenderFacets();srxRenderQuick();srxRenderAbar();srxRenderCtx();srxRenderMobileSummary();srxRenderOv();
   srxRenderRows();
   const _sel=srxFindSel();if(_sel&&_sel.platKey&&!SRX.mchPinned)SRX.mch=_sel.platKey;
   srxRenderMirror();
@@ -17346,11 +17976,39 @@ function srxRenderKpis(){
  const extra=['日历价 '+cal+' 行'+(cal?'（不计明细）':''),'补位 '+fallback+' 行'];
  if(bad)extra.push('异常 '+bad+' 行');else extra.push('无数据风险标记');
  const scope=SRX.date?('所选日期 '+c.date+' / 跨日期 '+c.base):('跨日期 '+c.base);
- el.innerHTML=(SRX.probe?k('可出手机票','—','探针未评估（无配置心理线）','warn','qual',0):k('可出手机票',qual,qualUniq+' 个航班 · '+qual+' 条报价 · 真达标','ok','qual',real.length?qual/real.length*100:0))
-  +k('本次明细',real.length,scope+' · 去日历/补位','' ,'real',0)
-  +k('同班覆盖',multi,'真实同班 ≥2 渠道','info','agg',g.groups.length?multi/g.groups.length*100:0)
+ el.innerHTML=(SRX.probe?k('可出手机票','—','探针未评估（无配置心理线）','warn','qual',0):k('可出手机票',qual,qualUniq+' 个航班 · '+qual+' 条报价 · 真达标','ok'+(SRX.f.onlyQual?' on':''),'qual',real.length?qual/real.length*100:0))
+  +k('本次明细',real.length,scope+' · 去日历/补位',(SRX.f.hideCal?'on':''),'real',0)
+  +k('同班覆盖',multi,'真实同班 ≥2 渠道','info'+(SRX.agg?' on':''),'agg',g.groups.length?multi/g.groups.length*100:0)
   +k('渠道覆盖',dataPlats+'/5','航班级 '+realPlats+' · 日历 '+calPlats,'', 'links',dataPlats/5*100)
   +'<div class="srx-kpi-sub">'+extra.map(he).join(' · ')+'</div>';
+}
+function srxRenderOv(){
+ const el=$('srxOvSum');if(!el)return;
+ const names={ctrip:'携程',qunar:'去哪儿',fliggy:'飞猪',tongcheng:'同程',tuniu:'途牛'};
+ const parts=[];
+ document.querySelectorAll('#searchview .srx-src').forEach(x=>{
+  const p=x.getAttribute('data-src')||'';
+  const c=(x.querySelector('.srx-src-big')||{}).textContent||'';
+  if(p&&c&&c.trim()!=='—')parts.push((names[p]||p)+' '+c.trim());
+ });
+ const kpis=[];
+ document.querySelectorAll('#searchview .srx-kpi').forEach(x=>{
+  const k=(x.querySelector('.k')||{}).textContent||'';
+  const v=(x.querySelector('.v')||{}).textContent||'';
+  if(k&&v)kpis.push(k+' '+v);
+ });
+ if(!kpis.length){const e=document.querySelector('#srxKpis .srx-kpi-empty b');if(e)kpis.push(e.textContent||'')}
+ const sub=(document.querySelector('#srxKpis .srx-kpi-sub')||{}).textContent||'';
+ el.textContent=(parts.length?'来源 '+parts.join(' · ')+' ｜ ':'')+(kpis.join(' · ')||'检索概览')+(sub?' ｜ '+sub.trim():'');
+}
+function srxToggleOverview(){
+ const v=$('searchview');if(!v)return;
+ const on=v.classList.contains('srx-ov-collapsed');
+ v.classList.toggle('srx-ov-collapsed',!on);
+ const b=$('srxOvToggle');
+ if(b){b.textContent=on?'收起概览':'展开概览';b.setAttribute('aria-expanded',on)}
+ try{localStorage.setItem('jpsrx_ovopen',on?'1':'0')}catch(e){}
+ if(on)setTimeout(srxRenderOv,0);
 }
 function srxRenderChips(){
  const pairs=$('srxPairs');if(pairs){
@@ -17405,7 +18063,7 @@ function srfOpt(key,value,label,n,on){
 let _srfSoon=0;
 function srxApplyFilterChangeSoon(){clearTimeout(_srfSoon);_srfSoon=setTimeout(srxApplyFilterChange,0);}
 function srxApplyFilterChange(){
- SRX.limit=SRX_PAGE;srxSave();srxRenderChips();srxRenderFacets(true);srxRenderQuick();srxRenderAbar();srxRenderKpis();srxRenderRows();srxRenderMirror();srxRenderCtx();srxUpdateHit();
+ SRX.limit=SRX_PAGE;srxSave();srxRenderChips();srxRenderFacets(true);srxRenderQuick();srxRenderAbar();srxRenderKpis();srxRenderOv();srxRenderRows();srxRenderMirror();srxRenderCtx();srxUpdateHit();
 }
 function srxToggleMulti(key,value){
  const cur=Array.isArray(SRX.f[key])?SRX.f[key]:[];
@@ -17601,6 +18259,7 @@ function srxRenderAbar(){
   head='<span class="srx-snap"><b>任务快照</b><span>'+(ds?ds+' · ':'')+'请求渠道 '+he(ps)+'</span><button type="button" onclick="srxFocusProbe()">发起新查询</button></span>';
  }
  const chips=items.map(x=>'<button type="button" class="srx-chip" data-abar="'+x[0]+'" data-abarv="'+he(x[1])+'">'+he(x[2])+'<span class="x">✕</span></button>').join('');
+ if(!head&&!chips){el.innerHTML='';return}
  el.innerHTML=head+'<span class="srx-resf"><b>结果筛选</b>'+(chips||'<span class="none">无（展示当前范围全部行）</span>')+(chips?'<button type="button" class="srx-chip" data-abar="__all" data-abarv="1">清除结果筛选</button>':'')+'</span>';
 }
 function srxTicks(f){
@@ -18294,7 +18953,7 @@ function srxPrefillProbe(){
  if(!Array.isArray(SRX.batchLegs)){try{SRX.batchLegs=JSON.parse(localStorage.getItem('jpsrx_batch')||'[]')||[]}catch(e){SRX.batchLegs=[]}}
  if(SRX.batchLegs.length)SRX.batchOpen=true;
  if(!SRX._probeInit){SRX._probeInit=true;
-  let po='1';try{po=localStorage.getItem('jpsrx_probeopen')||'1'}catch(e){}
+  let po='0';try{po=localStorage.getItem('jpsrx_probeopen2')||'0'}catch(e){}
   const p=$('srxProbe'),t=$('srxProbeToggle');
   if(po==='0'){if(p)p.classList.remove('open');if(t){t.textContent='展开';t.setAttribute('aria-expanded','false')}}
   else if(p&&!p.classList.contains('open')){p.classList.add('open');if(t){t.textContent='收起';t.setAttribute('aria-expanded','true')}}
@@ -18776,7 +19435,7 @@ function srxExitProbe(){
 }
 
 /* ---------- actions ---------- */
-function srxToggleProbe(){const p=$('srxProbe');if(!p)return;const on=!p.classList.contains('open');p.classList.toggle('open',on);const b=$('srxProbeToggle');if(b){b.setAttribute('aria-expanded',on);b.textContent=on?'收起':'展开'}try{localStorage.setItem('jpsrx_probeopen',on?'1':'0')}catch(e){}srxRenderProbeMini()}
+function srxToggleProbe(){const p=$('srxProbe');if(!p)return;const on=!p.classList.contains('open');p.classList.toggle('open',on);const b=$('srxProbeToggle');if(b){b.setAttribute('aria-expanded',on);b.textContent=on?'收起':'展开'}try{localStorage.setItem('jpsrx_probeopen2',on?'1':'0')}catch(e){}srxRenderProbeMini()}
 function srxRenderProbeMini(j){
  const el=$('srxProbeMini'),p=$('srxProbe');if(!el)return;
  if(!p||p.classList.contains('open')){el.hidden=true;el.textContent='';return}
@@ -18951,8 +19610,12 @@ function srxClearCommonFilters(){
  toast('已清除共同筛选；检索特有筛选保留','ok');
 }
 function srxSetFilter(k,v){
- if(k==='agg'){SRX.agg=!!v}
- else{SRX.f[k]=v;if(k==='dep'){SRX.f.depFrom='';SRX.f.depTo=''}else if(k==='arr'){SRX.f.arrFrom='';SRX.f.arrTo=''}}
+ if(k==='agg'){SRX.agg=!!v;return srxApplyFilterChange()}
+ const cur=SRX.f[k];
+ const same=Array.isArray(cur)?false:(String(cur)===''?false:String(cur)===String(v));
+ if(same){SRX.f[k]=Array.isArray(SRX_DEFAULT_F[k])?[]:(typeof SRX_DEFAULT_F[k]==='boolean'?false:'')}
+ else{SRX.f[k]=v}
+ if(k==='dep'){SRX.f.depFrom='';SRX.f.depTo=''}else if(k==='arr'){SRX.f.arrFrom='';SRX.f.arrTo=''}
  srxApplyFilterChange();
 }
 function srxFacetClick(btn){
@@ -19075,7 +19738,7 @@ document.addEventListener('click',ev=>{
  const date=t.closest&&t.closest('[data-date]');
  if(date){
   if(srxDateLock()){toast('已提交任务的日期是快照，不能作为结果筛选更换；请发起新查询','err');return}
-  SRX.date=date.getAttribute('data-date');SRX.bandAnchor='';SRX.sel=null;SRX.detailOpen=false;SRX.mchPinned=false;srxSave();renderSearch();return}
+  const dv=date.getAttribute('data-date')||'';SRX.date=(dv&&SRX.date===dv)?'':dv;SRX.bandAnchor='';SRX.sel=null;SRX.detailOpen=false;SRX.mchPinned=false;srxSave();renderSearch();return}
  const plat=t.closest&&t.closest('[data-plat]');
  if(plat&&!plat.disabled){srxTogglePlat(plat.getAttribute('data-plat'));return}
  const cal=t.closest&&t.closest('[data-calday]');
@@ -19091,12 +19754,16 @@ document.addEventListener('click',ev=>{
  if(t.closest&&t.closest('[data-clear]')){srxClearFilters();return}
  const kpi=t.closest&&t.closest('[data-kpi]');
  if(kpi){const a=kpi.getAttribute('data-kact');
-  if(a==='qual'){SRX.f.trip='';SRX.f.hideCal=true;SRX.f.missing=false;SRX.f.hideStale=true;SRX.f.onlyQual=true;SRX.agg=false;if($('srxOnlyQual'))$('srxOnlyQual').checked=true;if($('srxNoStale'))$('srxNoStale').checked=true}
-  if(a==='real'){SRX.f.hideCal=true;SRX.agg=false}
+  if(a==='qual'){
+   const on=!SRX.f.onlyQual;
+   SRX.f.trip='';SRX.f.hideCal=on;SRX.f.missing=false;SRX.f.hideStale=on;SRX.f.onlyQual=on;SRX.agg=false;
+   if($('srxOnlyQual'))$('srxOnlyQual').checked=on;if($('srxNoStale'))$('srxNoStale').checked=on;
+  }
+  if(a==='real'){SRX.f.hideCal=!SRX.f.hideCal;SRX.agg=false}
   if(a==='cal'){SRX.f.hideCal=!SRX.f.hideCal;SRX.agg=false}
   if(a==='agg'){SRX.agg=!SRX.agg}
-  if(a==='links'){srxOpenLinks()}
-  if(a==='risk'){SRX.f.missing=true;SRX.agg=false}
+  if(a==='links'){srxOpenLinks();return}
+  if(a==='risk'){SRX.f.missing=!SRX.f.missing;SRX.agg=false}
   SRX.limit=SRX_PAGE;srxSave();srxRenderFacets(true);renderSearch();return}
  const ax=t.closest&&t.closest('[data-axis]');
  if(ax){srxAxis(ax.getAttribute('data-axis'));return}
@@ -22455,6 +23122,16 @@ def _watch_user_index(user):
     return 0
 
 
+def _state_stale_hours():
+    """补位窗口随调度周期：7 天一轮的配置不能在 6h 后把整页清空。"""
+    try:
+        iv = float(((_State.cfg or {}).get("schedule") or {}).get(
+            "interval_minutes", 30) or 30)
+    except Exception:
+        iv = 30.0
+    return int(max(6, min(168, iv / 60.0 + 1)))
+
+
 def _user_state(u):
     """单个用户的状态视图（最新轮明细 + 近期补位 + 走势历史）。
 
@@ -22670,7 +23347,7 @@ def _user_state(u):
             for _d0 in _r.get("dates") or [""]:
                 _k3 = (_r.get("from", ""), _r.get("to", ""))
                 for p, (age, fl) in recent_platform_flights(
-                        db, _k3[0], _k3[1], _d0, hours=6).items():
+                        db, _k3[0], _k3[1], _d0, hours=_state_stale_hours()).items():
                     if (_k3[0], _k3[1], p, _d0) in have_pd:
                         continue
                     _prev = recent.get((_k3[0], _k3[1], p, _d0))

@@ -254,8 +254,10 @@ def test_unchanged_background_state_keeps_search_action_focus(ui):
     page.evaluate("loadChannelState(true)")
     result = page.evaluate("""async () => {
         document.querySelector('#searchview').style.display='';
-        // loadChannelState(true) 在载荷未变时不会重绘；先显式渲染价带
-        // 动作条，再验证背景刷新保持同一节点与焦点。
+        // 概览默认收起，能力条随概览一起隐藏；先展开概览，确保焦点落在
+        // 真实可见的动作节点上，再验证背景刷新保持同一节点与焦点。
+        const v=document.getElementById('searchview');
+        if(v.classList.contains('srx-ov-collapsed'))srxToggleOverview();
         srxRenderCapbar();
         const action=document.querySelector('#srxCapbar button');
         action.focus();

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """r368: a cancelled in-flight fetch cannot seed a new probe task."""
 import json
+from datetime import date, timedelta
 import threading
 import time
 from types import SimpleNamespace
@@ -31,6 +32,10 @@ class _SlowLate:
                                "arrTime": "10:00"}], ensure_ascii=False))]
 
 
+_D1 = (date.today() + timedelta(days=30)).isoformat()
+_D2 = (date.today() + timedelta(days=31)).isoformat()
+_D3 = (date.today() + timedelta(days=60)).isoformat()
+
 def test_cancel_late_result_stays_old_and_new_task_rejected():
     old_reg = crawlers.REGISTRY.get("slowlate")
     old_cfg = getattr(webui._State, "cfg", None)
@@ -46,7 +51,7 @@ def test_cancel_late_result_stays_old_and_new_task_rejected():
         try:
             result["old"] = webui._probe_search(
                 None, None, None, ["slowlate"],
-                legs=[{"from": "上海", "to": "北京", "date": "2026-10-25"}],
+                legs=[{"from": "上海", "to": "北京", "date": _D1}],
                 cancel=cancel)
         except Exception as e:  # pragma: no cover
             result["err"] = repr(e)
@@ -59,7 +64,7 @@ def test_cancel_late_result_stays_old_and_new_task_rejected():
         with pytest.raises(RuntimeError) as ei:
             webui._probe_search(
                 None, None, None, ["slowlate"],
-                legs=[{"from": "上海", "to": "北京", "date": "2026-10-25"}])
+                legs=[{"from": "上海", "to": "北京", "date": _D1}])
         assert "冷却" in str(ei.value) or "已有探针" in str(ei.value)
         th.join(timeout=10)
         assert not th.is_alive()

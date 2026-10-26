@@ -24,6 +24,7 @@ from datetime import date, timedelta
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "dengmeiluan/ticket-monitoring"
 API = "https://api.github.com/repos/" + REPO
+REL_NAME = "机票监控台 · 初版（滚动更新）"
 
 CN_INTRO = (
     "> 自托管的多渠道机票价格监控：五平台明细采集 → 钉钉图文推送 → 达标四层强提醒。\n"
@@ -201,27 +202,37 @@ def main():
     assets = rel.get("assets") or []
     names = sorted(a["name"] for a in assets)
     zips = [n for n in names if n.endswith(".zip")]
-    ck("release name carries current version", ver in name, name)
+    ck("release name is the constant initial title", name == REL_NAME, name)
+    ck("release name carries no version", ver not in name and not re.search(r"\d+\.\d+\.\d+", name), name)
     ck("release body canonical CN intro",
        all(line in body for line in CN_INTRO.splitlines()))
     ck("release body carries current version", ver in body)
     m_date = re.search(r"### ticket-monitoring v[^\n]*?(\d{4}-\d{2}-\d{2})", body)
-    pub = (rel.get("published_at") or "")[:10]
-    if m_date and pub:
+    # The Release is the constant initial release; its body is updated each
+    # version, so the body date tracks updated_at, not the initial publish date.
+    upd = (rel.get("updated_at") or "")[:10]
+    if m_date and upd:
         try:
-            ck("release published date matches body",
-               date.fromisoformat(pub) >=
+            ck("release updated date matches body",
+               date.fromisoformat(upd) >=
                date.fromisoformat(m_date.group(1)) - timedelta(days=1),
-               "published=%s body=%s" % (pub, m_date.group(1)))
+               "updated=%s body=%s" % (upd, m_date.group(1)))
         except ValueError:
-            ck("release published date matches body", False,
-               "published=%s body=%s" % (pub, m_date.group(1)))
+            ck("release updated date matches body", False,
+               "updated=%s body=%s" % (upd, m_date.group(1)))
     ck("release body no internal round jargon",
        not re.search(r"\br3\d{2}[a-z]?\b", body))
     ck("release has four platform zips", len(zips) == 4, ", ".join(zips))
     ck("release has SHA256SUMS.txt", "SHA256SUMS.txt" in names)
     ck("release asset set exact", set(names) == set(zips) | {"SHA256SUMS.txt"},
        ", ".join(names))
+
+    try:
+        deps = gh("/deployments?per_page=100")
+        ck("exactly one Pages deployment", len(deps) == 1,
+           ", ".join(str(d.get("id")) for d in deps))
+    except Exception as e:
+        ck("Pages deployments readable", False, repr(e))
 
     try:
         req = urllib.request.Request(

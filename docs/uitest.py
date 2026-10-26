@@ -6259,7 +6259,7 @@ def main():
                       overflow:document.documentElement.scrollWidth-window.innerWidth};}""")
             ck("r357 登录区标题/卡片不挤压",
                not _l357["overlap"] and _l357["gap"] >= 8
-               and _l357["cols"] == 3 and _l357["overflow"] <= 0, str(_l357))
+               and _l357["cols"] == 1 and _l357["overflow"] <= 0, str(_l357))
             # r365：飞猪等长状态文案不得把按钮顶下去；同一行按钮必须
             # 底对齐（旧 .lgcard .btn2{margin:0} 覆盖 margin-top:auto，
             # 文案换行后飞猪按钮比其余四张低 15px）
@@ -6309,18 +6309,29 @@ def main():
             _p358.wait_for_timeout(600)
             _p358.evaluate("switchView('search')")
             _p358.wait_for_timeout(700)
+            _p358.evaluate("()=>{const v=document.getElementById('searchview');if(v&&v.classList.contains('srx-ov-collapsed'))srxToggleOverview()}")
+            _p358.wait_for_timeout(300)
             _p358.evaluate(
                 "()=>{const p=document.getElementById('srxProbe');"
                 "if(p)p.classList.remove('open')}")
             _m358 = _p358.evaluate("""()=>{
               const p=document.getElementById('srxProbe'),
-                    a=document.querySelector('.srx-hero-act');
+                    a=document.querySelector('.srx-hero-act'),
+                    cs=getComputedStyle(a),
+                    vis=[...a.querySelectorAll('.srx-btn')]
+                      .filter(b=>getComputedStyle(b).display!=='none')
+                      .map(b=>(b.textContent||'').trim().slice(0,2));
               return {ph:p.getBoundingClientRect().height,
-                cols:getComputedStyle(a).gridTemplateColumns.split(' ').length,
+                disp:cs.display,wrap:cs.flexWrap,
+                ah:Math.round(a.getBoundingClientRect().height),
+                over:a.scrollWidth-a.clientWidth,vis:vis,
                 desc:getComputedStyle(
                   document.querySelector('.srx-probehint')).display}}""")
-            ck("r358 390 探针收起单行/工具两列",
-               _m358["ph"] <= 55 and _m358["cols"] == 2
+            ck("r358 390 探针收起单行/工具单行横滚",
+               _m358["ph"] <= 55 and _m358["disp"] == "flex"
+               and _m358["wrap"] == "nowrap" and _m358["ah"] <= 36
+               and "关注" in _m358["vis"] and "更多" in _m358["vis"]
+               and "校准" not in _m358["vis"]
                and _m358["desc"] == "none", str(_m358))
             _p358.evaluate(
                 "()=>{const v=document.getElementById('searchview');"
@@ -6422,6 +6433,8 @@ def main():
             _p359.wait_for_timeout(600)
             _p359.evaluate("switchView('search')")
             _p359.wait_for_timeout(700)
+            _p359.evaluate("()=>{const v=document.getElementById('searchview');if(v&&v.classList.contains('srx-ov-collapsed'))srxToggleOverview()}")
+            _p359.wait_for_timeout(300)
             _l360 = _p359.evaluate("""()=>{
               let small=0;
               document.querySelectorAll('#searchview *').forEach(e=>{

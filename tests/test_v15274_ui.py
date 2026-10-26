@@ -264,7 +264,7 @@ def test_mobile_details_are_cards_not_horizontal_scroll(page):
               vis:vis.length,hint:getComputedStyle(hint).display,
               ow:document.documentElement.scrollWidth-window.innerWidth};}""")
     assert got["sw"] <= got["cw"], got
-    assert got["rowW"] <= 340 and got["rowH"] < 280, got
+    assert got["rowW"] <= 360 and got["rowH"] < 280, got
     assert got["vis"] == 4, got
     assert got["hint"] == "none", got
     assert got["ow"] <= 0, got

@@ -240,7 +240,7 @@
  ✓ Qunar 登录卡 H5 标
  ✓ Qunar 必须登录
  ✓ Qunar 停服登录说明
- ✓ r349d 登录卡等宽同顶/无位移/按钮等宽 {'ok': True, 'rows': 1, 'equal': True, 'flat': True, 'btn': [160.5, 160.5, 160.5, 160.5], 'fbtn': [160.5]}
+ ✓ r349d 登录卡等宽同顶/无位移/按钮等宽 {'ok': True, 'rows': 5, 'equal': True, 'flat': True, 'btn': [72, 72, 72, 72], 'fbtn': [72]}
  ✓ 渠道登录行渲染
  ✓ 面板切换零插拔
  ✓ 面板切换：用户显
@@ -463,7 +463,7 @@ WC-P2-2 诊断: sh=rgb(11, 98, 214) 0px 0px 0px 2px active=true items=4
  ✓ touchcancel 手势接管全清（十字线不滞留）
  ✓ 同点二次 tap 放行跳明细（双拍跳转路径不回归）
  … r283v 图例首屏与搜索态导航
- ✓ 375 图例补位行首屏可达（预设行后，免滚动）（disp=block top=692 h=36 vh=812 fb=fbar open chips=5/7 scrollY=0）
+ ✓ 375 图例补位行首屏可达（预设行后，免滚动）（disp=block top=657 h=36 vh=812 fb=fbar open chips=5/7 scrollY=0）
  ✓ 配置搜索态左导航高亮降饱和（暂态去处语义）
  ✓ 搜索清空后左导航高亮满饱和回归
  … 吸顶切换器滚轮横滚
@@ -499,22 +499,22 @@ WC-P2-2 诊断: sh=rgb(11, 98, 214) 0px 0px 0px 2px active=true items=4
  ✓ canvas 1919→1920 高度差 <3px（病灶 Δ+94 消除，实测 391.8→392.4）
  ✓ canvas 1920 高度在坡带内 [385,435]（实测 392.4）
  … r302 WebUI 审计 P3 五案+T1
- ✓ W1 1920 statline 右缘==grid 右缘（实测 1591 vs 1591）
- ✓ W1 1920 kpisum 右缘==grid 右缘（实测 1591 vs 1591）
+ ✓ W1 1920 statline 右缘==grid 右缘（实测 1573 vs 1573）
+ ✓ W1 1920 kpisum 右缘==grid 右缘（实测 1573 vs 1573）
  ✓ W5 跳转词缀单形 ▸（实测 查看明细 ▸|走势 ▸）
- ✓ W1 1440 带内零回归三族同线（实测 1325/1325/1325）
- ✓ W2 390 改期微图锚视口 ≤366px（实测 308）
+ ✓ W1 1440 带内零回归三族同线（实测 1343/1343/1343）
+ ✓ W2 390 改期微图锚视口 ≤366px（实测 336）
  ✓ W2 390 零新增横滚（溢出 -10px）
  ✓ W3 toast word-break=normal+overflow-wrap=anywhere（实测 normal/anywhere）
  ✓ W4 Esc 关抽屉焦点归还 fltBtn（实测 fltBtn）
- ✓ T1 demo 倒计时 chip 可见（实测 ⏱ 下轮 14:25（2 分/flex）
+ ✓ T1 demo 倒计时 chip 可见（实测 ⏱ 下轮 08:19（2 分/flex）
  ✓ R1a hdmeta 560 带独占行（flexBasis=100%）
  ✓ R1b 560 带页面零横滚（sw=550 cw=560）
  ✓ R1c 620 带回单行（flexBasis=auto）
  ✓ R2 数字配置改回原值清脏（双样本过）
  ✓ R3 chart 同值零 childList（hover 三帧 0 节点）
- ✓ R4 展开态 muted 距右缘 34px（<120）+ chev 在 muted 右侧 True
- ✓ R4 收起态 muted 距右缘 34px（<120）
+ ✓ R4 展开态 muted 距右缘 33px（<120）+ chev 在 muted 右侧 True
+ ✓ R4 收起态 muted 距右缘 33px（<120）
  ✓ R5 ghimg 形态（label=GitHub 图库 chip=True repo行=True smmsToken藏=True）
  ✓ R6 动作按钮收尾（chgrid 尾件=BUTTON addEm=True）
  ✓ R7 删除用户入口收起态可达（label=删除用户 演示用户 bottom=0）
@@ -542,7 +542,7 @@ WC-P2-2 诊断: sh=rgb(11, 98, 214) 0px 0px 0px 2px active=true items=4
  ✓ r322 760 带删格 fit 挂载(空腔0)
  … r323 半年走势双发去重与日桶
  ✓ r323 切 30d 长窗 /api/trend 恰 1 发(实发 1)
- ✓ r323 日K本地自然日分桶+纯日期t0({'n': 2, 't0s': ['10-24', '10-25'], 'y1': '10-24', 'y0': '10-25'})
+ ✓ r323 日K本地自然日分桶+纯日期t0({'n': 2, 't0s': ['10-25', '10-26'], 'y1': '10-25', 'y0': '10-26'})
  … r324 改期 chip 格缘热区
  ✓ r324 改期 chip 纵向格缘带内命中本体（实测 ok）
  … r326 国际配置面
@@ -576,7 +576,7 @@ WC-P2-2 诊断: sh=rgb(11, 98, 214) 0px 0px 0px 2px active=true items=4
  ✓ r339 高级折叠默认收起且点击展开（{"folded": true, "hidden": true, "open": true}）
  ✓ r339 只要直飞：中转阈清零+收起+恢复
  ✓ r339 航司白名单写模+intl 行条件渲染
- ✓ r349 航司常用 chips 全在容器内且不裁字 {'ok': True, 'n': 8, 'allIn': True, 'noClip': True, 'rows': 2, 'expect': 2, 'qw': 815, 'sw': 815, 'cw': 815}
+ ✓ r349 航司常用 chips 全在容器内且不裁字 {'ok': True, 'n': 8, 'allIn': True, 'noClip': True, 'rows': 2, 'expect': 2, 'qw': 851, 'sw': 851, 'cw': 851}
  ✓ r349 390 航司常用 chips 不越界 {'ok': True, 'n': 8, 'allIn': True, 'noClip': True, 'rows': 4, 'docW': 380}
  ✓ r339 往返开合+返程快速选7天（锚最早出发日）+badge×7
  ✓ r339 Bark 通道卡+写模+测试钮在场
@@ -647,7 +647,7 @@ WC-P2-2 诊断: sh=rgb(11, 98, 214) 0px 0px 0px 2px active=true items=4
  ✓ r357 登录区标题/卡片不挤压
  ✓ r365 登录卡片按钮底对齐
  ✓ r357 航线就地交换起降
- ✓ r358 390 探针收起单行/工具两列
+ ✓ r358 390 探针收起单行/工具单行横滚
  ✓ r358 390 来源卡横滑暗示
  ✓ r358 768 价带横滑暗示
  ✓ r358 1024 详情关闭钮贴右缘/动作第二行

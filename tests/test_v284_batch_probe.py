@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """v1.5.284 组合探针：多航线/日期校验、逐腿状态与合并行身份。"""
 import json
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -38,6 +39,11 @@ class _PathFakeCrawler(_FakeCrawler, BaseCrawler):
         return super().fetch(fc, tc, dates)
 
 
+_D1 = (date.today() + timedelta(days=30)).isoformat()
+_D2 = (date.today() + timedelta(days=31)).isoformat()
+_D3 = (date.today() + timedelta(days=60)).isoformat()
+
+
 @pytest.fixture()
 def fake_plat():
     crawlers.REGISTRY["fake"] = _FakeCrawler
@@ -54,8 +60,8 @@ def fake_plat():
 
 def test_batch_probe_two_legs(fake_plat):
     j = webui._probe_search(None, None, None, [fake_plat], legs=[
-        {"from": "上海", "to": "北京", "date": "2026-10-25"},
-        {"from": "上海", "to": "纽约", "date": "2026-11-16"},
+        {"from": "上海", "to": "北京", "date": _D1},
+        {"from": "上海", "to": "纽约", "date": _D3},
     ])
     assert j["ok"] and j.get("batch") is True
     assert len(j["legs"]) == 2
@@ -64,23 +70,23 @@ def test_batch_probe_two_legs(fake_plat):
     assert len(j["rows"]) == 4
     labels = {r["routeLabel"] for r in j["rows"]}
     assert labels == {"上海→北京", "上海→纽约"}
-    assert {r["date"] for r in j["rows"]} == {"2026-10-25", "2026-11-16"}
+    assert {r["date"] for r in j["rows"]} == {_D1, _D3}
     assert all("leg" in r and r["flightKey"] for r in j["rows"])
     assert {r["leg"] for r in j["rows"]} == {0, 1}
     assert {r["cabin"] for r in j["rows"]} == {"经济舱", "公务舱"}
-    assert {r["date"] for r in j["rows"] if r["leg"] == 0} == {"2026-10-25"}
+    assert {r["date"] for r in j["rows"] if r["leg"] == 0} == {_D1}
     assert len({r["rowKey"] for r in j["rows"]}) == 4
 
 
 def test_batch_probe_rejects_over_limit_and_bad_leg(fake_plat):
     with pytest.raises(ValueError, match="最多 4 条"):
         webui._probe_search(None, None, None, [fake_plat], legs=[
-            {"from": "上海", "to": "北京", "date": "2026-10-25"}] * 5)
+            {"from": "上海", "to": "北京", "date": _D1}] * 5)
     webui._PROBE_LAST = 0
     with pytest.raises(ValueError, match="第 2 条"):
         webui._probe_search(None, None, None, [fake_plat], legs=[
-            {"from": "上海", "to": "北京", "date": "2026-10-25"},
-            {"from": "上海", "to": "上海", "date": "2026-10-26"},
+            {"from": "上海", "to": "北京", "date": _D1},
+            {"from": "上海", "to": "上海", "date": _D2},
         ])
 
 
@@ -106,11 +112,11 @@ def test_per_leg_channels_only_run_requested_leg():
     try:
         j = webui._probe_search(
             None, None, None, ["legacy_a", "legacy_b"],
-            legs=[{"from": "上海", "to": "北京", "date": "2026-10-25"},
-                  {"from": "上海", "to": "广州", "date": "2026-10-25"}],
+            legs=[{"from": "上海", "to": "北京", "date": _D1},
+                  {"from": "上海", "to": "广州", "date": _D1}],
             leg_wants={0: ["legacy_a"], 1: ["legacy_b"]})
-        assert calls_a == [("SHA", "BJS", "2026-10-25")]
-        assert calls_b == [("SHA", "CAN", "2026-10-25")]
+        assert calls_a == [("SHA", "BJS", _D1)]
+        assert calls_b == [("SHA", "CAN", _D1)]
         assert j["legs"][0]["channels"].keys() == {"legacy_a"}
         assert j["legs"][1]["channels"].keys() == {"legacy_b"}
     finally:
@@ -121,17 +127,17 @@ def test_per_leg_channels_only_run_requested_leg():
 
 
 def test_single_probe_response_keeps_legacy_shape(fake_plat):
-    j = webui._probe_search("上海", "北京", "2026-10-25", [fake_plat])
+    j = webui._probe_search("上海", "北京", _D1, [fake_plat])
     assert j["ok"] and "batch" not in j
     assert j["from"] == "SHA" and j["to"] == "BJS"
-    assert j["date"] == "2026-10-25" and len(j["rows"]) == 2
+    assert j["date"] == _D1 and len(j["rows"]) == 2
     assert j["channels"][fake_plat]["status"] == "ok"
 
 
 def test_probe_channel_paths_are_reported(fake_plat):
     crawlers.REGISTRY["pathfake"] = _PathFakeCrawler
     try:
-        j = webui._probe_search("上海", "北京", "2026-10-25",
+        j = webui._probe_search("上海", "北京", _D1,
                                 ["pathfake"])
         paths = j["channels"]["pathfake"]["paths"]
         assert [(x["path"], x["status"], x["rows"]) for x in paths] == [
@@ -191,7 +197,7 @@ def test_batch_probe_ui_wiring():
 
 
 def test_watch_identity_cannot_move_to_past_date():
-    base = {"from": "SHA", "to": "BKK", "date": "2026-11-16",
+    base = {"from": "SHA", "to": "BKK", "date": _D3,
             "code": "MU541", "depTime": "09:55", "arrTime": "13:40",
             "channels": ["qunar"]}
     old = webui._watch_entry(dict(base))
@@ -203,7 +209,7 @@ def test_watch_identity_cannot_move_to_past_date():
 
 def test_one_leg_batch_still_renders_as_batch(fake_plat):
     j = webui._probe_search(None, None, None, [fake_plat], legs=[
-        {"from": "上海", "to": "北京", "date": "2026-10-25"}])
+        {"from": "上海", "to": "北京", "date": _D1}])
     assert j.get("batch") is True and len(j["legs"]) == 1
     assert j["legs"][0]["rows"] == 2 and len(j["rows"]) == 2
 
@@ -223,7 +229,7 @@ def test_batch_missing_arrival_time_stays_calendar(fake_plat):
     webui._PROBE_LAST = 0
     try:
         j = webui._probe_search(None, None, None, ["thin"], legs=[
-            {"from": "上海", "to": "北京", "date": "2026-10-25"}])
+            {"from": "上海", "to": "北京", "date": _D1}])
         row = j["rows"][0]
         assert row["arrTime"] == ""
         assert row["isCal"] is True and row["qual"] is False
@@ -244,8 +250,8 @@ def test_batch_merged_channel_ok_when_any_leg_has_rows(fake_plat):
     webui._PROBE_LAST = 0
     try:
         j = webui._probe_search(None, None, None, ["oneleg"], legs=[
-            {"from": "上海", "to": "北京", "date": "2026-10-25"},
-            {"from": "上海", "to": "纽约", "date": "2026-11-16"}])
+            {"from": "上海", "to": "北京", "date": _D1},
+            {"from": "上海", "to": "纽约", "date": _D3}])
         assert j["channels"]["oneleg"]["n"] == 2
         assert j["channels"]["oneleg"]["status"] == "ok"
         assert j["legs"][0]["channels"]["oneleg"]["status"] == "ok"
@@ -269,7 +275,7 @@ def test_probe_channels_follow_fixed_priority():
         crawlers.REGISTRY[p] = _FakeCrawler
     webui._PROBE_LAST = 0
     try:
-        j = webui._probe_search("上海", "北京", "2026-10-25",
+        j = webui._probe_search("上海", "北京", _D1,
                                 list(reversed(names)))
         assert list(j["channels"]) == list(webui.PLATFORM_PRIORITY)
     finally:
@@ -307,12 +313,12 @@ def _mk_task(plans, want):
 
 
 def test_probe_task_records_real_channel_phases(fake_plat):
-    plan = webui._probe_leg_plan("上海", "北京", "2026-10-25")
+    plan = webui._probe_leg_plan("上海", "北京", _D1)
     task = _mk_task([plan], [fake_plat])
     webui._PROBE_LAST = 0
     j = webui._probe_search(None, None, None, [fake_plat],
                             legs=[{"from": "上海", "to": "北京",
-                                   "date": "2026-10-25"}], task=task)
+                                   "date": _D1}], task=task)
     assert j["ok"] and task["legs"][0]["channels"][fake_plat]["status"] == "ok"
     assert len(task["rows"]) == 2 and task["legs"][0]["rows"] == 2
     phases = {e["phase"] for e in task["events"]}
@@ -327,7 +333,7 @@ def test_probe_task_records_real_channel_phases(fake_plat):
 
 
 def test_probe_task_cancel_before_start_is_cancelled(fake_plat):
-    plan = webui._probe_leg_plan("上海", "北京", "2026-10-25")
+    plan = webui._probe_leg_plan("上海", "北京", _D1)
     task = _mk_task([plan], [fake_plat])
     task["cancel"].set()
     webui._PROBE_TASKS["t1"] = task
@@ -335,7 +341,7 @@ def test_probe_task_cancel_before_start_is_cancelled(fake_plat):
     try:
         webui._probe_start_task("t1", None, None, None,
                                 [{"from": "上海", "to": "北京",
-                                  "date": "2026-10-25"}], [fake_plat])
+                                  "date": _D1}], [fake_plat])
         assert task["status"] == "cancelled" and task["rows"] == []
     finally:
         webui._PROBE_TASKS.pop("t1", None)

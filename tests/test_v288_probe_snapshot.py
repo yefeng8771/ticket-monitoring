@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """v1.5.288 探针快照/结果筛选分离与计数口径回归。"""
 import threading
+from datetime import date, timedelta
 
 import webui
 
+
+_D1 = (date.today() + timedelta(days=30)).isoformat()
+_D2 = (date.today() + timedelta(days=31)).isoformat()
+_D3 = (date.today() + timedelta(days=60)).isoformat()
 
 def test_snapshot_and_result_filter_contract():
     src = webui.PAGE
@@ -37,11 +42,11 @@ def test_task_view_exposes_request_channels_and_real_statuses():
         "id": "t1", "status": "running", "created": 1.0, "started": 1.0,
         "updated": 2.0, "finished": None, "total": 2,
         "plans": [{"from": "SHA", "from_name": "上海", "to": "BKK",
-                   "to_name": "曼谷", "date": "2026-11-16"}],
+                   "to_name": "曼谷", "date": _D3}],
         "want": ["ctrip", "tuniu"],
         "legs": [{
             "leg": 0, "from": "SHA", "from_name": "上海", "to": "BKK",
-            "to_name": "曼谷", "date": "2026-11-16", "status": "running",
+            "to_name": "曼谷", "date": _D3, "status": "running",
             "rows": 3, "detail": 3, "cal": 0,
             "channels": {
                 "ctrip": {"status": "ok", "phase": "完成", "n": 3,
@@ -126,8 +131,8 @@ def test_probe_global_channel_gate_and_same_platform_serialization(monkeypatch):
     webui._PROBE_LAST = 0
     try:
         j = webui._probe_search(None, None, None, ["slow"], legs=[
-            {"from": "上海", "to": "北京", "date": "2026-10-25"},
-            {"from": "上海", "to": "北京", "date": "2026-10-26"},
+            {"from": "上海", "to": "北京", "date": _D1},
+            {"from": "上海", "to": "北京", "date": _D2},
         ])
         assert len(j["rows"]) == 2
         assert state["max"] <= 2
@@ -176,10 +181,10 @@ def test_cancel_preserves_fetched_rows():
         "id": "t-cancel", "status": "running", "created": time.time(),
         "started": time.time(), "updated": time.time(), "finished": None,
         "plans": [{"from": "SHA", "from_name": "上海", "to": "BJS",
-                   "to_name": "北京", "date": "2026-10-25"}],
+                   "to_name": "北京", "date": _D1}],
         "want": ["slowcancel"], "total": 1,
         "legs": [{"leg": 0, "from": "SHA", "from_name": "上海", "to": "BJS",
-                  "to_name": "北京", "date": "2026-10-25", "status": "queued",
+                  "to_name": "北京", "date": _D1, "status": "queued",
                   "rows": 0, "detail": 0, "cal": 0,
                   "channels": {"slowcancel": {"status": "queued", "phase": "排队",
                                               "n": 0, "detail": 0, "cal": 0,
@@ -190,7 +195,7 @@ def test_cancel_preserves_fetched_rows():
     webui._PROBE_TASKS["t-cancel"] = task
     try:
         th = threading.Thread(target=webui._probe_start_task,
-                              args=("t-cancel", "上海", "北京", "2026-10-25",
+                              args=("t-cancel", "上海", "北京", _D1,
                                     None, ["slowcancel"]), daemon=True)
         th.start()
         time.sleep(0.08)
@@ -218,9 +223,9 @@ def test_probe_detail_evidence_updates_session_without_empty_inference(tmp_path,
     webui._PROBE_AUTH.clear()
     try:
         # empty/calendar-only must never be recorded as session evidence
-        webui._record_probe_auth("ctrip", "international", 0, "SHA", "BKK", "2026-11-16")
+        webui._record_probe_auth("ctrip", "international", 0, "SHA", "BKK", _D3)
         assert not webui._PROBE_AUTH
-        webui._record_probe_auth("ctrip", "international", 12, "SHA", "BKK", "2026-11-16")
+        webui._record_probe_auth("ctrip", "international", 12, "SHA", "BKK", _D3)
         view = webui._login_state_view()
         scope = view["plats"]["ctrip"]["scopes"]["international"]
         assert scope["probe_count"] == 12

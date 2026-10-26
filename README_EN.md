@@ -112,7 +112,7 @@ Run pulse: per-round per-channel row counts & latency in a ring buffer — a 4-c
 - **Five-platform calibration book**: five channels × list/detail/calendar/cross + four-up; empty states are never filled with teaching samples.
 - **Active probe**: origin/destination fields reuse the config city index (Chinese / pinyin / IATA autocomplete, keyboard selection, full domestic/international picker); any OD/date, real five-crawler collection, **not stored and never pushed**; per-channel row counts / unavailable / failure; sessions kept locally. When no configured threshold applies, rows are labeled “probe not evaluated”. The hosted demo is a static site: the probe entry is disabled with an explanation; run locally for real collection.
 - **Evidence export**: CSV (parsed price, raw/original-page price, times, cabin, aircraft, baggage, meal, punctuality, seats, tax, refund, alignment, capture time, raw row, evidence fingerprint, landing page, conclusion, note; BOM+RFC4180) and evidence JSON (raw + provenance), plus single-row evidence JSON copy. `probe://srx` state strings (mirror tab, calendar axis and detail tab included) and up to 12 local snapshots.
-- **Real coverage**: each channel moves with its live login/session state — Qunar's PC web flight site retired on 2026-10-10 and its H5 returns no fares anonymously, so a login session is required; Tongcheng may return a 444 session gate, Ctrip international uses its PC flight list (calendar is only a fallback and is marked “needs login” when the session lapses), Tuniu international may be unavailable. The UI labels this round as **flight-level / calendar / fallback / unavailable / needs login** instead of freezing one snapshot into a fixed coverage claim. Calendar-only thin rows carry no flight number or times, are never marked qualified and never enter same-flight ladders; the 14-day band only draws real departure days. Missing is shown as missing, never synthesized.
+- **Real coverage**: the UI labels each round as **flight-level / calendar / fallback / unavailable / needs login** instead of freezing one snapshot into a fixed coverage claim; the channel path and login requirement shown for the current round are authoritative. Calendar-only thin rows carry no flight number or times, are never marked qualified and never enter same-flight ladders; the 14-day band only draws real departure days. Missing is shown as missing, never synthesized.
 
 ![Triple alignment: parsed ⇄ mirror ⇄ raw](docs/screenshots/console-probe-detail.png)
 
@@ -355,7 +355,7 @@ while all other channels stay available. All assets attach to one Release and a
 ## Development
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 3709 tests — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 3725 tests — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate
 python docs/uitest.py             # full UI self-test (651 assertions, self-hosted demo, zero-JS-error hard gate)
 python docs/screenshot.py         # regenerate README screenshots (start the demo first: python webui.py --demo --port 8799)
 python docs/demo_build.py         # rebake the static demo site (docs/site)
