@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import urllib.parse
 from datetime import datetime
 
@@ -2074,6 +2075,12 @@ def upload_freeimage(png_path, logger):
     return None
 
 
+# r389：GitHub 图床失败熔断（进程级）。失败后 N 秒内不再为每张图
+# 重复撞同一条失败链路；任何一次成功立即清零。
+_GH_FAIL_UNTIL = 0.0
+_GH_FAIL_COOLDOWN_S = 600.0
+
+
 def upload_ghimg(png_path, ih, logger):
     """GitHub 图库上传（Contents API 单文件 PUT，公开库）。
 
@@ -2178,10 +2185,21 @@ def upload_chart(png_path, cfg, logger, ih=None):
     if provider == "ghimg" and (ih.get("repo") or "").strip() \
             and ((ih.get("ghtoken") or "").strip()
                     or (ih.get("token") or "").strip()):
+        # r389：连续失败熔断。实测同一代理链路（TLS EOF）下每张图每轮都会
+        # 直连+代理各撞一次（一轮多图=多次无谓请求，且每轮重复）。
+        # 失败后 10 分钟内直接跳过，交文本兜底；成功即清零。
+        global _GH_FAIL_UNTIL
+        if time.time() < _GH_FAIL_UNTIL:
+            logger.info("[图床] GitHub 熔断中（剩余 %ds），直出文本兜底",
+                        int(_GH_FAIL_UNTIL - time.time()))
+            return None
         url = upload_ghimg(png_path, ih, logger)
         if url:
+            _GH_FAIL_UNTIL = 0.0
             return url
-        logger.warning("[走势] GitHub 图库失败，放弃图链路交文本兜底")
+        _GH_FAIL_UNTIL = time.time() + _GH_FAIL_COOLDOWN_S
+        logger.warning("[走势] GitHub 图库失败，放弃图链路交文本兜底"
+                       "（%.0f 分钟内不再尝试）", _GH_FAIL_COOLDOWN_S / 60.0)
     if provider == "smms" and (ih.get("token") or "").strip():
         url = upload_smms(png_path, ih["token"].strip(), logger)
         if url:
@@ -2202,8 +2220,13 @@ def recent_platform_flights(db_path, from_city, to_city, date, hours=6):
     # 先取全部历史行再逐条 json.loads，只为丢掉窗口外——真机 2823 行
     # × 28KB extra 白解析 ~8s/航线-日期。fetched_at 为
     # '%Y-%m-%d %H:%M:%S' 定长格式，字符串比较即时间比较。
+    _has_prov = any(r[1] == "prov" for r in conn.execute(
+        "PRAGMA table_info(flight_prices)").fetchall())
+    _cols = ("id AS _row_id, platform, extra, fetched_at"
+             + (", prov" if _has_prov else ""))
     rows = conn.execute(
-        "SELECT id AS _row_id, platform, extra, fetched_at FROM flight_prices "
+        "SELECT " + _cols + " "
+        "FROM flight_prices "
         "WHERE from_city=? AND to_city=? AND depart_date=? AND extra != '' "
         "AND fetched_at >= datetime('now', 'localtime', ?) "
         "ORDER BY id DESC",
@@ -2239,6 +2262,11 @@ def recent_platform_flights(db_path, from_city, to_city, date, hours=6):
                     # rowId=null 实锤）
                     _it["_row_id"] = r["_row_id"]
                     _it["_raw_idx"] = _ix
+                    # 补位行也必须带该次采集的入口/路径溯源；原先 SQL 没取
+                    # prov，整条链路落到 UI 都是 {}（用户实报「补位数据看着
+                    # 奇怪、无法核对来源」）。NULL/空串原样透传，不臆造。
+                    if _has_prov:
+                        _it["_prov"] = r["prov"] or ""
             out[p] = (age, obj)
     return out
 

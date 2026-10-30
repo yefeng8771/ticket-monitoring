@@ -4967,10 +4967,13 @@ class Alerter:
                 f"&acity={_tc_v}&acityName={tn}&ddate={date}"
             )
         if platform == "tongcheng":
-            # r326 A1 同源收口：国际面=独立前后端+城市码口径（TYO/LON
-            # ≠NRT/LHR），国际列表页双端强制登录（report_tongcheng.md
-            # 实证）——book1 喂国际对=国内后端查国际航线死形，按途牛
-            # 先例宁缺链接（消费端真值门剥链接壳只出文本）
+            # r390 反证：同程国际 book1 **在无痕会话一律 302 到
+            # m.ly.com/passport/login.html**（手机/桌面 UA 均然），读者点开
+            # 看到的是登录页而不是价格。r384 曾据一次"匿名可出价"改为出链，
+            # 那次实测复用了带 cookie 的上下文，样本不成立——已回退。
+            # 按"宁缺勿错"：国际不给链接（消费端真值门剥壳只出文本），
+            # 与途牛先例一致。可替代的入口（iflight / ft/touch/index）anon
+            # 可打开但无价，同样不作为"去查看"。
             if _intl_route(fc_up, tc_up):
                 return ""
             # 与 crawlers/tongcheng.py URL_TPL 同参：book1 页缺中文城市名
@@ -4993,21 +4996,10 @@ class Alerter:
             # 点开=列表壳软着陆（R38 匿名 1999 实证），登录用户直达
             # 真列表
             if _intl_route(fc_up, tc_up):
-                from core.intl import city_short_of as _cshort
-                try:
-                    from crawlers.qunar import QunarCrawler as _QC2
-                    _cn = getattr(_QC2, "CITY_NAME", {})
-                except Exception:
-                    _cn = {}
-                fn_i = _q(str(_cn.get(fc_up, "") or _cshort(fc_up)
-                              or route.from_name or fc_up))
-                tn_i = _q(str(_cn.get(tc_up, "") or _cshort(tc_up)
-                              or route.to_name or tc_up))
-                return (
-                    "https://touch.qunar.com/ncs/page/interlist"
-                    f"?depCity={fn_i}&arrCity={tn_i}"
-                    f"&goDate={date}&from=touch_index_search"
-                )
+                # r390 取证：该 H5 深链在**匿名与已登录两种会话**下都出不了价
+                # （匿名「查询超时，请点击按钮重试」；登录 profile 直接弹
+                # 登录/注册浮层）。读者点开是死页 —— 宁缺勿错，不给链接。
+                return ""
             # PC 版单程列表页（crawlers/qunar.py PC_URL_TPL 同参）：爬虫
             # 主路径已迁 PC wbdflightlist，链接同源迁移。H5 列表页对
             # 匿名已上登录墙、登录态接口仍风控=死形（禁复活钉在案）；
@@ -5025,11 +5017,10 @@ class Alerter:
             # 由页内 JS 完成查询）。旧实现按「XHR 端点」判空，导致
             # 150 条真实国际明细全部无原页可溯源。
             if _intl_route(fc_up, tc_up):
-                return (
-                    "https://m.tuniu.com/m2015/intlFlight/flight/list"
-                    f"?route={fc_up}-{tc_up}&date={date}"
-                    "&adult=1&child=0&baby=0&cabinClass=0"
-                )
+                # r390 取证：该落地页无论匿名/登录、手机/桌面 UA 都停在
+                # 「正在加载中……」且从不发出航班查询请求（仅埋点）——
+                # 读者点开永远看不到价。宁缺勿错，不给链接。
+                return ""
             return (
                 "https://m.tuniu.com/flight/domestic/new/"
                 f"{fc_up}_{tc_up}_OW_1_0_0"

@@ -74,7 +74,7 @@ def test_neutral_first_entry_does_not_restore_query():
     src = webui.PAGE
     # jpsrx2 只恢复展示偏好，条件必须显式确认
     assert "['sort','view','calAxis','dtab','fieldFilter','mch','mview']" in src
-    assert "已保持中性视图" in src
+    assert "SRX.restoreChip=parts.join" in src
     assert "恢复上次条件" in src
     # 首次进入/切换用户不得保留旧渠道、关键词或结果筛选
     assert "SRX.plats=[];SRX.q='';SRX.f={...SRX_DEFAULT_F};SRX.agg=false" in src
@@ -220,6 +220,10 @@ def test_probe_detail_evidence_updates_session_without_empty_inference(tmp_path,
     webui._State.cfg = {"crawler": {"user_data_dir": str(tmp_path)},
                         "output": {"db_path": str(tmp_path / "x.db")}}
     webui._State.logger = logging.getLogger("test-v288")
+    # 健康证据来自真实 monitor.log；本测试只验证「探针明细」的推理边界，
+    # 不能让本机日志里恰好存在的途牛明细把断言顶成 available。
+    monkeypatch.setattr(webui, "_health_state",
+                        lambda *a, **k: {"evidence": {}})
     webui._PROBE_AUTH.clear()
     try:
         # empty/calendar-only must never be recorded as session evidence

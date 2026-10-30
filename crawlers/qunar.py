@@ -217,6 +217,11 @@ class QunarCrawler(BaseCrawler):
         # (from_city, to_city, date) -> {"min": 阈值}，main.py 按查询注入；
         # 幻影低价恰好落在达标线附近时单采样不可信（见 _fetch_pc）
         self.threshold_hints = {}
+        # (fc|tc|date) -> 国际列表 1999/8 连续未放行次数（r385 A/B：
+        # 单次=间歇放行，连续≥2 才疑会话失效）
+        self._qn1999_streak = {}
+        # (fc|tc|date) -> 是否已在本轮做过短退避重试（只重试一次）
+        self._qn1999_retried = {}
 
     CITY_NAME = {
         "SZX": "深圳", "KMG": "昆明", "PEK": "北京", "BJS": "北京",
@@ -258,6 +263,10 @@ class QunarCrawler(BaseCrawler):
     LOGIN_URL = "https://user.qunar.com/passport/login.jsp"
     # H5 机票首页：停服后的用户入口（自动取数仍走 URL_TPL 列表页）。
     H5_HOME = "https://touch.qunar.com/h5/flight/"
+    # 预热入口（L1/L3）：先打 H5 首页让风控 JS 下发 cookie，再直捣深链
+    warmup_url = H5_HOME
+    # 预热成效判据：这几个风控 cookie 落下来才算"真的被当成正常会话"
+    RISK_COOKIES = ("QN1", "QunarGlobal", "QN205", "QN277")
 
     def login_url(self) -> str:
         return self.LOGIN_URL
@@ -268,6 +277,9 @@ class QunarCrawler(BaseCrawler):
     # 冷却期类级共享（多查询间生效），拿到数据即重置
     _MIN_GAP_S = 8                 # 相邻查询礼貌间隔（登录态实测零限流，20→12→8；失败有阶梯退避兜底）
     _BACKOFF_S = (90, 180, 300)    # 疑似限流的阶梯退避
+    # r385：国际列表 1999 单次间歇放行的同轮短退避（A/B 实测 1.5 分钟
+    # 内自愈；取 45s 兼顾"够它放行"与"不拖死整轮"）
+    INTL_1999_RETRY_S = 45
     _last_done_ts = 0.0
     _cooldown_until = 0.0
 
@@ -499,6 +511,17 @@ class QunarCrawler(BaseCrawler):
                     "（请在配置页「渠道登录」重新登录 qunar）")
                 return []
             back = self._BACKOFF_S[attempt]
+            # 整体门拒（r404）：通道级拒绝不是会话失效，也不值得在同轮
+            # 阶梯退避连打（实测四条航线一字不差同文案 → 重试注定同果，
+            # 只会白打 3 轮 × 每条日期）。更关键的是别置 login_suspect：
+            # 那会让界面显示「会话失效，建议重登」，把用户推去重登一个
+            # 完好的会话——与 r397 要分的"该重登 / 该重试"同一类错误。
+            _gate = dict(getattr(self, "last_soft_reject", None) or {})
+            if _gate.get("kind") == "blanket_gate":
+                self.logger.warning(
+                    "[qunar] 整体门拒在案（%s），跳过退避重试；"
+                    "不判会话失效", str(_gate.get("note"))[:40])
+                return []
             self.logger.warning("[qunar] 三路径空结果——qunar 已于 09-12 起对"
                                 "未登录会话软性返回空列表（低价日历仍出价）；"
                                 "请在配置页「渠道登录」重新登录 qunar。先按限流重试 %ds（第 %d 次）",
@@ -570,17 +593,53 @@ class QunarCrawler(BaseCrawler):
         # H5 先行；匿名/失效会话 H5 空结果时不再把每日期 ~72s 耗在
         # PC 死入口上，直接走 token 直连。PC 探测保留为显式开关。
         self._last_challenge = None
+        # 逐日期复位（r398）：`_last_no_result` 原先只在 fetch() 开头清一次，
+        # 于是"上一个日期确认无航班"会把本日期任何无名失败都染成 empty。
+        # empty 的语义是"站点明确说没票"，被污染后一个真登录墙会被说成
+        # 无票——既藏了"该重登"，也让 0 行看起来合理。
+        self._last_no_result = False
+        self._last_no_evidence = False
+        # 门拒证据同样逐日期/逐路径复位（r400）：不重置会像 r398 的
+        # no_result 一样把上一条路径的判定漏到这条头上。
+        self.last_soft_reject = {}
         got = self._fetch_via_browser(from_city, to_city, date)
         _sig = getattr(self, "_last_challenge", None)
+        # 账本记的是"这条路径打了哪个地址"（r396）：H5 与 API 用的不是
+        # 同一个 URL，出问题时必须能直接点开/复现，不靠截图猜。
+        _h5_url = self.URL_TPL.format(
+            from_name=urllib.parse.quote(
+                self.CITY_NAME.get(from_city.upper(), from_city)),
+            to_name=urllib.parse.quote(
+                self.CITY_NAME.get(to_city.upper(), to_city)),
+            date=date,
+        )
+        # 原站"无符合条件的航班"是明确业务空，不是会话失效：即使本轮
+        # 另有 login_suspect（可能来自上一轮/另一域），也不得覆盖成 login，
+        # 否则会误触发登录冷却与重登提示。
+        _nores = bool(getattr(self, "_last_no_result", False))
+        # 什么都拿回来（r400）：无响应、无正文、无任何证据。这不能算
+        # "真无票"，按 error 记，让人去看现场。
+        _noev = bool(getattr(self, "_last_no_evidence", False))
+        _soft_h5 = dict(getattr(self, "last_soft_reject", None) or {})
+        # 末位兜底也是 error（r403）：走到这里说明既没拿到数据，也没有
+        # 无票/门拒/登录/无证据中的任何一种证据。此时"empty"（真无票）
+        # 是凭空断言——r403 的结构化守卫把它钉死：empty 必须由"明确
+        # 无票"支撑，不能是层层 else 的最后落点。
         _h5_status = ("ok" if got else (_sig.status if _sig else
-                       ("login" if QunarCrawler.login_suspect else "empty")))
+                       ("empty" if _nores else
+                        ("soft_reject" if _soft_h5 else
+                         ("login" if QunarCrawler.login_suspect
+                          and not _noev else "error")))))
         self.path_note(
             "H5", _h5_status,
-            rows=len(got[1]) if got else 0, date=date,
+            rows=len(got[1]) if got else 0, date=date, url=_h5_url,
             detail=(_sig.detail if _sig else
-                    ("原站返回无符合条件的航班（可能受指纹 SDK/风控环境影响）"
-                     if getattr(self, "_last_no_result", False)
-                     else "touch.qunar.com H5 列表")))
+                    (_soft_h5.get("note") if _soft_h5 else
+                     ("原站返回无符合条件的航班（可能受指纹 SDK/风控环境影响）"
+                      if _nores else
+                      ("H5 未拿到任何证据（无响应/空正文/无风控信号），"
+                       "按错误记录，不代表无票" if _noev
+                       else "touch.qunar.com H5 列表")))))
         if got is not None:
             self.logger.info("[qunar] H5 浏览器命中（完整明细）")
             return got
@@ -604,17 +663,30 @@ class QunarCrawler(BaseCrawler):
         else:
             self.logger.info("[qunar] H5 未命中，跳过已停服的 PC，回退 httpx")
         self._last_challenge = None
+        # 换路径即换证据（r398）：API 走的是另一条请求，不能继承 H5 刚才
+        # 判出的 "no-result"。实测库里有 18 行 `API/login` 却写着
+        # 「原站返回无符合条件的航班」——那是 H5 的判定漏到了 API 头上。
+        self._last_no_result = False
+        self.last_soft_reject = {}
         got = self._fetch_via_httpx(from_city, to_city, date)
         _sig = getattr(self, "_last_challenge", None)
+        _nores = bool(getattr(self, "_last_no_result", False))
+        _soft = dict(getattr(self, "last_soft_reject", None) or {})
+        # 同 H5：末位兜底记 error，不凭空断言无票（r403）。
         _api_status = ("ok" if got else (_sig.status if _sig else
-                        ("login" if QunarCrawler.login_suspect else "empty")))
+                        ("empty" if _nores else
+                         ("soft_reject" if _soft else
+                          ("login" if QunarCrawler.login_suspect
+                           else "error")))))
         self.path_note(
             "API", _api_status,
             rows=len(got[1]) if got else 0, date=date,
+            url=str(getattr(self, "API_URL", "") or ""),
             detail=(_sig.detail if _sig else
-                    ("原站返回无符合条件的航班（可能受指纹 SDK/风控环境影响）"
-                     if getattr(self, "_last_no_result", False)
-                     else "touchInnerList token 直连")))
+                    (_soft.get("note") if _soft else
+                     ("原站返回无符合条件的航班（可能受指纹 SDK/风控环境影响）"
+                      if getattr(self, "_last_no_result", False)
+                      else "touchInnerList token 直连"))))
         if _sig:
             self._query_challenge = _sig
         return got
@@ -1494,18 +1566,34 @@ class QunarCrawler(BaseCrawler):
         cookies = dict(token["cookies"])
 
         try:
-            r = httpx.post(
+            # 直连接口走 curl_cffi（Chrome TLS/JA3 指纹）；没装依赖自动退 httpx
+            from core.net import post as _net_post
+            r = _net_post(
                 self.API_URL,
                 headers=headers,
-                content=json.dumps(body, ensure_ascii=False, separators=(",", ":")),
+                payload=json.dumps(body, ensure_ascii=False,
+                                   separators=(",", ":")).encode("utf-8"),
                 cookies=cookies,
                 timeout=25,
+                impersonate=self.config.get("tls_impersonate", "chrome"),
             )
         except Exception as e:
             self.logger.warning("[qunar] httpx 请求异常: %s", e)
             return None
 
         if r.status_code != 200:
+            # 直连路径也要听服务端的 Retry-After（浏览器路径由 base 的
+            # 响应监听负责；httpx 不走 page，得自己读头）
+            try:
+                from core.pacing import parse_retry_after as _pra
+                _ra = _pra((r.headers or {}).get("retry-after"))
+                if _ra:
+                    self.retry_after_s = _ra
+                    self.logger.warning(
+                        "[qunar] 服务端 Retry-After=%ds（HTTP %d）",
+                        _ra, r.status_code)
+            except Exception:
+                pass
             self.logger.warning("[qunar] httpx status=%d", r.status_code)
             return None
 
@@ -1524,6 +1612,30 @@ class QunarCrawler(BaseCrawler):
 
         flights = self._parse_response_flights(text)
         if not flights:
+            # 1999「没有查询到符合条件的航班」在 httpx 这条路上**不可信**
+            # （r398b）：实测同一 token 连打四条已知有票的航线（SHA→BKK
+            # 窗历/浏览器价 ¥662、SHA→HAK、HAK→SHA、SHA→NRT），四条的
+            # 回应一字不差都是 code=-1 + 该措辞 + data=null。真无票不会
+            # 恰好四条全无、且恰与我们别处拿到的价矛盾——这是 token 直连
+            # 形态被整体门拒，措辞只是门拒文案。
+            # 所以：既不记 empty（会谎报"真无票"，与已采到的价自相矛盾），
+            # 也不记 login（会催人重登一个 H5 明明在出数的会话），按
+            # soft_reject「门拒、预热可解」记——事实如此，处置也对。
+            _blank = self._blanket_gate_text(text)
+            if _blank:
+                self.last_soft_reject = {"kind": "blanket_gate",
+                                         "note": _blank}
+                self.logger.info(
+                    "[qunar] httpx 整体门拒 code=3（跨航线同文案）——"
+                    "按门拒记录，不当无票")
+                return None
+            if self._no_result_text(text):
+                self.last_soft_reject = {
+                    "kind": "token_gate",
+                    "note": "httpx 直连整体门拒（1999 文案不可信）"}
+                self.logger.info(
+                    "[qunar] httpx 1999 文案不可信（跨航线同文案）——按门拒记录")
+                return None
             # 碎片响应仅价格无明细：裸价曾直入阈值告警并污染去抖基准
             # （0.5x 幻觉价守卫依赖明细，此路径完全裸奔）——整单拒收走重试。
             # 起分片形态已可还原，此路只剩真截断/风控形态
@@ -1533,8 +1645,55 @@ class QunarCrawler(BaseCrawler):
         # 重摇、且不再参与取价——散点与明细两套来源曾造出 1-2 倍内的
         # 幻影低价窗口（渠道指纹比 p50=0.978 低价侧漂移的源头之一）
         prices = sorted({f["price"] for f in flights if f.get("price")})
+        if not prices:
+            # 有行但全无价（r401）：`min(())` 抛 ValueError，异常穿过
+            # `_fetch_one` 后被外层记成 error 且**不带任何证据**——实测
+            # 2026-10-27 09:30 两条 SHA→HAK 就长这样：H5 empty、
+            # API「ok 但 0 行、note 却是无票文案」，读者无法判断到底
+            # 是没票、被拦、还是解析挂了。按"有行无价"这一事实记账。
+            self.last_soft_reject = {
+                "kind": "no_price",
+                "note": "httpx 解析出 %d 行但均无价格，未落价" % len(flights)}
+            self.logger.warning(
+                "[qunar] httpx 明细行 %d 条但无任何价格，拒落价",
+                len(flights))
+            return None
         self.logger.info("[qunar] httpx 明细价格列表: %s", prices)
         return float(min(prices)), flights
+
+    @staticmethod
+    def _blanket_gate_text(text: str):
+        """整体门拒识别（r400）：返回门拒文案或空串。
+
+        实测（2026-10-27 08:0x，同一会话连打四条航线）：
+
+        ```
+        SHA→BKK(ret 有票，2h 前刚从同渠道采到 ¥662)  code=3
+        SHA→HKG                                      code=3
+        SHA→NRT                                      code=3
+        SHA→TYO                                      code=3
+        四条回应一字不差：{"ret":false,"code":3,
+                          "msg":"当前搜索无航线，请更换城市重新搜索"}
+        ```
+
+        真"查了没票"不会四条全无、更不会与刚采到的价矛盾。`code=3` +
+        这句文案是**通道级门拒**（换航线、换城市名都不变），不是航线属性，
+        也不是"今天真没航班"。
+
+        记成 empty 会让读者相信"确实没票"而停止关注；记成 login 会催人
+        重登一个正在出数的会话。按 soft_reject（门拒、预热可解、可自愈）
+        记才是事实。
+        """
+        try:
+            obj = json.loads(text)
+        except Exception:
+            return ""
+        if not isinstance(obj, dict):
+            return ""
+        msg = str(obj.get("msg") or "")
+        if obj.get("code") == 3 and "无航线" in msg:
+            return msg[:80]
+        return ""
 
     @staticmethod
     def _no_result_text(text: str) -> bool:
@@ -1662,7 +1821,7 @@ class QunarCrawler(BaseCrawler):
             page.on("response", on_response)
 
             try:
-                page.goto(url, wait_until="load")
+                page.goto(url, wait_until="load", referer=self.H5_HOME)
                 # 轮询等待请求+响应都拿到
                 for _ in range(12):
                     page.wait_for_timeout(2000)
@@ -1696,7 +1855,17 @@ class QunarCrawler(BaseCrawler):
 
             # 无明细时先认风控/登录证据，避免把验证页当空结果。
             if not flights:
+                _body_text = ""
                 for t in snap["response_texts"]:
+                    _blank = self._blanket_gate_text(t)
+                    if _blank:
+                        # 通道级门拒（r400）：不是无票，也不是登录墙
+                        self.last_soft_reject = {
+                            "kind": "blanket_gate", "note": _blank}
+                        self.logger.info(
+                            "[qunar] H5 整体门拒 code=3（跨航线同文案）——"
+                            "按门拒记录，不当无票")
+                        continue
                     if self._no_result_text(t):
                         self._last_no_result = True
                         continue
@@ -1717,6 +1886,21 @@ class QunarCrawler(BaseCrawler):
                         self._last_challenge = _sig
                         if _sig.status == "login":
                             QunarCrawler.login_suspect = True
+                # 无证据的空（r400）：一没拦到响应、二页面正文是空的、
+                # 三没有任何风控/无票证据。这既不是"站点说没票"，也不是
+                # 明确的登录墙/人机验证——它只是"这一趟什么也没拿回来"
+                # （导航失败、白屏、超时后页面还在转）。此前它落进
+                # `login_suspect ? login : empty` 的 else 分支被记成 empty，
+                # 即向读者宣告"今天确实没有航班"。
+                # 实测（SHA→HKG 2026-11-16）：H5 返回 None、body 空、
+                # 无 challenge，被记 empty。真无票的概率不该由"没证据"
+                # 来支撑——按 error 记（基础设施层没拿到东西），让人去看
+                # 现场而不是相信一个凭空的"无票"。
+                if (getattr(self, "_last_challenge", None) is None
+                        and not getattr(self, "_last_no_result", False)
+                        and not snap["response_texts"]
+                        and not _body_text):
+                    self._last_no_evidence = True
 
             # 导出 cookies
             try:
@@ -1765,6 +1949,67 @@ class QunarCrawler(BaseCrawler):
         → 裸码三级回退。"""
         c = str(code).upper()
         return self.CITY_NAME.get(c) or city_short_of(c) or code
+
+    def _intl_list_once(self, fc: str, tc: str, date: str) -> list:
+        """单日国际列表再取一次（r385：1999 单次间歇放行后的同轮重试）。
+
+        与主流程同形：新开页面、拦 touchInterList、滚动触发、解析首份
+        有效报文。返回航班列表；仍 1999/无数据返回 []（调用方按空处理，
+        不会把"重试失败"写成成功）。独立 try/except：重试失败绝不
+        打断外层日期循环。
+        """
+        bodies: list = []
+        url = self.INTL_URL_TPL.format(
+            from_name=urllib.parse.quote(self._intl_city_name(fc)),
+            to_name=urllib.parse.quote(self._intl_city_name(tc)),
+            date=date)
+
+        def _cap(route):
+            try:
+                resp = route.fetch()
+                try:
+                    bodies.append(resp.text())
+                except Exception:
+                    pass
+                route.fulfill(response=resp)
+            except Exception:
+                try:
+                    route.continue_()
+                except Exception:
+                    pass
+
+        try:
+            with self.browser() as ctx:
+                page = self.new_page(ctx)
+                page.route("**/*touchInterList*", _cap)
+                page.goto(url, wait_until="load")
+                # 与主流程同律：等 asyncComplete 收尾（首包恒 60 条）
+                for _ in range(16):
+                    page.wait_for_timeout(1500)
+                    try:
+                        page.mouse.wheel(0, 2000)
+                    except Exception:
+                        pass
+                    _st = (self._intl_async_state(bodies[-1])
+                           if bodies else None)
+                    if _st and _st["done"]:
+                        break
+                try:
+                    page.close()
+                except Exception:
+                    pass
+            # 重试页已关：_last_page 复位，否则外层收尾截图/取 URL
+            # 会打到已关闭的页面（TargetClosedError 噪音）
+            self._last_page = None
+            for t in bodies:
+                flights, risk = self._parse_intl_response(t)
+                if flights:
+                    self._stamp_intl(flights, fc, tc)
+                    return flights
+        except Exception as e:
+            self._last_page = None
+            self.logger.warning("[qunar][intl] %s 同轮重试异常: %s", date, e)
+        return []
 
     # r336 T1/T2：intl filter 字典面的行级 join 词表。白名单收口
     # 「宁缺勿错」：渠道未来新增同槽词（如「需落地签」）不自动透传，
@@ -1827,6 +2072,61 @@ class QunarCrawler(BaseCrawler):
                         if city:
                             out_city[city] = hits[0]
         return out_code, out_city, out_lcc
+
+    @staticmethod
+    def _intl_async_state(text: str) -> dict:
+        """单包 → {n, tcount, done}。解析失败按 n=0/done=False。"""
+        try:
+            outer = json.loads(text)
+        except Exception:
+            return {"n": 0, "tcount": None, "done": False}
+        data = outer.get("data") if isinstance(outer, dict) else None
+        if isinstance(data, str):
+            try:
+                data = QunarCrawler._reassemble_h5_data(data)
+            except Exception:
+                data = None
+        if not isinstance(data, dict):
+            return {"n": 0, "tcount": None, "done": False}
+        fl = data.get("flights") or data.get("routes") or []
+        return {"n": len(fl) if isinstance(fl, list) else 0,
+                "tcount": data.get("tcount"),
+                "done": data.get("asyncComplete") is True}
+
+    @classmethod
+    def _parse_intl_packs(cls, bodies) -> tuple:
+        """r387：国际列表是**流式分页**——每包 60 条、带 tcount/
+        asyncComplete，逐包追加（实测 SHA→SIN 8 包 / tcount 133）。
+        旧实现只解析首个非空包就 break，等于每轮只看到 60 条、漏掉
+        大半；而且最低价也可能落在后面几包里。
+
+        返回 (flights, risk, meta)。按 (code, depTime, arrTime,
+        transCity) 去重后保序（同班多政策已在行内取低价）。
+        """
+        all_rows, risk, seen_pk = [], "", set()
+        worst = ""          # 首个非空包的风控信号（有则整轮按它分档）
+        meta = {"packs": 0, "tcount": None, "done": False, "raw": 0}
+        for t in bodies or []:
+            fl, rk = cls._parse_intl_response(t)
+            st = cls._intl_async_state(t)
+            if st["n"] or rk:
+                meta["packs"] += 1
+            if st["tcount"] is not None:
+                meta["tcount"] = st["tcount"]
+            if st["done"]:
+                meta["done"] = True
+            if rk and not worst:
+                worst = rk
+            for f in fl or []:
+                k = (f.get("code"), f.get("depTime"), f.get("arrTime"),
+                     f.get("transCity"))
+                if k in seen_pk:
+                    continue
+                seen_pk.add(k)
+                all_rows.append(f)
+        risk = worst
+        meta["raw"] = len(all_rows)
+        return all_rows, risk, meta
 
     @classmethod
     def _parse_intl_response(cls, text: str) -> tuple:
@@ -2156,13 +2456,46 @@ class QunarCrawler(BaseCrawler):
                 page.route("**/*touchInterList*", _cap)
                 try:
                     page.goto(url, wait_until="load")
-                    for _ in range(12):
-                        page.wait_for_timeout(2000)
+                    # r387：等**流式分页收尾**再走（asyncComplete=True），
+                    # 不能"拿到首包就 break"——首包固定 60 条，尾包才齐
+                    # tcount（实测 8 包 / 133 条）。无首包时也最多等 24s。
+                    # 收尾判据用「唯一行数稳定」而不是只看末包：
+                    # 渠道会先给 60 行、过一会儿再补若干新行，末包的
+                    # asyncComplete 有时先到（实测同一航线 60/71 两种），
+                    # 只看 done 会早退。行数连续 3 拍不变才走。
+                    def _uniq_n():
+                        seen, n = set(), 0
+                        for _b in bodies:
+                            fl, _rk = self._parse_intl_response(_b)
+                            for _f in fl:
+                                _k = (_f.get("code"), _f.get("depTime"),
+                                      _f.get("arrTime"),
+                                      _f.get("transCity"))
+                                if _k not in seen:
+                                    seen.add(_k)
+                                    n += 1
+                        return n
+                    _last, _stable, _done_at = -1, 0, None
+                    for _ in range(18):
+                        page.wait_for_timeout(1500)
                         try:
-                            page.mouse.wheel(0, 1500)
+                            page.mouse.wheel(0, 2600)
                         except Exception:
                             pass
-                        if bodies:
+                        _st = (self._intl_async_state(bodies[-1])
+                               if bodies else None)
+                        if _st and _st["done"] and _done_at is None:
+                            _done_at = len(bodies)
+                        _now = _uniq_n()
+                        if _now == _last:
+                            _stable += 1
+                        else:
+                            _last, _stable = _now, 0
+                        # 已收尾且行数连续 2 拍不变 → 真的齐了
+                        if _done_at is not None and _stable >= 2:
+                            break
+                        # 从未出包：9s 后放弃，别干等
+                        if not bodies and _stable >= 6:
                             break
                 except Exception as e:
                     self.logger.warning("[qunar][intl] 页面异常: %s", e)
@@ -2234,11 +2567,13 @@ class QunarCrawler(BaseCrawler):
                         self.logger.warning(
                             "[qunar][intl] 详情增强失败(不影响主流程): %s", e)
 
-            flights, risk = [], ""
-            for t in bodies:
-                flights, risk = self._parse_intl_response(t)
-                if flights or risk:
-                    break
+            flights, risk, _pm = self._parse_intl_packs(bodies)
+            if _pm["tcount"] and _pm["raw"]:
+                self.logger.info(
+                    "[qunar][intl] %s 流式分页 %d 包 / 去重后 %d 行"
+                    "（渠道 tcount=%s%s；后续包常为同批重复流，行数不=包数×60）",
+                    date, _pm["packs"], _pm["raw"], _pm["tcount"],
+                    "" if _pm["done"] else "，未收尾")
             self._dump_raw_text(bodies[0] if bodies else "",
                                 f"intl_{fc}_{tc}_{date}")
             if not flights and not risk:
@@ -2250,19 +2585,90 @@ class QunarCrawler(BaseCrawler):
                 self._sleep()
                 continue
             if risk == "login":
-                # 登录态卡片分层「会话可能失效」同款证据（国内 313 同律）
-                QunarCrawler.login_suspect = True
-                self.path_note("H5", "login", date=date,
-                               detail="国际列表 1999/8 未登录硬拒")
-                # 1999 硬拒不设 30 分钟冷却（r339 观测轮 2 定谳：cooldown
-                # sleep 在 worker 线程内同步等 1776s——错峰等待即栅栏内
-                # 泊车，每查询吃满 900s 路由栅栏实录 8 条/日）。硬拒面
-                # 已由 login_suspect 砍退避门（fetch 外壳单次放弃）+
-                # 下轮调度自然承接，30min 压制面的「1999 风暴」防御
-                # 对象已消失；「成功一次即自清」复位律不变
-                self.logger.warning(
-                    "[qunar][intl] %s 未登录硬拒（1999/8）——请在配置页"
-                    "「渠道登录」重登 qunar；本轮放弃不压制", date)
+                # r385 受控 A/B（同 profile、零介入、6 轮 × SHA→LHR）：
+                # 1999 只在首轮出现，紧接着 5 轮全部出数——**同一会话
+                # 未重登就自愈**。真登录墙不会自愈，故 1999 单次是
+                # "间歇放行"而非"会话失效"。
+                #
+                # 旧口径把 1999 一律判 login：置 login_suspect + 15 分钟
+                # 登录冷却 + 提示重登，等于把 1.5 分钟能好的事罚成 15
+                # 分钟不采，并把用户推去做无效重登（48h 账本 60 次）。
+                #
+                # 新口径按**连续次数**分层：单次=soft_reject（不冷却、
+                # 下一轮自然重试）；同航线连续 ≥2 次才升 login（那才像
+                # 真会话失效）。真登录页文本（_risk_signal 命中
+                # login_signal 的 passport/请登录字样）不受此影响。
+                _key = "%s|%s|%s" % (fc, tc, date)
+                self._qn1999_streak[_key] = self._qn1999_streak.get(
+                    _key, 0) + 1
+                _n = self._qn1999_streak[_key]
+                if _n >= 2:
+                    QunarCrawler.login_suspect = True
+                    self.path_note("H5", "login", date=date,
+                                   detail="国际列表 1999/8 连续 %d 次"
+                                          "未放行（疑会话失效）" % _n)
+                    # 撤掉本轮早先那条 soft_reject（r408）：升级成 login 时
+                    # 若把"单次间歇放行（免登录冷却）"留在账上，同一次查询
+                    # 就同时写着"单次、不用管"和"连续 2 次、请重登"——两条
+                    # 互斥结论并列。实测 2026-10-27 10:39:22 同一
+                    # attempt_id 正是如此。只撤本轮同日那条，不碰历史。
+                    _kept = [p for p in self.paths[:-1]
+                             if not (p.get("path") == "H5"
+                                     and p.get("date") == date
+                                     and p.get("status") == "soft_reject")]
+                    self.paths = _kept + [self.paths[-1]]
+                    self.logger.warning(
+                        "[qunar][intl] %s 1999/8 连续 %d 次未放行——疑会话"
+                        "失效，请在配置页「渠道登录」重登 qunar", date, _n)
+                else:
+                    self.path_note("H5", "soft_reject", date=date,
+                                   detail="国际列表 1999/8 间歇放行（单次，"
+                                          "免登录冷却）")
+                    self.logger.info(
+                        "[qunar][intl] %s 1999/8 单次间歇放行（r385 A/B："
+                        "同会话 1.5 分钟后自愈）——不冷却、不提重登，"
+                        "%.0fs 后同轮重开页面再试一次",
+                        date, self.INTL_1999_RETRY_S)
+                    # A/B 显示自愈只要 1.5 分钟：与其等下一轮（监控周期
+                    # 5–30 分钟），不如本轮内短退避重开一次页面。只重试
+                    # 一次——连续性已计数，二次仍 1999 会落 login 分支。
+                    _rk = "%s|%s|%s" % (fc, tc, date)
+                    if not self._qn1999_retried.get(_rk):
+                        self._qn1999_retried[_rk] = 1
+                        time.sleep(self.INTL_1999_RETRY_S)
+                        _again = self._intl_list_once(fc, tc, date)
+                        if _again:
+                            # 同轮重试拿到数：撤掉刚才的 soft_reject 记账，
+                            # 按真实成功落账（否则本轮账上会同时有"软拒"
+                            # 和"出数"，成功率被自己压低）
+                            if (self.paths and self.paths[-1].get("date")
+                                    == date
+                                    and self.paths[-1].get("status")
+                                    == "soft_reject"):
+                                self.paths.pop()
+                            self._qn1999_streak.pop(_rk, None)
+                            self.path_note(
+                                "H5", "ok", rows=len(_again), date=date,
+                                detail="touch.qunar.com 国际列表（1999 "
+                                       "同轮重试后放行）")
+                            best = min(_again, key=lambda f: f["price"])
+                            self.logger.info(
+                                "[qunar][intl] %s 1999 重试后放行：%d 行，"
+                                "最低 ￥%.0f", date, len(_again),
+                                best["price"])
+                            results.append(FlightPrice(
+                                platform=self.name,
+                                from_city=from_city, to_city=to_city,
+                                depart_date=date, price=float(best["price"]),
+                                airline=str(best.get("airlineCode") or ""),
+                                flight_no=str(best.get("code")
+                                              or "").split("/")[0],
+                                depart_time=best.get("depTime", ""),
+                                arrive_time=best.get("arrTime", ""),
+                                extra=json.dumps(_again,
+                                                 ensure_ascii=False),
+                            ))
+                            type(self).login_suspect = False
                 self._sleep()
                 continue
             if risk in ("slider", "captcha", "refresh"):
@@ -2276,7 +2682,17 @@ class QunarCrawler(BaseCrawler):
                 self._sleep()
                 continue
             if flights:
+                # 出数即证明会话可用：清该航线 1999 计数（连续语义复位）
+                self._qn1999_streak.pop("%s|%s|%s" % (fc, tc, date), None)
+                # 成功也记地址（r409）：与 r407 同律，这次是国际列表页，
+                # 带 depCity/arrCity/goDate——复现时参数一目了然。
                 self.path_note("H5", "ok", rows=len(flights), date=date,
+                               url=self.INTL_URL_TPL.format(
+                                   from_name=urllib.parse.quote(
+                                       self._intl_city_name(fc)),
+                                   to_name=urllib.parse.quote(
+                                       self._intl_city_name(tc)),
+                                   date=date),
                                detail="touch.qunar.com 国际列表")
                 self._stamp_intl(flights, fc, tc)
                 # R53 详情增强合并：interdetail 四维落最低行（_dkey=
@@ -2308,7 +2724,8 @@ class QunarCrawler(BaseCrawler):
                 self.logger.warning(
                     "[qunar][intl] %s 未解析到价格（响应 %d 份%s）",
                     date, len(bodies), f"，风控态 {risk}" if risk else "")
-                self.path_note("H5", "empty", date=date,
+                # 有响应但解析不出价（r403）：不断言无票，记 error 供排查。
+                self.path_note("H5", "error", date=date,
                                detail="国际列表有响应但未解析出价格")
             self._sleep()
         return results

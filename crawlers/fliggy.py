@@ -14,11 +14,13 @@
 """
 import json
 import logging
+import os
 import re
 import time
 from typing import List
 
 import httpx
+from core import net as _net
 
 from .base import BaseCrawler, iata2
 from .challenge import classify_text
@@ -43,6 +45,9 @@ class FliggyH5Login(BaseCrawler):
 class FliggyCrawler(BaseCrawler):
     name = "fliggy"
     use_mobile = False  # 桌面 UA（PC SSR 页面）
+    # 预热入口（L3）：PC 首页让 baxia 风控下发 cookie；H5 通道走自己的槽位
+    warmup_url = "https://www.fliggy.com/"
+    RISK_COOKIES = ("cna", "_m_h5_tk", "cookie2")
 
     URL_TPL = ("https://sjipiao.fliggy.com/flight_search_result.htm"
                "?tripType=0&depCity={fc}&arrCity={tc}&depDate={d}"
@@ -214,8 +219,13 @@ class FliggyCrawler(BaseCrawler):
             _status = ("ok" if flights else
                        ("blocked" if _blocked else
                         ("login" if _login else "empty")))
+            # 成功也记地址（r409/r409b）：用 _fetch_pc 记下的列表页 URL。
+            # 浏览器上下文已关，页面取不到；这里只用它自己构造的那个值，
+            # 取不到就留空（宁缺勿错，不编造）。
+            _pg_url = str(getattr(self, "_last_list_url", "") or "")
             self.path_note("PC", _status,
                            rows=len(flights), date=date,
+                           url=_pg_url,
                            detail=("人机验证页，需在渠道登录窗口完成验证"
                                    if _blocked else
                                    ("登录墙/请登录" if _login else
@@ -295,7 +305,9 @@ class FliggyCrawler(BaseCrawler):
         报错，须调用方过滤），失败返回 None。ret_date（R15）：往返参
         经 _calendar_params 单源（tripType=1+backDate）。"""
         try:
-            with httpx.Client(timeout=25, follow_redirects=True,
+            with _net.new_client(
+                    self.config.get("tls_impersonate", "chrome"),
+                    timeout=25, follow_redirects=True,
                               proxy=(self.proxy or None),
                               headers={
                                   # 校准 R1 实证：无 Referer 被 WAF 拒
@@ -461,15 +473,24 @@ class FliggyCrawler(BaseCrawler):
                         self.logger.warning(
                             "[fliggy][intl] %s 列表空/未登录（%s→%s）",
                             date, fc, tc)
+                    # r388：登录判定只认真登录墙（passport/请登录/扫码登录…）。
+                    # 旧正则 (登录|扫码|login) 打整页文本——页头「登录/注册」
+                    # 与页脚「扫码下载飞猪 App」恒命中，于是**任何空结果都会
+                    # 被记成 login**，触发 15 分钟登录冷却并提示用户重登，
+                    # 而页面其实已登录（有「退出/我的订单」）。与国内路径
+                    # 同用 classify_text 单源判据。
                     try:
                         _body = page.inner_text("body")[:800]
                     except Exception:
                         _body = ""
-                    _login = bool(re.search(r"登录|扫码|passport|login",
-                                            str(page.url) + " " + _body))
+                    _sig = classify_text(_body, str(page.url))
+                    _login = bool(_sig and _sig.status == "login")
+                    # 国际 PC 也记地址（r409c）：这条才是真实账本里
+                    # "fliggy PC" 的发布点；此前只有国内 _fetch_pc 记了。
                     self.path_note(
                         "PC", "ok" if rows else ("login" if _login else "empty"),
                         rows=len(rows), date=date,
+                        url=str(getattr(page, "url", "") or ""),
                         detail="sjipiao.fliggy.com 国际列表",
                         ms=int((time.time() - t0) * 1000))
                     self._debug_snapshot(
@@ -510,22 +531,46 @@ class FliggyCrawler(BaseCrawler):
       };
     })"""
 
+    @staticmethod
+    def _seg_n(tips: str) -> int:
+        """「2程航班」→ 2；无该串按中转卡片最小 2 段（有转城市即至少两段）。"""
+        m = re.search(r"(\d+)\s*程航班", str(tips or ""))
+        return int(m.group(1)) if m else 2
+
     @classmethod
     def _parse_intl_items(cls, items, date: str) -> list:
-        """国际列表 DOM 提取值 → extra 行；无航班号/时刻/正价一律丢。"""
+        """国际列表 DOM 提取值 → extra 行；无时刻/正价一律丢。
+
+        r386 实测：飞猪国际**中转卡片不给航班号**——行头是
+        「马来西亚亚航长途 等2家航司」（aria-label=航班号 的 span 里只有
+        航司名），后面还有「2程航班」+ 转城市 + 起降时刻 + 含税价。旧
+        实现对行头死抠 `航司 代码` 正则，判不中就整条丢弃：SHA→SIN 页面
+        82 张卡片里 68 张是中转，生产只存了 14 条直飞（中转全丢，价格
+        也只看到直飞那一档）。
+        现在中转卡片按「航司名 + 转城市 + 两时刻 + 含税价」如实建行，
+        `code` 留空（渠道不给就不编），`transfer/transCity` 置位；
+        解析不了的（无行头/无时刻/无价）仍然丢。
+        """
         out = []
         for it in items or []:
             if not isinstance(it, dict):
                 continue
             line = str(it.get("nameLine") or "").strip()
             m = re.match(r"^(.*?)\s*([A-Z0-9]{2}\d{3,4})\s*$", line)
-            if not m:
-                continue
-            name, code = m.group(1).strip(), m.group(2).upper()
             dep = str(it.get("depTime") or "").strip()
             arr = str(it.get("arrTime") or "").strip()
             if not (dep and arr):
                 continue
+            trans = " ".join(str(it.get("trans") or "").split())
+            segs = int(it.get("segs") or 1)
+            if m:
+                name, code = m.group(1).strip(), m.group(2).upper()
+            else:
+                # 中转卡片：行头只有航司名（可能带「等N家航司」）
+                name = re.sub(r"\s*等\s*\d+\s*家航司\s*$", "", line).strip()
+                if not name or not (trans or segs > 1):
+                    continue      # 既没航班号也不是中转 = 认不出，丢
+                code = ""
             raw_price = str(it.get("priceText") or "")
             if "机票价格" in raw_price:
                 raw_price = raw_price.split("机票价格")[-1]
@@ -556,7 +601,13 @@ class FliggyCrawler(BaseCrawler):
                 "depAirport": str(it.get("depAirport") or "").strip(),
                 "arrAirport": str(it.get("arrAirport") or "").strip(),
                 "totalDuration": str(it.get("duration") or "").replace("约", "").strip(),
-                "plane": tips, "price": price, "tax": tax,
+                # tips 对直飞是机型串（「中型机320」），对中转是段数
+                # 标记（「2程航班」）——写进 plane 会让机型列显示"2程航班"
+                "plane": ("" if (trans or segs > 1) else tips),
+                # 真实段数从 tips 的「N程航班」取（segs 是时间块计数，
+                # 对中转也恒为 1，不能当段数）
+                "segments": (cls._seg_n(tips) if (trans or segs > 1) else 0),
+                "price": price, "tax": tax,
                 "leftTickets": qty,
                 "transfer": bool(trans) or segs > 1,
                 "transCity": trans, "intl": 1,
@@ -564,7 +615,10 @@ class FliggyCrawler(BaseCrawler):
             })
         uniq = {}
         for r in out:
-            k = (r["code"], r["depTime"], r["arrTime"], r["price"])
+            # 中转卡片无航班号（code 为空）：去重键补航司名+转城市，
+            # 否则「同一起飞时刻的不同中转方案」会被压成一条
+            k = (r["code"] or r["name"], r["transCity"],
+                 r["depTime"], r["arrTime"], r["price"])
             uniq.setdefault(k, r)
         return list(uniq.values())
 
@@ -626,6 +680,9 @@ class FliggyCrawler(BaseCrawler):
             fc=fc, tc=tc, d=date,
             fn=urllib.parse.quote(_Q.CITY_NAME.get(fc, fc)),
             tn=urllib.parse.quote(_Q.CITY_NAME.get(tc, tc)))
+        # 记下本次真正请求的列表页地址（r409b）：上下文退出后页面已关，
+        # `_last_page.url` 取不到，只能用构造它的这个值。
+        self._last_list_url = url
         texts = set()
         flights = []
         share_map = {}
@@ -633,7 +690,8 @@ class FliggyCrawler(BaseCrawler):
         with self.browser() as ctx:
             page = self.new_page(ctx)
             try:
-                page.goto(url, wait_until="load", timeout=40000)
+                page.goto(url, wait_until="load", timeout=40000,
+                          referer="https://www.fliggy.com/")
                 last_len, stale = 0, 0
                 for _ in range(8):   # 虚拟列表逐屏收集，收敛即提前退出
                     page.wait_for_timeout(3000)

@@ -99,7 +99,10 @@ def test_tuniu_domestic_login_wall_and_session_injection_pins():
     assert "710114" in src and "国内接口 710114 请登录" in src
     assert "self._install_tac_cookies(client)" in src
     ui = pathlib.Path(webui.__file__).read_text(encoding="utf-8")
-    assert "tuniu:'国内需'" in ui
+    # 2026-10-27 起废弃「建议/国内需/国际需」分档：全渠道必须登录，
+    # 差异只在会话槽位。原来这条钉的是旧档位，已按新口径改写。
+    assert "tuniu:'必须'" in ui
+    assert "tuniu:'国内需'" not in ui
 
 
 def test_tongcheng_session_evidence_and_density_pins():
@@ -115,3 +118,107 @@ def test_tongcheng_session_evidence_and_density_pins():
     src = pathlib.Path(webui.__file__).read_text(encoding="utf-8")
     assert "近 14 天出发日均未采" in src and "data-bandexpand" in src
     assert "@media(max-height:980px)" in src and "srx-probe-on .srx-audit" in src
+
+
+# ---- r386：飞猪中转卡片无航班号（实测行头「马来西亚亚航长途 等2家航司」）
+
+def _transfer(**over):
+    base = _item(nameLine="马来西亚亚航长途 等2家航司", tips="2程航班",
+                 depTime="01:35", arrTime="10:20", cross="",
+                 priceText="机票价格739元", priceNum="含税￥739",
+                 taxText="", quantity="少量", trans="吉隆坡", segs=2)
+    base.update(over)
+    return base
+
+
+def test_transfer_card_without_flight_no_is_kept():
+    """r386：SHA→SIN 页面 82 张卡片里 68 张中转，旧解析全丢只存 14 条直飞。"""
+    rows = FliggyCrawler._parse_intl_items([_transfer()], "2026-11-16")
+    assert len(rows) == 1, "中转卡片不得因缺航班号被丢"
+    r = rows[0]
+    assert r["code"] == "", "渠道不给航班号就不编"
+    assert r["name"] == "马来西亚亚航长途", "去掉「等2家航司」尾巴"
+    assert r["transfer"] is True and r["transCity"] == "吉隆坡"
+    assert r["price"] == 739 and r["depTime"] == "01:35"
+    assert r["arrTime"] == "10:20"
+
+
+def test_transfer_cards_same_dep_different_arr_not_deduped():
+    """同一航司同一起飞时刻的不同中转方案必须都保留。"""
+    rows = FliggyCrawler._parse_intl_items(
+        [_transfer(arrTime="10:20"), _transfer(arrTime="11:35"),
+         _transfer(arrTime="13:40")], "2026-11-16")
+    assert len(rows) == 3, [r["arrTime"] for r in rows]
+    assert sorted(r["arrTime"] for r in rows) == ["10:20", "11:35", "13:40"]
+
+
+def test_transfer_without_price_or_times_still_dropped():
+    """认不出/没时刻/没价的仍然丢——不当假行。"""
+    rows = FliggyCrawler._parse_intl_items([
+        _transfer(priceText="机票价格0元"),
+        _transfer(depTime="", arrTime=""),
+        _item(nameLine="", trans="", segs=1),   # 无行头也非中转
+    ], "2026-11-16")
+    assert rows == []
+
+
+def test_direct_card_unchanged():
+    rows = FliggyCrawler._parse_intl_items([_item()], "2026-11-16")
+    assert len(rows) == 1 and rows[0]["code"] == "9C7293"
+    assert rows[0]["transfer"] is False
+
+
+# ---- r386：无航班号的中转行不得被下游当成"日历行/非真实班次"
+
+def test_ui_and_backend_treat_timed_row_as_real_flight():
+    """前端 srxIsCal 与后端 _real_offer 都只认时刻。
+
+    曾额外要求 code：飞猪国际中转卡片不给航班号，会被标成日历行 /
+    非真实班次，于是"页面有中转"变成"页面没中转"。
+    """
+    import inspect
+    import webui
+    src = inspect.getsource(webui)
+    assert ("function srxIsCal(f){return !!f.isCal||!(f.depTime&&f.arrTime)}"
+            in src), "前端日历判据必须只看时刻"
+    assert "!(f.code&&f.depTime&&f.arrTime)" not in src, \
+        "不得再以 code 缺失判为日历行"
+
+
+def test_calendar_row_still_detected_by_missing_times():
+    from core import alerter as A
+    cal = {"price": 719, "name": "日历最低价", "depTime": "", "arrTime": ""}
+    assert A._is_calendar_row(cal) is True
+    transfer = {"price": 1992, "name": "海湾航空", "code": "",
+                "depTime": "16:30", "arrTime": "06:35",
+                "transCity": "巴林", "transfer": True}
+    assert A._is_calendar_row(transfer) is False, \
+        "有时刻的中转行是真实班次，不是日历行"
+
+
+def test_transfer_segments_not_written_into_plane():
+    """r386：tips 对中转是段数标记（「2程航班」），不能占机型字段。"""
+    rows = FliggyCrawler._parse_intl_items(
+        [_transfer(tips="2程航班")], "2026-11-16")
+    r = rows[0]
+    assert r["plane"] == "", "机型不得写成「2程航班」"
+    assert r["segments"] == 2, "段数另立字段供展示"
+
+
+def test_direct_plane_kept_and_segments_zero():
+    rows = FliggyCrawler._parse_intl_items(
+        [_item(tips="中型机321")], "2026-11-16")
+    r = rows[0]
+    assert r["plane"] == "中型机321"
+    assert r["segments"] == 0
+
+
+def test_segments_parsed_from_tips_not_from_time_blocks():
+    """segs（.time-info 计数）对中转恒为 1；段数必须来自「N程航班」。"""
+    two = FliggyCrawler._parse_intl_items([_transfer(tips="2程航班")],
+                                          "2026-11-16")[0]
+    four = FliggyCrawler._parse_intl_items([_transfer(tips="4程航班")],
+                                           "2026-11-16")[0]
+    assert two["segments"] == 2 and four["segments"] == 4
+    assert FliggyCrawler._seg_n("2程航班") == 2
+    assert FliggyCrawler._seg_n("") == 2   # 有转城市即至少两段

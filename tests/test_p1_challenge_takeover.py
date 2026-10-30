@@ -161,9 +161,9 @@ def test_verify_fail_keeps_ticket_failed(monkeypatch):
 
 
 def test_challenge_endpoints_are_guarded():
-    import inspect
-    import webui
-    src = inspect.getsource(webui._Handler._do_POST)
+    # 读文件而非 getsource(_do_POST)：全套运行时 _Handler 可能被替换（r379）。
+    src = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "webui.py"), encoding="utf-8").read()
     assert "/api/challenge/open" in src
     assert "/api/challenge/verify" in src
     assert "/api/challenge/skip" in src
@@ -201,6 +201,7 @@ def test_visible_window_detects_close(monkeypatch):
     monkeypatch.setattr(
         base.time, "sleep",
         lambda s: (_ for _ in ()).throw(AssertionError("should not sleep")))
-    with pytest.raises(RuntimeError, match="关闭"):
-        c.open_challenge_window("https://example.invalid/", threading.Event(),
-                                timeout_s=10)
+    # r379: closing the window is the intended "done" signal; it must
+    # snapshot and return instead of raising (raising lost the session).
+    assert c.open_challenge_window("https://example.invalid/",
+                                   threading.Event(), timeout_s=10) is True

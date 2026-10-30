@@ -118,10 +118,12 @@ def test_probe_retry_filters_challenge_cooling_channels():
 
 
 def test_retry_endpoint_filters_before_task_creation():
-    import webui
-    src = inspect.getsource(webui._Handler._do_POST)
+    # 读文件而非 getsource(_do_POST)：全套运行时 _Handler 可能被替换
+    # （r379 已记录），取不到源码会静默变成空串断言失败。
+    src = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "webui.py"), encoding="utf-8").read()
     assert "_probe_filter_want(_want)" in src
-    assert '"skipped"' in inspect.getsource(webui._probe_task_view)
+    assert '"skipped"' in src
 
 
 def test_probe_retry_bypasses_global_cooldown():
@@ -201,5 +203,6 @@ def test_login_window_detects_closed(monkeypatch):
     monkeypatch.setattr(
         base.time, "sleep",
         lambda s: (_ for _ in ()).throw(AssertionError("should not sleep")))
+    # r379: 关窗先落 cookie 快照，再抛错（未确认），调用方不得宣称成功
     with pytest.raises(RuntimeError, match="关闭"):
         c._login_window(threading.Event(), timeout_s=10)

@@ -34,6 +34,7 @@ import time
 from typing import Any, List, Optional
 
 import httpx
+from core import net as _net
 
 from core.flightnorm import cabin_clean, fmt_dur
 from core.intl import airport_city_code, is_intl_route
@@ -164,6 +165,8 @@ class IntlFailure:
 class TuniuCrawler(BaseCrawler):
     name = "tuniu"
     use_mobile = True
+    # 预热入口（L1/L3）：m 站机票首页，先拿 udid/cookie 再查列表
+    warmup_url = FLIGHT_HOME
     # 确保 parse_error 可入账（不依赖 base 白名单版本；重复项去重）
     PATH_STATUS = tuple(dict.fromkeys(
         BaseCrawler.PATH_STATUS + ("parse_error",)))
@@ -366,7 +369,8 @@ class TuniuCrawler(BaseCrawler):
                             seen["t"] = tk
                 page.on("request", on_req)
                 page.goto(self.list_url(fc, tc, date),
-                          wait_until="domcontentloaded", timeout=25000)
+                          wait_until="domcontentloaded", timeout=25000,
+                          referer=FLIGHT_HOME)
                 deadline = time.time() + 10
                 while time.time() < deadline and not seen.get("t"):
                     page.wait_for_timeout(400)
@@ -558,7 +562,7 @@ class TuniuCrawler(BaseCrawler):
 
     def _one_attempt(self, depart_code, arrive_code, depart_date, polls=None):
         page_token = self._saved_page_token(depart_code, arrive_code, depart_date)
-        client = httpx.Client(
+        client = _net.new_client(self.config.get("tls_impersonate", "chrome"),
             headers={
                 "User-Agent": self._ua() or UA,
                 "Accept-Language": "zh-CN,zh;q=0.9",
@@ -741,7 +745,7 @@ class TuniuCrawler(BaseCrawler):
         productList 为空——只有这种干净响应才允许调用方落 empty）；
         ok=False 时 data 为带类型的 IntlFailure（timeout/error/
         parse_error），blocked 仅保留给外层退避加倍。"""
-        client = httpx.Client(
+        client = _net.new_client(self.config.get("tls_impersonate", "chrome"),
             headers={
                 "User-Agent": self._ua() or UA,
                 "Accept-Language": "zh-CN,zh;q=0.9",
@@ -1089,6 +1093,7 @@ class TuniuCrawler(BaseCrawler):
             best = min(flights, key=lambda f: f["price"]) if flights else None
             if best is not None:
                 self.path_note("H5/API", "ok", rows=len(flights), date=date,
+                               url=self.INTL_QF_API,
                                detail="国际列表接口",
                                ms=int((time.time() - t_h5) * 1000))
                 results.append(FlightPrice(
@@ -1209,6 +1214,7 @@ class TuniuCrawler(BaseCrawler):
             flights = self._offers_to_flights(offers)
             if best is not None and best.get("price"):
                 self.path_note("H5/API", "ok", rows=len(flights), date=date,
+                               url=LIST_API,
                                detail="m.tuniu.com 列表接口",
                                ms=int((time.time() - t_h5) * 1000))
                 results.append(FlightPrice(
@@ -1228,7 +1234,10 @@ class TuniuCrawler(BaseCrawler):
                                  len(flights), n_d, len(flights) - n_d)
             else:
                 self.logger.warning("[tuniu] %s 未解析到价格", date)
-                self.path_note("H5/API", "empty", date=date,
+                # 有响应但解析不出价（r403）：可能是改版打穿键义，也可能
+                # 是真无票；没有"明确无票"措辞时不断言无票。empty 会让
+                # 读者停止关注，error 会让人去看现场——后者才是事实。
+                self.path_note("H5/API", "error", date=date,
                                detail="接口有响应但未解析出价格",
                                ms=int((time.time() - t_h5) * 1000))
             self._sleep()

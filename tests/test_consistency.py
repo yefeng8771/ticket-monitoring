@@ -171,3 +171,44 @@ def test_specials_deep_links_same_origin_as_crawlers():
         _FC.URL_TPL.format(fn="上海", tn="昆明", fc="SHA", tc="KMG",
                            d="2026-10-20")).hostname
     assert {"depCity", "arrCity", "depDate"} <= _keys(fl[0].link)
+
+
+def test_tongcheng_intl_view_url_is_absent():
+    """r390：同程国际深链在无痕会话 302 到 passport/login，点开只见登录页。
+
+    r384 曾据一次"匿名可出价"改为出链——那次实测复用了带 cookie 的上下文，
+    样本不成立。按宁缺勿错，国际不给链接（消费端真值门剥壳只出文本）。
+    """
+    from core.models import Route
+    a = _a()
+    for fc, fn, tc, tn, d in (
+            ("NRT", "东京成田", "SHA", "上海", "2026-11-16"),
+            ("SHA", "上海", "BKK", "曼谷", "2026-11-16")):
+        r = Route(from_code=fc, from_name=fn, to_code=tc, to_name=tn,
+                  dates=[d])
+        assert a._build_view_url(r, d, "tongcheng") == "", (fc, tc)
+
+
+def test_tongcheng_domestic_view_url_unchanged():
+    """国内仍是 ft/touch/book1（国际改动不得波及国内出链）。"""
+    a, r = _a(), _route()
+    u = a._build_view_url(r, "2026-10-05", "tongcheng")
+    assert "m.ly.com/ft/touch/book1" in u
+    assert "fromcitycode=SHA" in u and "tocitycode=URC" in u
+
+
+def test_intl_view_links_only_for_verified_channels():
+    """r390：国际深链必须实测能出价才给。
+
+    2026-10-27 无痕实测：携程 20 价、飞猪 5 价可验证；同程 302 登录页、
+    去哪儿"查询超时"、途牛永远加载中（登录态复检同样不可用）。
+    三家一律不出链——宁缺勿错，避免"点了看不到价"的挂羊头。
+    """
+    from core.models import Route
+    a = _a()
+    r = Route(from_code="SHA", from_name="上海", to_code="NRT",
+              to_name="东京", dates=["2026-11-16"])
+    for plat in ("ctrip", "fliggy"):
+        assert a._build_view_url(r, "2026-11-16", plat), plat
+    for plat in ("tongcheng", "qunar", "tuniu"):
+        assert a._build_view_url(r, "2026-11-16", plat) == "", plat
