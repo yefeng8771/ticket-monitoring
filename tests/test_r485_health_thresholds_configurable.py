@@ -159,9 +159,21 @@ def test_every_config_page_key_is_read_back():
     keys = sorted(set(_re.findall(
         r"glcell\('[^']*','[^']*','GLB\.([a-z_]+)=", w)))
     assert len(keys) >= 30, "配置页键数量异常（%d），解析可能失效" % len(keys)
-    # /api/config 的 globals 构造块：以 health_penalty_enabled 为锚点取窗口
-    i = w.index('"health_penalty_enabled": bool(')
-    seg = w[max(0, i - 9000):i + 6000]
+    # /api/config 的 globals 构造块：以最后一个 `"globals": {` 起点、配对的 `}` 为终点
+    # （第 311 行还有一处 demo_cfg 的同名键，那里的 5 个键不是配置页的回读面）。
+    # 原先用「health_penalty_enabled 前后固定 9000/6000 字符」取窗口——
+    # 页面一长（r521 加了只读参数块）窗口就够不到块尾，`auto_verify` 被误判成
+    # 「没有回读」。字符数窗口会随无关改动漂移，结构边界不会。
+    i = w.rindex('"globals": {')
+    depth = 0
+    for j in range(i, len(w)):
+        if w[j] == "{":
+            depth += 1
+        elif w[j] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    seg = w[i:j + 1]
     # 必须精确匹配 `"key":`（后面紧跟冒号）。只匹配 `"key"` 会被
     # `"key_INTERNAL"` 这类前缀骗过——负控实测：改名后守卫照样全绿。
     missing = [k for k in keys

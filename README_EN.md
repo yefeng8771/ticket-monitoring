@@ -148,7 +148,7 @@ The capability map follows **collect → push → visualize → configure**. Eac
 |---|---|
 | **Five-channel detail** | Qunar / Fliggy / Ctrip / Tongcheng / Tuniu share one schema (price / flight no. / times / transfer / cross-day / duration); each channel uses its best path (Qunar H5 with login, Ctrip PC international list + mobile H5 domestically, Tongcheng H5, Fliggy SSR, Tuniu HTTP, session channels on demand). Eligibility/risk/lure fares carry ⚠ badges. |
 | **Multi-date monitoring** | One route can watch multiple departure dates via a **range / specific-day mode bar** (one editor open at a time, both drafts kept); future 7/30 days, a start–end range or single days merge and de-duplicate; each date is collected, pushed and charted independently; route cloning copies all settings. |
-| **Round-trip multi-return** | A round-trip switch with **multiple return dates** (7/8 days from the outbound, a range, or day-by-day); collection runs per pair and the price is the tax-inclusive round-trip total. |
+| **Round-trip multi-return** | A round-trip switch with **multiple return dates** (7/8 days from the outbound, a range, or day-by-day); collection runs per pair and the price is the tax-inclusive round-trip total. **Per-channel honesty**: Fliggy and Tongcheng support it; Ctrip/Qunar/Zhixing App do not implement round-trip and report "unsupported" for those routes instead of fabricating a one-way price; the UI marks it unsupported per channel instead of inventing data. |
 | **Enable / pause** | Each route has an enable switch: pausing keeps every setting and exempts scheduling / push / details — pausing no longer means deleting. |
 | **Qualification** | Separate direct/transfer thresholds; route-level gates for airline whitelist (code / full name / short alias, `!` = exclude), no LCC, no stop/share, free baggage ≥N kg, wide-body, price ceiling, max total duration, no overnight, departure/arrival wrap-around windows, transfer connection limits, baggage-through and latest transfer arrival. Only current-round data qualifies. |
 | **Multi-user** | Each user has their own routes, thresholds and DingTalk group; identical routes are collected once with staggered queries. |
@@ -186,7 +186,7 @@ The capability map follows **collect → push → visualize → configure**. Eac
 
 | Capability | What it does |
 |---|---|
-| **Panel config** | Left-side three partitions (channel login / users & routes / global), one section on screen; flight watch is inlined inside each user card (section D) and reached from the watch studio's Edit action; high-frequency route fields first, low-frequency constraints collapsed; every field explains itself and sections show live summaries. |
+| **Panel config** | Left-side four partitions (channel login / users & routes / channel pacing / global), one section on screen; flight watch is inlined inside each user card (section D) and reached from the watch studio's Edit action; high-frequency route fields first, low-frequency constraints collapsed; every field explains itself and sections show live summaries. |
 | **Global config center** | Schedule/crawler parameters hot-reload; startup-level paths (DB / log / login state / Chromium dir) are editable with 📂 open-folder and auto-migrate on change; illegal paths, four paths in one place, non-writable paths and illegal listen addresses are blocked before save; every channel has a real test button. |
 | **Hot reload** | Routes, thresholds, push, interval, **port rebind**, headless, timeouts, pacing, daily report hour and image host take effect on save; DB/log/login/Chromium/listen/scan-on-boot show an old→new diff and a restart prompt. |
 | **Search & import/export** | Field-level search; JSON export/import (credentials stay local); dirty-change count and validation before save; `Ctrl/⌘+S`. |
@@ -213,10 +213,15 @@ The capability map follows **collect → push → visualize → configure**. Eac
 
 ```bash
 cp config.example.yaml config.yaml   # first run: create config (or do it in the web UI)
-docker compose up -d
+docker compose pull                  # pull the prebuilt image when one is published
+docker compose up -d                 # otherwise builds locally via `build: .`
 ```
 
 Open `http://NAS_IP:8765`. Config, the price database (`data/`), browser sessions (`user_data/`) and logs all live in local volumes — upgrades and rebuilds keep your data. The image ships chromium and CJK fonts (~1.5 GB, no first-run browser download). The Windows toast channel auto-disables inside containers; DingTalk/email pushes are unaffected. On a NAS without Docker, grab `…-linux-x64.zip` and run it directly.
+
+Images are published to `ghcr.io/dengmeiluan/ticket-monitoring:latest` (plus `sha-<short>` for traceability) by the `release-build` workflow when run with `push_image` enabled, and the package is **public** — anonymous pulls work. Routine workflow runs only build and smoke-test. When a pull fails, remember GitHub returns the same `denied` receipt for "not found" and "no permission": check whether the tag was ever pushed before assuming a permissions problem. Only `linux/amd64` is published; on ARM use the `…-linux-x64.zip` release or build locally.
+
+Headless only: there is no display server inside the container, so the headed login window cannot open. Log in on a desktop machine, then mount/copy `user_data/` into the container.
 
 ## Special fares monitoring
 
@@ -359,7 +364,7 @@ while all other channels stay available. All assets attach to one Release and a
 
 ```bash
 python tools/test_all.py        # parallel full gate (default min(8, CPU)): syntax + pytest via xdist + UI self-check in profile-planned shards, side by side
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 4537 tests (tracked; 4527 incl. untracked) — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate + docs/code contract
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 5194 tests (tracked) — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate + docs/code contract
 python docs/uitest.py             # full UI self-test (668 assertions, self-hosted demo, zero-JS-error hard gate)
 python docs/screenshot.py         # regenerate README screenshots (start the demo first: python webui.py --demo --port 8799)
 python docs/demo_build.py         # rebake the static demo site (docs/site)

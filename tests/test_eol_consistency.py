@@ -117,6 +117,21 @@ def test_repo_uses_one_eol_form_only():
         "以下文本文件工作树不是 LF：" + NL + NL.join(offenders[:20]))
 
 
+def test_site_bake_does_not_rewrite_line_endings():
+    """烘焙脚本必须显式 `newline="\\n"`，否则每次重烘都把站点变回 CRLF。
+
+    背景：`docs/demo_build.py` 用文本模式 `open(OUT,"w")` 写 index.html，
+    Windows 上每个 `\\n` 被翻成 `\\r\\n`（实测 23210 处）。上面两条门禁都
+    扫不到它——`site/index.html` 后缀不在 TEXT_SUFFIXES 里（.html 不在），
+    且 `site` 在 SKIP_DIRS 里，属于双重盲区；只有人去跑
+    `git ls-files --eol` 才看得见。这里直接钉住生成器写法，
+    保证产出形态与 `.gitattributes` 的 eol=lf 一致。
+    """
+    src = (REPO / "docs" / "demo_build.py").read_text(encoding="utf-8")
+    assert 'open(OUT, "w", encoding="utf-8", newline="\\n")' in src, (
+        "demo_build.py 写 index.html 未锁 newline，Windows 上会产出 CRLF")
+
+
 def test_no_lone_cr_bytes_in_text_files():
     """文本文件里不得出现孤立 CR（`\\r\\r\\n` 这类破损换行）。
 

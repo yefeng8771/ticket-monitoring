@@ -177,8 +177,11 @@ def test_three_charts_share_visual_architecture():
     assert "xKind:'time',band:W>=560?22:6,axisRows:2" in src      # 关注
     assert "xKind:'time',axisRows:2,band:8" in src                # 雷达
     # 3) 雷达主角线要有面积填充（与航线主系列同一语言）
+    # 按函数体取，不按固定字数：曾写 +9000，本轮给「数据不足」分支补画布空态后
+    # 折线绘制段被推出 9000 字以外，门禁表现为「规则消失」而源码里一直在。
     i0 = src.index("function spMonDraw(")
-    seg = src[i0:i0 + 9000]
+    i1 = src.index(chr(10) + "function ", i0 + 10)
+    seg = src[i0:i1]
     assert "PCHART.area(" in seg, "雷达主角线缺面积填充"
     # 4) 主系列线宽同档 2.2
     assert "width:low||sel?2.2:1.2" in seg
@@ -323,11 +326,15 @@ def test_three_charts_share_tooltip_and_crosshair_metrics():
     i0 = src.index("const _p=PCHART.placeAxis(c.offsetWidth,c.offsetHeight,w,bh,ax,4);")
     seg = src[i0:i0 + 120]
     assert "const bx=_p.l, by=_p.t;" in seg, "航线浮窗未取共用落位"
-    i0 = src.index("placeAxis(boxW,boxH,tw,th,localX,topY){")
-    seg = src[i0:i0 + 520]
+    # 只认函数名，不绑死参数列表：后续加了 rightEdge（可视右缘，窄档防溢出）
+    # 与 scrollLeft 补偿，绑死签名会让这条守卫因无关演进假红。
+    i0 = src.index("placeAxis(boxW,boxH,tw,th,localX,topY")
+    seg = src[i0:i0 + 900]
     # 只钳位、不整块翻边：翻边会让浮窗在指针越过阈值时整体跳到另一侧
     # （实测 0.844→0.867 之间 left 999→829，跳 170px＝用户说的「乱飘」）
-    assert "Math.min(localX+14,boxW-tw-8)" in seg, "共用落位缺右缘钳位"
+    # 只认「有右缘钳位」这个意图：实现后来引入 _re（= min(boxW, rightEdge)）
+    # 以支持窄档可视右缘，公式从 boxW-tw-8 变成 _re-tw-8，绑死字面量会假红。
+    assert re.search(r"Math\.min\(localX\+14,\s*(?:boxW|_re)-tw-8\)", seg),         "共用落位缺右缘钳位"
     assert "localX-tw-14" not in seg, "浮窗又整块翻边了（会瞬跳 170px）"
     i0 = src.index("ctx.roundRect(bx,by,w,bh,8)")
     assert i0 > 0, "航线浮窗圆角未统一 8px"
@@ -349,12 +356,13 @@ def test_three_charts_share_legend_language():
     assert 'class="ws-legend mon-legend"' in src
     assert 'class="legend mon-legend" id="spMonLegend"' in src
     # 雷达有真正的图例渲染函数并输出色块
-    i0 = src.index("function spMonRenderLegend(){")
-    seg = src[i0:i0 + 700]
+    i0 = src.index("function spMonRenderLegend(")
+    seg = src[i0:src.index(chr(10) + "}", i0)]
     assert "'<span><b style=\"background:'" in seg, "雷达图例未用色块"
     assert "'最低价日'" in seg and "'选中日'" in seg
-    # 色块几何单一来源
-    assert ".mon-legend>span>b{width:16px!important;height:3px!important" in src
+    # 色块几何单一来源（inline-block 已并入该条规则，见
+    # test_radar_legend_covers_every_drawn_series）
+    assert ".mon-legend>span>b{display:inline-block;width:16px!important;height:3px!important" in src
     # 字号：三处同为 12（航线曾 13、雷达曾 11）
     i0 = src.index(".mon-legend{display:flex")
     assert "font-size:12px" in src[i0:i0 + 300]
@@ -659,10 +667,11 @@ def test_radar_legend_merges_same_day_entries():
     """最低日与选中日同一天时，图例曾并排画两个同日期色块，读作两条
     不同系列。现合并为一条。"""
     src = _src()
-    i0 = src.index("function spMonRenderLegend(){")
-    seg = src[i0:i0 + 900]
+    # 锚点按函数体取（函数签名带 series 参数，钉死 "(){" 会假红）
+    i0 = src.index("function spMonRenderLegend(")
+    seg = src[i0:src.index(chr(10) + "}", i0)]
     assert "low&&low===sel" in seg, "同日未合并"
-    assert "'最低日 · 选中 '" in seg
+    assert "'最低日 · 选中'" in seg
 
 
 def test_pacing_summary_has_metric_cells():
@@ -1327,7 +1336,10 @@ def test_tooltip_clamps_on_measured_width_not_a_stale_one():
     # 只读 offsetWidth 会拿到过期值；必须叠加一次强制重排后的测量
     assert "getBoundingClientRect().width" in block, \
         "钳位宽度必须包含 getBoundingClientRect().width（强制同步重排后的最终宽度）"
-    assert "PCHART.placeAxis(r.width,r.height,tw,th,cx-r.left,topY)" in block, \
+    # 只认「走共用 placeAxis」这个意图，不绑死参数串：
+    # 后来补横向滚动补偿（host.scrollLeft / scrollWidth）时改过入参，
+    # 绑死整串会让「三图同一份算术」这条守卫因无关改动而假红。
+    assert "PCHART.placeAxis(" in block, \
         "落位必须走共用的 placeAxis（三图同一份算术）"
 
 
@@ -1349,7 +1361,21 @@ def test_kline_requires_at_least_two_days_before_drawing():
     # 的画布只剩底部一行小字，比原来那根孤立蜡烛更像「页面坏了」。
     assert "getElementById('spMonKEmpty')" in code,         "K 线不足 2 天时要有居中空态节点（按 id 取用）"
     # 空态必须真的居中覆盖：只塞一行文字到滚动容器会沉到画布底部
-    assert ".spmon-kempty{" in src and "position:absolute" in src[src.index(".spmon-kempty{"):src.index(".spmon-kempty{") + 200],         "空态要有绝对定位覆盖样式"
+    # 判意图（覆盖在画布上、跟随可视区）而不是钉实现：原钉 `position:absolute`，
+    # 而 absolute 在 `overflow-x:auto` 的容器里会跟着内容横向滚出可视区——
+    # 实测 320 档空态左缘 -9px（容器左缘 30、scrollLeft 39）。现用 sticky，
+    # 横向滚到最右仍停在可视区且保持居中（实测 scrollLeft 0→39，空态 l/r 恒 30/311）。
+    k = src.index(".spmon-kempty{")
+    blk = src[k:src.index("}", k) + 1]
+    # 必须绝对定位覆盖画布：sticky 在 flex 列里会落到画布**下方**
+    # （实测 y=898 而画布底 874，变成多出一块灰板）。
+    assert "position:absolute" in blk, "空态须绝对定位覆盖画布：%s" % blk[:120]
+    assert "justify-content:center" in blk, "空态须水平居中"
+    # 横向滚动补偿走共用落位函数（left 是内容坐标，滚动后会滑出可视区：
+    # 320 档 scrollLeft=39 时实测左缘 -9px）。
+    assert "function spMonPlaceEmpty(" in src, "缺空态落位函数"
+    assert src.count("spMonPlaceEmpty(") >= 3, "两条空态分支都要走同一处算术"
+    assert "(wrap.scrollLeft||0)+'px'" in src, "落位必须按 scrollLeft 补偿"
     # 同一屏不得重复同一句话：脚注与空态写同一句会被读两遍
     assert "if(note)note.textContent=''" in code, "空态已说明时脚注必须清空，避免同屏重复"
     # 关注图同一守卫
@@ -1571,3 +1597,673 @@ def test_dark_theme_muted_text_clears_aa():
     raw = _io.open(os.path.join(ROOT, "webui.py"), encoding="utf-8", newline="").read()
     vals = set(re.findall(r"--mut:(#[0-9a-f]{6});--line:#1e2a3a", raw))
     assert vals == {"#8497ab"}, "深色 --mut 多处定义不同值：%s" % sorted(vals)
+
+
+def test_clickable_status_pill_has_hover_feedback():
+    """可点的状态胶囊（role=button）悬停必须有可见反馈，且 hover 态仍过 AA。
+
+    2026-10-29 实测：`.pill.ok`「有人已达标」是 `role=button` + onclick +
+    cursor:pointer 的真实可点元素，但 `.pill:hover{filter:none;background:…!important}`
+    与 `.pill.ok{background:var(--okbg)!important}` **同为 (0,2,0)、后者更靠后**，
+    把 hover 的灰底整条压掉——三个视图里悬停零变化。
+
+    修法：补一条同特异度、更靠后的 `.pill.ok:hover`，**保持语义绿**（不改成中性灰），
+    只把底色压深 12%。压 18% 会让 hover 态掉到 4.35:1 欠 AA，12% 为 4.75:1。
+    """
+    src = _src()
+    i = src.find(".pill.ok{background:var(--okbg)!important")
+    assert i > 0, "找不到 .pill.ok 的生效底规则"
+    tail = src[i:]
+    j = tail.find(".pill.ok:hover{")
+    assert j > 0, "可点的状态胶囊没有 hover 反馈（会被 .pill.ok 的 !important 压掉）"
+    blk = tail[j:tail.find("}", j) + 1]
+    assert "background:" in blk and "color:var(--ok-txt)" in blk, \
+        "hover 必须保留语义绿字色，不能退化成中性灰：%s" % blk[:90]
+    m = re.search(r"var\(--okbg\)\s*(\d+)%", blk)
+    assert m, "hover 底色应由 --okbg 与 --ok-txt 混合得到"
+    pct = int(m.group(1))
+    assert pct >= 85, \
+        "hover 混合比例过深（--okbg %d%%）：压到 82%% 时对比度 4.35:1 欠 AA" % pct
+
+
+def test_tooltip_placement_compensates_horizontal_scroll():
+    """浮窗落位必须补偿容器的横向滚动偏移，否则窄档贴边会被裁掉。
+
+    2026-10-29 实测（320）：雷达容器 `scrollWidth 320 / clientWidth 281`、
+    **scrollLeft=39**。`left` 相对的是滚动内容起点，而 `cx-r.left` 量的是
+    可视区偏移，两者差一个 scrollLeft——浮窗贴左时 left=26，容器可视左缘
+    在 30，**被裁掉 4px**，读作「悬浮窗飘出图外」。右缘钳位同理要用
+    scrollWidth（内容总宽）而不是 r.width（可视宽），否则滚到中段时
+    浮窗永远贴不到最右端。修后 320/390 溢出 0 次、1440/768 无回退。
+    """
+    src = _src()
+    i = src.index("placeTipAxis(host,tip,cx,topY){")
+    blk = src[i:src.index("tip.style.top", i) + 40]
+    code = re.sub(r"/\*.*?\*/", "", blk, flags=re.S)
+    assert "host.scrollLeft" in code, "落位未补偿容器横向滚动偏移"
+    assert "host.scrollWidth" in code, "右缘钳位应使用 scrollWidth（内容总宽）而非可视宽"
+    assert "PCHART.placeAxis(" in code, "落位必须走共用的 placeAxis"
+
+
+def test_every_pacing_section_title_carries_the_same_weight():
+    """节流面板的每个小节标题都必须是 `<b>`（600 档），不能某个分支漏加。
+
+    2026-10-29 实测（1440）：四个小节里「本轮节流」的标题没包 `<b>`，
+    只有 400——而同组「逐渠道 / 反复出现 / 干预」都是 600，同一列标题里
+    混进一个细体，读作「这一节不是标题」。另外「反复出现」在
+    **有重复**与**无重复**两个分支里写法不一致（有重复那支也漏了 `<b>`），
+    同一标题会随数据状态在两个字重间跳。
+
+    判据：源码里每个 `class="pace-sec"` 后面必须紧跟 `<b>` 或 `<span class="pace-sub"`；
+    实测四个标题（逐渠道 / 本轮节流 / 反复出现 / 干预）字重全部 600、字号 11px。
+    """
+    src = _src()
+    bad = []
+    for m in re.finditer(r'class="pace-sec"[^>]*>', src):
+        after = src[m.end():m.end() + 60]
+        if after.startswith("<b>") or after.startswith('<span class="pace-sub"'):
+            continue
+        bad.append(after[:40])
+    assert not bad, "节流小节标题未包 <b>（会渲染成 400 细体）：%s" % bad
+    # 四个标题都必须存在且带 <b>
+    for t in ("逐渠道", "本轮节流", "反复出现", "干预"):
+        assert "<b>%s</b>" % t in src, "小节标题「%s」缺少 <b> 包裹" % t
+
+
+def test_visible_numeric_columns_use_tabular_mono():
+    """数字列必须用等宽数字字体 + tabular-nums（纵向对齐）。
+
+    2026-10-29 实测（1440，5 视图）：531 个「整格是数字」的单元格分 11 组，
+    10 组是 `Cascadia Mono` + `tabular-nums`；唯一例外在雷达 `#spMonTable`
+    ——它位于 `.sr-only`（读屏专用隐藏表），不可见，不算缺陷。
+
+    判据只认「存在 tabular-nums 与 --num 令牌的单源定义」：
+    **不要按选择器全等去找某个格子的字体声明**——`#ftable td.price` 自身只写
+    `font-size`/`color`，等宽是从别的规则链继承来的，实测渲染色正确。
+    """
+    src = _src()
+    assert "font-variant-numeric:tabular-nums" in src, "数字列缺少 tabular-nums"
+    assert "--num:" in src, "缺少等宽数字字体令牌 --num"
+    # 关键数字载体必须显式走 --num（这三处是实测确认的单源定义）
+    for sel in (".ws-rc .v b", ".pace-stat b", ".calcell .cp"):
+        i = src.find(sel + "{")
+        assert i > 0, "找不到 %s" % sel
+        blk = src[i:src.find("}", i) + 1]
+        assert "var(--num)" in blk, "%s 未走 --num 令牌：%s" % (sel, blk[:70])
+
+
+def test_all_three_tooltips_cap_their_width_and_shrink_to_fit():
+    """三个浮窗都要「按内容收缩 + 限宽 270」，缺一样就会被压窄或拉成全屏长条。
+
+    2026-10-29 实测：`.ws-tip` 与 `.spmon-tip` 都写了
+    `width:max-content; max-width:270px`（雷达那版还叠了 `min(270px, calc(100vw-16px))`）；
+    趋势图是画布内绘，用 `avail=Math.max(Math.min(c.offsetWidth-8,270),80)` 限同一档宽度。
+
+    **`width:max-content` 是必需的防御**：`position:absolute` 的浮窗贴右缘时，
+    若只给 `max-width` 不给 `max-content`，浏览器会按「可用宽」压缩它，
+    实测出现过 **53×158** 这种被压扁的浮窗（r524）。
+    """
+    src = _src()
+    for sel in (".ws-tip{", ".spmon-tip{"):
+        i = src.find(sel)
+        assert i > 0, "找不到 %s" % sel
+        blk = src[i:src.find("}", i) + 1]
+        assert "width:max-content" in blk, "%s 缺少 width:max-content（贴右缘会被压窄）" % sel
+        assert "270px" in blk, "%s 未限制 270px 宽" % sel
+    # 趋势图（画布内绘）用同一档 270 限宽
+    assert "Math.min(c.offsetWidth-8,270)" in src, "航线画布浮窗未按 270px 限宽"
+
+
+def test_pacing_panel_text_shares_one_line_height_tier():
+    """节流面板内的文字行高只能有一档（1.5），不能混进 1.7。
+
+    2026-10-29 实测：面板内 `.nm`/`.e1` 是 18px（1.5×12）、`.glip`/`.e2` 是 16.5px（1.5×11），
+    唯独 `.pace-kv` 用 `line-height:1.7`（11px→**18.7px**）——同一面板三档行高，
+    多出的 2.2px 还把「量尺图例 → 这一段」的视觉间距顶成 **9px**（阶上应为 8）。
+    改 1.5 后该间距回到 8。
+
+    注：`.pace-kv → .pace-sec` 用 Range 量仍是 13，但 `marginTop` 与 `boxGap`
+    都是 12——那 1px 是 16.5 行高在 11px 字号下的亚像素舍入，不是真实间距。
+    """
+    src = _src()
+    i = src.find(".pace-kv{")
+    assert i > 0, "找不到 .pace-kv"
+    blk = src[i:src.find("}", i) + 1]
+    assert "line-height:1.5" in blk, \
+        "节流面板行高应统一 1.5 档（1.7 会与同面板另两档混排）：%s" % blk[:80]
+
+
+def test_pacing_subtitles_truncate_instead_of_wrapping():
+    """节流面板的小节副标题：单行截断 + 全文进 title，不得折行。
+
+    2026-10-29 实测（320/390/768/1440 四档，78 个文本块）：
+    - 无「行数 ≥4」的块，无横向溢出容器（唯一 scrollWidth>clientWidth 的是
+      `.pace-sub` 自身，那正是**省略号生效**的证据，不是溢出）；
+    - `.pace-sub` 在 320 档只剩 78px（内容 175px），靠 `title` 兜底全文。
+
+    为什么必须截断而不是折行：同组四个小节标题里若只有一行折成两行，
+    行高从 17px 跳到 33px，读作「排版坏了」（390 实测过）。
+    """
+    src = _src()
+    i = src.find(".pace-sec .pace-sub{")
+    assert i > 0, "找不到 .pace-sub 规则"
+    blk = src[i:src.find("}", i) + 1]
+    code = re.sub(r"/\*.*?\*/", "", blk, flags=re.S)
+    assert "white-space:nowrap" in code, "副标题不得折行"
+    assert "text-overflow:ellipsis" in code, "副标题应省略号截断"
+    assert "overflow:hidden" in code, "截断需要 overflow:hidden 才生效"
+    assert "flex:1 1 auto" in code, "副标题应可收缩，否则会把整行撑开"
+    # 截断必须配 title 兜底，否则信息真丢了
+    assert 'class="pace-sub" title=' in src, "被截断的副标题必须带 title 全文"
+
+
+def test_icon_stroke_widths_follow_the_three_tiers():
+    """SVG 图标描边只有三档语义：动作图标 1.8 / 品牌图形 1.7 / 航线剪影 1。
+
+    2026-10-29 实测（1440，6 视图，590 个可见 svg）：
+    - **1.8px × 450**：`.ic` 一族（动作/导航/按钮图标）；
+    - **1px × 135**：`bic-plane` 航司/机型**品牌剪影**（127 个，带完整 `--pl-a..--pl-e` 配色）
+      与 `monroute-svg`/`monwatch-svg` 航线示意；
+    - **1.7px × 3**：`.logo .ic`（品牌 logo，尺寸更大 17px，描边相应更细）。
+
+    这三档不是漂移：图形越大描边越细（视觉重量恒定），品牌剪影本来就不该像线条图标。
+    判据只钉「不得再冒出第四档」，不合并这三档。
+    """
+    src = _src()
+    base = src.find(".ic{")
+    assert base > 0, "找不到 .ic 基础规则"
+    blk = src[base:src.find("}", base) + 1]
+    assert "stroke-width:1.8" in blk, ".ic 基础描边应为 1.8"
+    for bad in ("stroke-width:1.2", "stroke-width:1.5", "stroke-width:2.2", "stroke-width:1.6"):
+        assert bad not in src, "出现第四档图标描边：%s" % bad
+
+
+def test_color_legend_grammar_is_shared_across_charts():
+    """三图的「配色图例」共用一套语法：12px / 色块 16×3 / 缝 12px / 上内边 8。
+
+    2026-10-29 实测（320/390/768/1440 四档）：三图图例的 CSS 口径完全一致
+    （fs 12px、columnGap 12px、padding-top 8px、色块 16×3 圆角 2）。
+
+    **但高度不要求相等**：关注图 `#wsLegend` 是 48px、另两图 27px——因为关注图的
+    第一个子元素 `.ws-lg-lab` 是「航线内 N 班 · 点击切换」的说明、第二个是
+    **40px 高的可点选按钮**（在多条关注航班间切换），语义上它是「选择器 + 图例」
+    的复合体，不是纯配色图例。把三者钉成等高会逼着要么删掉切换能力、要么给
+    另两图塞无意义的高度。
+    """
+    src = _src()
+    # 锚点要带行首与首条声明：裸 `.mon-legend{` 会先命中注释里引述的旧规则
+    # （`.mon-legend{gap:12px}`），那段没有 font-size，会假红。
+    i = src.find(".mon-legend{display:flex;")
+    assert i > 0, "找不到 .mon-legend 共用图例规则"
+    blk = src[i:src.find("}", i) + 1]
+    for token in ("font-size:12px", "gap:12px", "padding:8px 2px 0"):
+        assert token in blk, "共用图例缺 %s：%s" % (token, blk[:90])
+    assert "width:16px!important;height:3px!important" in src, "图例色块应为 16×3"
+
+
+def test_every_x_axis_generator_thins_its_labels():
+    """四处 X 轴刻度生成都必须是「有上限/抽稀」的，不能全量输出。
+
+    2026-10-29 实测四个生成器策略不一致：
+    - 趋势折线 `length:nTick+1`（固定条数）；
+    - 关注 K 线 `Math.ceil(n/(W<560?4:8))`（按宽度抽稀）；
+    - 雷达折线 `[0,1,2,3]`（固定 4 条）；
+    - **雷达 K 线曾是 `xTicks:candles.map(...)` 全量输出** —— 20 个交易日就有
+      20 个「MM-DD」挤在轴带上，必然重叠、读不出日期。
+
+    已统一为与关注 K 线同一套抽稀（`_n/(kg.pw<560?4:8)`，首尾必留）。
+    判据只钉「不得再出现全量 map + 抽稀式必须存在」，不锁具体公式。
+    """
+    src = _src()
+    assert "xTicks:candles.map((c,i)=>" not in src, \
+        "雷达 K 线又退回全量输出刻度（交易日一多就重叠）"
+    assert "Math.ceil(_n/(kg.pw<560?4:8))" in src, "雷达 K 线刻度缺抽稀"
+    assert "Math.ceil(n/(W<560?4:8))" in src, "关注 K 线刻度缺抽稀"
+    assert "length:nTick+1" in src, "趋势折线刻度缺固定条数上限"
+
+
+def test_radar_chart_host_keeps_zero_horizontal_padding():
+    """雷达画布容器必须保持横向 0 内边距——这不是漏改，是定宽画布的需求。
+
+    2026-10-29 实测：三图画布在容器内的缩进是 趋势 10 / 关注 10 / **雷达 0**。
+    看着像不一致，但雷达的画布宽度由 `c.style.width = W`（含横向滚动逻辑）
+    **精确设定**，若容器再加 10px 横向 padding，`scrollWidth` 会从 1220→**1240**
+    （390 档 320→**340**），凭空多出 20px 横向滚动条。
+    趋势图画布宽度取 `c.offsetWidth`，天然吃掉 padding，所以它保留 10px 没问题。
+
+    判据：不得给 `.spmon-chartwrap` 加横向 padding。
+    """
+    src = _src()
+    i = src.find(".spmon-chartwrap{border:0!important;background:transparent!important;")
+    assert i > 0, "找不到雷达容器覆盖规则"
+    blk = src[i:src.find("}", i) + 1]
+    assert "padding:4px 0 0!important" in blk, \
+        "雷达容器横向内边距必须为 0（画布定宽，加 padding 会多出 20px 横向滚动）：%s" % blk[:90]
+
+
+def test_three_charts_all_collapse_their_tooltip_after_touch():
+    """三图在真实触摸下都必须能出读数、且最终收起（不许有残留浮窗）。
+
+    2026-10-29 用 CDP 真实触摸事件实测（390 与 1440）：
+    - 三次点按三个不同位置 → 三图都是 3/3 不同读数（点按读数是通的）；
+    - 点到画布外 → 趋势/关注**立即**收起；雷达因 `pointerleave` 对触摸直接
+      return（避免拖动时浮窗闪没），改由 `setTimeout(hideTip, 2600)` 收——
+      实测 +0.5s/+2.0s 仍在、**+3.5s 已清空**。
+
+    所以「雷达点外面没立刻消失」不是缺陷，是刻意的触摸保留；但不能没有兜底，
+    否则会留一个永久残留的浮窗。判据要两条都在：立即收起的两图 + 有定时兜底的一图。
+    """
+    src = _src()
+    # 雷达：触摸 pointerleave 直接 return 时，必须有定时器兜底
+    i = src.find("c.addEventListener('pointerleave'")
+    assert i > 0, "找不到雷达 pointerleave 处理"
+    seg = src[i:i + 200]
+    assert "pointerType==='touch'" in seg and "return" in seg, \
+        "雷达触摸 pointerleave 应保留浮窗（拖动时不闪没）"
+    assert "setTimeout(hideTip" in src, "雷达触摸必须有定时兜底收起，否则残留浮窗"
+    # 趋势 / 关注：touchstart 映射到 hover，且存在清线路径
+    assert "addEventListener('touchstart',_tchHover" in src, "趋势图缺触摸映射"
+    assert "addEventListener('touchstart'" in src and "WS.pinned=true" in src, \
+        "关注图缺触摸映射"
+
+
+def test_every_chart_marks_the_hovered_point():
+    """悬停读数时，被读到的那一点必须在画布上有记号，且三图同一个记号。
+
+    2026-10-29 实测三图落点写法三种：
+    - 航线：`arc(...,4.5,0,7)` 纯实心（无光圈，落在线上时与线糊成一段）；
+    - 关注：`arc(...,3.2,...,Math.PI*2)` 实心 + 1.5px 卡色光圈；
+    - **雷达：一个都不画** —— 悬停只有一条 DOM 十字线，数据点上没有任何
+      变化。指针在移、图上没有东西跟着移，正是用户说的「雷达悬停不跟手」。
+
+    现在统一走 `PCHART.hoverDot`（实心 4 + 1.5px 卡色光圈），三条折线路径
+    都必须调用它；且不得再出现各自手写的落点 arc。
+    """
+    src = _src()
+    assert "hoverDot(ctx,x,y,color){" in src, "缺共用的悬停落点绘制"
+    blk = src[src.index("hoverDot(ctx,x,y,color){"):]
+    blk = blk[:blk.index("ctx.restore();},") + 12]
+    # 实心 4px + 卡色 1.5px 光圈：光圈是关键，纯实心落在同色线上会消失
+    assert "arc(x,y,4,0,7)" in blk, blk
+    assert "lineWidth=1.5" in blk and "cssv('--card')" in blk, blk
+    # 三处折线路径都调用（航线 pd/pt、关注折线、雷达折线）
+    assert src.count("PCHART.hoverDot(") >= 4, \
+        "三图折线都要画落点，实测调用 %d 处" % src.count("PCHART.hoverDot(")
+    # 不得再手写各图自己的落点半径
+    for legacy in ("ctx.arc(pd[0],pd[1],4.5,0,7)",
+                   "ctx.arc(pt[0],pt[1],4.5,0,7)",
+                   "ctx.arc(info.X(best.t),info.Y(best.v),3.2,0,Math.PI*2)"):
+        assert legacy not in src, "残留各图自写落点：%s" % legacy
+
+
+def test_radar_hover_restores_its_base_bitmap():
+    """雷达悬停要有一张底图：只贴图 + 一个落点，不重绘整幅。
+
+    没有底图时只有两种结局——画布纹丝不动（无落点，读作不跟手），或每次
+    移动都全量重绘 1220px 画布（读作卡顿）。另有第三个坑：收起浮窗时若不
+    还原，落点会留在画布上，读作「停在了别的日期」。
+    """
+    src = _src()
+    # 折线分支画完必须拍快照（K 线分支同样拍）
+    assert src.count("SPMON.base=spMonSnapshot(c);") >= 2, \
+        "折线与 K 线画完都要拍底图"
+    assert "function spMonSnapshot(c){" in src, "缺雷达快照函数"
+    # 数据变化时先作废旧快照，避免把上一份折线贴回来
+    i = src.index("function spMonDraw(dateSeries,selDate,lowDate){")
+    head = src[i:i + 900]
+    assert "SPMON.base=null;" in head, "重绘前未作废旧底图"
+    # 悬停时先贴底图再画落点；收起时还原
+    i = src.index("const best=PCHART.pick(gg,gg.series,mx,my);")
+    seg = src[i:i + 900]
+    assert "spMonRestore();" in seg, "悬停未先贴回底图（会叠出上一帧残影）"
+    assert "const hideTip=function(){" in src
+    i = src.index("const hideTip=function(){")
+    assert "spMonRestore()" in src[i:i + 220], "收起浮窗未还原底图（残留落点）"
+
+
+def test_radar_tooltip_uses_the_shared_row_grammar():
+    """雷达读数浮窗与关注走势同一套行文法，不再是两行自由文本。
+
+    2026-10-29 实测（1440/390 同位置悬停）：
+    - 关注：`<div class="tm">时刻</div>` + `<div class="tr">图标|色点|名称|价格</div>`
+      + `<div class="tm">渠道 · 目标</div>`，3 行、高 69px、带 2 个品牌图标；
+    - 雷达（改前）：`<b>日期</b> · ¥价<br>时刻 · 渠道 · 口径`——2 行、高 49px、
+      **0 个图标**，而点位上的 `ch` 就是真实平台键（实测 ctrip/fliggy/tongcheng
+      都有官方图标可用）。
+
+    同一种读数卡在同屏并排出现两种形状，是用户说「雷达明显不对」的一部分。
+    判据：雷达浮窗必须用 .tm/.tr 行文法，且渠道有图标就直接画。
+    """
+    src = _src()
+    i = src.index("const best=PCHART.pick(gg,gg.series,mx,my);")
+    seg = src[i:i + 2200]
+    assert 'class="tm"' in seg, "雷达浮窗缺时刻行"
+    assert 'class="tr"' in seg, "雷达浮窗缺图标·名称·价格行"
+    assert "srxPlatIcon(p.ch)" in seg, "雷达浮窗渠道必须用官方图标（值就是平台键）"
+    assert "'<br>'" not in seg, "雷达浮窗不得回到 <br> 自由文本"
+    # 样式必须同构：.spmon-tip 作用域内补齐与 .ws-tip 同名的 .tm/.tr
+    for sel in (".spmon-tip .tm{", ".spmon-tip .tr{", ".spmon-tip .tr b{"):
+        assert sel in src, sel
+
+
+def test_pacing_panel_same_font_size_has_one_line_height():
+    """同一个字号在节流面板里只能有一个行高——否则读作「字体分档了」。
+
+    2026-10-29 实测（1440 与 390 完全同结果，78 个文字节点）：
+    改前 6 个组合里有两处同字号双行高：
+    - 12px：按钮默认 `line-height:normal`（13 个按钮）× 正文 18px；
+    - 11px：`.pace-now b i` / `.pace-stat b i` 继承 16px 父级的 1.2 比例
+      算成 **13.2px**，而面板其余 11px 文本是 **16.5px**。
+    两处都只改行高、不动盒高（按钮 height 已钉死 22/28px），实测节流面板
+    总高 591→591、行高 44→44、按钮尺寸与横向溢出均零变化。
+
+    判据：所有 `font-size:Npx` 的字号在面板内只能配套一种行高；
+    三条规则必须把行高写成与同档一致的绝对值。
+    """
+    src = _src()
+    for sel, want in ((".pace-sec :is(a,button){", "line-height:18px"),
+                      (".pace-tools .g :is(button,a){", "line-height:18px"),
+                      (".pace-now b i{", "line-height:16.5px"),
+                      (".pace-stat b i{", "line-height:16.5px")):
+        i = src.find(sel)
+        assert i > 0, "找不到 %s" % sel
+        blk = src[i:src.find("}", i) + 1]
+        assert want in blk, "%s 缺 %s：%s" % (sel, want, blk[:110])
+
+
+def test_no_non_token_control_radius_remains():
+    """控件圆角只能是令牌档；7px 是全站最后一个越档值。
+
+    2026-10-29 全站普查（6 个视图 × 1440 渲染）：唯一非令牌的**控件**圆角是
+    `#srccap .scbtn` 的 7px——而同一条来源条上的 `.sclink`（同样 28px 高）
+    是 6px，全站其余 28px 控件（`.ws-lg`、`.scbtn` 基类）也都是 6px。
+
+    允许留下的非令牌值都是**按尺寸等比缩放**的（`.bic-ota` / `.bic-air` 的
+    `calc(var(--bic)*.26/.273)` 渲染出 3.38~7.02px），以及令牌本身
+    （`--r2:11px`）与 `kbd` 的键帽档——判据要看比例与角色，不是绝对值。
+    """
+    src = _src()
+    assert "border-radius:7px" in src  # 仍有按比例缩放引用以外的？逐条核对
+    # 控件（28px 高、实心/描边按钮）不得再用 7px
+    i = src.find("#srccap .scbtn{")
+    assert i > 0, "找不到来源条按钮规则"
+    blk = src[i:src.find("}", i) + 1]
+    assert "border-radius:6px" in blk, blk[:110]
+
+
+def test_pacing_trace_detail_rows_keep_their_grid_at_every_width():
+    """溯源数据行在四档宽度都必须是同一套列网格，且不得横向溢出。
+
+    2026-10-29 用真实形状的记录实测（注入 fetched_at/path_status/
+    request_url/note 三行，320/390/768/1440）：
+    - 四个字段 + URL 行的左缘在**同一档内逐行完全一致**（无错列）；
+    - 详情右缘从未越过节流面板右缘（overflow=false），文档级也无横向滚动；
+    - 窄档（≤某断点）表头 `display:none`、数据行改「时间/状态 + 入口 + 证据」
+      三行堆叠，这是刻意设计——表头隐藏后字段名靠行内自明，不是塌陷。
+
+    判据只钉结构契约：四列网格在宽档存在、窄档有显式的两列堆叠规则、
+    表头隐藏是**显式声明**而不是被压成 0 宽。
+    """
+    src = _src()
+    i = src.find(".pace-tline{display:grid;grid-template-columns:86px 64px 52px")
+    assert i > 0, "找不到溯源行的四列网格"
+    assert ".pace-tline.head{display:none}" in src, "窄档表头应为显式隐藏"
+    assert 'grid-template-areas:"t st" "p p" "n n"' in src, "窄档应显式声明两列堆叠"
+
+
+def test_radar_legend_covers_every_drawn_series():
+    """雷达图例必须解释图上画的每一条线，且色块与文字同一行。
+
+    2026-10-29 实测：画布 7 条线（1 红最低日 + 6 条灰「其他出发日」），
+    图例只有「最低日 · 选中 11-14」**一条**——六条灰线在图上没有任何解释，
+    而航线图例是「几条线几条图例」。同一张图例,两种完整度。
+
+    另两处同批修的：`.mon-legend>span>b` 缺 `display:inline-block`，色块以
+    block 独占一行（实测色块 y 与文字 y 差 10px）；文案里 `'... 选中 ' + ' 11-14'`
+    拼出两个空格。
+
+    判据：图例渲染接受 series 参数、灰线有计数条目、色块是 inline-block。
+    """
+    src = _src()
+    i = src.index("function spMonRenderLegend(")
+    seg = src[i:i + 1400]
+    assert "spMonRenderLegend(series)" in src, "图例未接收 series（数不出其他日期）"
+    assert "'其他出发日 '" in seg, "图例未解释灰色系列"
+    assert "_others=(series||[]).filter(" in seg, seg[:160]
+    # 色块行内化（否则独占一行）
+    i = src.index(".mon-legend>span>b{")
+    blk = src[i:src.find("}", i) + 1]
+    assert "display:inline-block" in blk and "margin-right:5px" in blk, blk
+    # 不得再拼出双空格
+    assert "'最低日 · 选中 '+" not in src, "图例文案又出现双空格"
+
+
+def test_small_card_head_buttons_actually_render_at_declared_height():
+    """卡头动作按钮声明 26px 就必须真的渲染 26px。
+
+    2026-10-29 实测：`.hdiag-card .hdiag-acts .btn2{height:26px}` 自 r433 起
+    **从未生效**——基础 `.btn2` 声明在更靠后的扁平层（`height:32px;
+    min-height:32px`），同优先级按声明顺序后者胜；而 `min-height` 还会把
+    height 顶回去（实测连内联 `height:26px!important` 都压不回 26px，
+    因为 min-height 仍在）。结果是「渠道健康卡里每个自检钮都比设计高 6px」，
+    卡片总高 163.3px。补 min-height 后实测 26px、卡片 157.3px、文本不裁切。
+
+    判据：该规则同时写 height 与 min-height，且两者同值。
+    """
+    src = _src()
+    i = src.find(".hdiag-card .hdiag-acts .btn2{")
+    assert i > 0, "找不到卡头动作按钮规则"
+    blk = src[i:src.find("}", i) + 1]
+    assert "height:26px" in blk, blk[:130]
+    assert "min-height:26px" in blk, \
+        "只写 height 会被更靠后的 .btn2{min-height:32px} 顶回去（实测无效果）：%s" % blk[:130]
+
+
+def test_rail_segments_and_legend_swatches_share_colors():
+    """配额轨三段与图例方块必须是同一组颜色，且三段彼此可区分。
+
+    2026-10-29 实测两个缺陷：
+    1) 慢档段用 `color-mix(--r-blue 40%, --r-surface-3)` 得到**浅蓝**——
+       整条轨读成「一段深蓝 + 一段浅蓝」，而图例写着三档（快档/慢档/
+       TTL 内跳过）。三种不同语义（已发出 / 拉长间隔后发出 / 被跳过）
+       只用同一色相的深浅表达，中间那段看不出是「被降频」。
+    2) 颜色写了两份：改 `.pace-rail .rs` 后，`.pace-legend .rs` 仍是旧值，
+       实测轨道琥珀、图例浅蓝——同一条轨两个颜色。
+
+    判据：两处 `.rs` 都用 `--r-amber`；三段背景各不相同（色相区分）。
+    """
+    src = _src()
+    rail = src[src.index(".pace-rail .rf{"):]
+    rail = rail[:rail.index("}") + 1]
+    assert "var(--r-blue)" in rail
+    i = src.index(".pace-rail .rs{")
+    assert "var(--r-amber)" in src[i:src.find("}", i) + 1], "慢档段应为琥珀（受限），不是浅蓝"
+    i = src.index(".pace-legend .rs{")
+    assert "var(--r-amber)" in src[i:src.find("}", i) + 1], \
+        "图例方块必须与轨道同色（两处各写一份，改一处会漂移）"
+    assert "color-mix(in srgb,var(--r-blue) 40%" not in src, "浅蓝慢档残留"
+
+
+def test_tool_groups_are_separated_only_when_on_one_row():
+    """底部两组干预按钮同排时必须有可见分隔，换行后必须去掉。
+
+    2026-10-29 实测：13 个同款灰底按钮只靠 18px 间隙隔开，
+    「预热 去哪儿 飞猪 携程 同程 途牛 全部 自检 自动 去哪儿 …」读成一串，
+    中间那段重复的渠道名会被当成「同一组东西列了两遍」。
+
+    修法用发丝竖线分栏（与 `.pace-stat` 的竖直发丝同一语言）。但竖线只在
+    两组**同行**时有意义：折行后它挂在第二组左缘、比第一组左缘缩进 18px，
+    读作「这一组莫名缩进一格」。折行由 flex-wrap 决定，宽度阈值量不出
+    （900 档仍同行、768 才折），所以用容器查询按面板实宽判。
+    实测 1440/1024/900 同行有竖线、768/390/320 折行无竖线。
+    """
+    src = _src()
+    i = src.find(".pace-tools .g+.g{")
+    assert i > 0, "缺分组竖线规则"
+    blk = src[i:src.find("}", i) + 1]
+    assert "border-left:1px solid var(--r-hair)" in blk, blk
+    assert "padding-left:18px" in blk, blk
+    # 容器查询关掉它（媒体查询按视口宽度判不准）
+    j = src.find("@container (max-width: 780px){")
+    assert j > 0, "缺容器查询：折行后必须去掉竖线与缩进"
+    seg = src[j:j + 160]
+    assert "border-left:0" in seg and "padding-left:0" in seg, seg
+    assert "container-type:inline-size" in src
+
+
+def test_all_three_charts_show_a_centered_empty_state():
+    """三张图在「数据不够画线」时都要在**画布上**给出居中空态。
+
+    2026-10-29 实测：航线 `.chart-empty`、关注 `.ws-empty` 都有居中空态框；
+    **雷达折线分支只写一句脚注就 return**，210~360px 画布整块留白，读作
+    「图画坏了」。现在雷达复用 K 线那条覆盖层（`.spmon-kempty`，sticky，
+    不撑开横向滚动容器）。
+
+    三处排版同档：正文 12px / 行高 1.6 / 标题 13px/600。实测 `.spmon-empty`
+    曾缺 `line-height`（只有它没写），`.chart-empty` 正文是 13px（比自己的
+    子元素标题还小一级）。
+    """
+    src = _src()
+    # 雷达数据不足分支必须在画布上出空态，而不是只写脚注
+    i = src.index("if(times.length<2||all.length<2){")
+    seg = src[i:i + 1100]
+    assert "spMonKEmpty" in seg, "雷达数据不足分支未在画布上给空态"
+    assert "'<b>当前范围只有 '" in seg, seg[:200]
+    # 折线成功路径要收掉空态，否则切模式留残影
+    j = src.index("const y0y1=PCHART.domain(")
+    before = src[j - 400:j]
+    assert "spMonKEmpty" in before and "display='none'" in before, \
+        "折线成功路径未隐藏上一条分支的空态覆盖层"
+    # 三处空态排版同档。锚点要带首条声明：裸 `.spmon-empty{` 会先命中别处的
+    # 单条 override（`.spmon.is-empty #spMonCal>.spmon-empty{width:100%…}`）。
+    for sel, need in ((".chart-empty{position:absolute", "line-height:1.6"),
+                      (".spmon-empty{display:flex", "line-height:1.6"),
+                      (".ws-empty{", "line-height:1.6")):
+        k = src.find(sel)
+        assert k > 0, sel
+        blk = src[k:src.find("}", k) + 1]
+        assert need in blk, "%s 缺 %s：%s" % (sel, need, blk[:120])
+
+
+def test_three_charts_share_a_loading_state():
+    """三图首帧都要有加载态，且结构一致：`<b>标题</b><span>说明</span>`。
+
+    2026-10-29 实测：航线是裸文本「数据加载中…」（无标题档、无说明），
+    关注是「正在读取关注清单 + 说明」两段，**雷达首帧什么都没有**——
+    同一块区域三种起始表现，雷达还会先闪一下空画布。
+
+    现三处统一为「正在读取…」标题 + 「只画真实采集点，未采日期不补点」说明。
+    雷达的静态占位挂在 K 线空态那个覆盖层上，`spMonDraw` 入口统一收掉，
+    各分支再决定要不要重新显示空态（保证提前 return 的路径也不留加载态）。
+    """
+    src = _src()
+
+    def seg_after(marker, n=200):
+        i = src.index(marker)
+        return src[i:i + n]
+
+    assert "<b>正在读取走势</b><span>只画真实采集点" in seg_after('id="chartEmpty"'), \
+        "航线加载态缺标题/说明结构"
+    assert "<b>正在读取监控记录</b><span>只画真实采集点" in seg_after('id="spMonKEmpty"'), \
+        "雷达缺首帧加载态"
+    assert "<b>正在读取关注清单</b><span>" in seg_after('id="wsChartEmpty"'), \
+        "关注加载态结构变了"
+    # 雷达占位必须初始可见（CSS 里是 display:none），并在绘制入口统一收掉
+    # 属性顺序：`style` 写在 `id` **之前**，窗口要往后开
+    i = src.index('id="spMonKEmpty"')
+    assert 'style="display:flex"' in src[i:i + 80], "雷达加载态初始不可见等于没有"
+    i = src.index("function spMonDraw(dateSeries,selDate,lowDate){")
+    head = src[i:i + 500]
+    assert "spMonKEmpty" in head and "display='none'" in head, \
+        "绘制入口未统一收掉加载态（提前 return 的分支会留占位）"
+
+
+def test_success_green_on_green_tint_uses_the_deep_token():
+    """绿字压绿底必须用加深档 `--ok-txt`，不能用 `--r-green`。
+
+    2026-10-29 全站 6 视图 × 2 主题对比度普查（`_scratch/audit_contrast_site.py`）：
+    `.spmon-run .st.ok{color:var(--r-green)}` 压在 `--r-green-soft` 上实测
+    **4.32:1**，AA 小字需 4.5。全站早有为此准备的 `--ok-txt`
+    （令牌注释：「--green 对 okbg 4.28:1 欠 AA → 5.63:1」），只是这一处没用。
+    改后全站不足项归零。
+
+    注意普查脚本本身要认 `color(srgb …)`——`color-mix` 的结果 Chromium 报成
+    该语法，只认 `rgb()` 会把深蓝底当作无背景，白字被误判成 1.11。
+    """
+    src = _src()
+    i = src.find(".spmon-run .st.ok{")
+    assert i > 0, "找不到运行状态 ok 胶囊"
+    blk = src[i:src.find("}", i) + 1]
+    assert "var(--ok-txt)" in blk, "绿字压绿底必须用加深档 --ok-txt：%s" % blk
+    assert "var(--r-green)" not in blk, "回退到浅绿会掉到 4.32:1"
+
+
+def test_search_view_keyboard_focus_is_visible():
+    """搜索页每个可聚焦元素都要有键盘焦点环。
+
+    2026-10-29 用真实 Tab 走查（`_scratch/audit_focus_ring.py`）：健康 31 个、
+    配置 28 个可聚焦元素全都可见焦点环，**搜索页 36 个里有 9 个没有**——
+    出发日/采集日 tab、`.srx-bandlogin`、`.srx-chip`、`.srx-more-rows`、`.srx-mtab`。
+    键盘用户完全跟丢焦点。
+
+    根因两层：这些 `.srx-*` 规则自带 `outline:none`（3px 宽度但 style:none），
+    而扁平化的 `.srx-chip{box-shadow:none}` 又会把补上的 inset 环一并清掉
+    （实测 matches(':focus-visible')=true 但 box-shadow=none）。
+
+    注意探针本身两个坑：程序化 `focus()` 不触发 `:focus-visible`（必须真按 Tab），
+    以及 inset 下划线 `0 -2px` 是选中指示、不算焦点环，但 `inset 0 0 0 2px`
+    才是全站正规环——不能见 inset 就否。
+    """
+    src = _src()
+    i = src.find('#searchview :is(button,a,[role="button"],summary,[tabindex]):focus-visible{')
+    assert i > 0, "搜索页缺统一焦点环规则"
+    blk = src[i:src.find("}", i) + 1]
+    assert "inset 0 0 0 2px var(--blue)!important" in blk, \
+        "焦点环必须带 !important（同权重 box-shadow:none 会清掉它）：%s" % blk[:120]
+
+
+def test_small_controls_get_a_touch_sized_hit_area_on_coarse_pointers():
+    """触摸档下小控件的命中区要够大，桌面观感不能变。
+
+    2026-10-29 逐元素命中测试（390 档 coarse）：三图档位 `.rngchip` 26px、
+    `.cnav`/`.cc-chip` 32px、`.lgact .btn2` 32px、`#srccap .scbtn` 32px、
+    `.pvx` 28px 的有效热区都只有自身盒高（上下各扩 0px）。
+
+    只加伪元素不够：实测 `.rngchip` 上方 6px 命中 `DIV.uhead`、下方 3px
+    命中隔壁 chip——热区被邻居抢走。所以触摸档把盒高本身提到 32px，
+    伪元素再补到 36px。实测桌面 fine 仍是 26px（`@media(pointer:coarse)`
+    不命中），触摸档 32px，两档都无横向溢出。
+    """
+    src = _src()
+    i = src.find(".rngchip,.cnav,.cc-chip,.lgact .btn2,.pvx,#srccap .scbtn,")
+    assert i > 0, "缺触摸档小控件尺寸规则"
+    blk = src[i:i + 700]
+    assert "min-height:32px" in blk, blk[:160]
+    assert "height:36px" in blk, "伪元素要把热区补到 36px"
+    assert "transform:translateY(-50%)" in blk, "伪元素须纵向居中，避免顶偏"
+    # 必须只在 coarse 下生效（桌面 26px 观感不能变）
+    j = src.rfind("@media(pointer:coarse){", 0, i)
+    assert j > 0 and i - j < 400, "该规则必须包在 @media(pointer:coarse) 里"
+
+
+def test_card_spacing_has_no_double_gap():
+    """卡片间距不能「容器 gap + 自身 margin」叠加成双份。
+
+    2026-10-29 实测关注台：父容器 `.wstudio` 是 `flex; gap:10px`，
+    而相邻兄弟规则 `#monview .ws-card+.ws-card{margin-top:10px!important}`
+    又加了一份 —— 同一容器里**第一段 10px、之后每段 20px**，同一种卡片两种
+    间距，且 20px 不在 4/6/8/12/16/24 阶上（全站普查只此一处越阶）。
+
+    修法：间距由容器 gap 单源提供，`.wstudio` 内的卡片 margin 归零
+    （与 `.mon-card{margin:0 0 14px}` 的归零同律）。修后全站卡片间距
+    只有 8px 与 10px 两档，各自内部一致。
+    """
+    src = _src()
+    # 相邻兄弟规则不得再把 ws-card 算进去（它已在 gap 容器里）
+    i = src.find("#monview .ucard+#ucard,#monview .ucard+.ucard,")
+    assert i > 0, "找不到相邻卡片间距规则"
+    blk = src[i:src.find("}", i) + 1]
+    assert ".ws-card+" not in blk, "ws-card 已在 .wstudio 的 gap 里，再加 margin 会双份：%s" % blk[:160]
+    # 必须显式抵消
+    j = src.find("#monview .wstudio>.ws-card{margin-top:0!important}")
+    assert j > 0, "缺 .wstudio 内卡片 margin 归零规则"

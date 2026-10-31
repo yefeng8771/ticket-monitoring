@@ -69,14 +69,43 @@ def test_no_pseudo_empty_wording():
 
 
 def test_every_crawler_has_error_escape():
-    """每个采集渠道都必须能记 error——否则失败时只能二选一（login/empty）。"""
+    """每个采集渠道都必须能记 error——否则失败时只能二选一（login/empty）。
+
+    判据要看**能力**，不是「该文件里出现字面量」：继承 `AppBaseCrawler`
+    的渠道（app_zhixing 等）统一走 `safe_fetch()`，异常在那里就被记成
+    `app-error`，子类自己不必再写一遍。曾经只查文件字面量，于是
+    `app_zhixing.py` 被判缺牌——而它其实有（r609 实测）。
+    """
+    try:
+        with open(os.path.join(CRAWLERS, "app_base.py"),
+                  encoding="utf-8", errors="replace") as f:
+            base = f.read()
+    except OSError:
+        base = ""
+    # 判据必须落在 `safe_fetch` 的**函数体**里：整个文件查关键字会假绿——
+    # `PATH_STATUS` 元组、`path_note` 的默认兜底都含 "error"，
+    # 实测删掉 safe_fetch 里那两行之后断言照样通过。
+    base_escapes = False
+    _i = base.find("def safe_fetch(")
+    if _i >= 0:
+        _j = base.find("\n    def ", _i + 10)
+        _body = base[_i:_j if _j > 0 else _i + 1200]
+        base_escapes = ('"error"' in _body and "path_note(" in _body
+                        and "except Exception" in _body)
     missing = []
     for fn, src in _sources():
         if fn in ("__init__.py", "challenge.py"):
             continue
         if "path_note(" not in src:
             continue
-        if '"error"' not in src and "'error'" not in src:
+        own = ('"error"' in src or "'error'" in src)
+        # 基类在 `crawlers/app_base.py` 里叫 `AppCrawler`（早前注释里写的是
+        # `AppBaseCrawler`，那个名字类上并不存在）。只认旧名会把继承这条
+        # 逃逸能力的渠道（app_qunar 等）判成缺牌——它们 `safe_fetch()` 里
+        # 的 error 分支是真生效的（r666 实况）。
+        inherits_app = (("AppCrawler" in src or "AppBaseCrawler" in src)
+                        and base_escapes)
+        if not (own or inherits_app):
             missing.append(fn)
     assert not missing, missing
 

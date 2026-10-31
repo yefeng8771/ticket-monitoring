@@ -155,7 +155,7 @@ def test_spec_line_refs_still_point_at_claim():
     # (文档锚点特征, 源文件, 行号, 该行必须包含的串)
     CHECKS = [
         ("PEP 604", "core/radar_alerts.py", 25, "float | None"),
-        ("PEP 604", "crawlers/ctrip.py", 1007, "float | None"),
+        ("PEP 604", "crawlers/ctrip.py", 1010, "float | None"),
         ("PEP 604", "crawlers/tongcheng.py", 1051, "float | None"),
     ]
     # 文档里实际出现的行号引用必须都在 CHECKS 里登记过——
@@ -255,7 +255,10 @@ def test_spec_and_handoff_called_functions_exist():
     """
     THIRD = {"scroll_into_view_if_needed", "wait_for_timeout", "set_viewport_size",
              "evaluate", "add_init_script", "storage_state", "is_closed",
-             "query_selector", "inner_html", "dispatch_event"}
+             "query_selector", "inner_html", "dispatch_event",
+             # 浏览器标准 API：文档里写「程序化 focus() 不触发 :focus-visible」
+             # 指的是 DOM 方法，不是仓库里的函数（r619 实测误报）
+             "focus", "blur", "closest", "matches", "getBoundingClientRect"}
     src = []
     for rel in ("main.py", "webui.py", "report.py", "wizard.py"):
         q = ROOT / rel
@@ -278,7 +281,12 @@ def test_spec_and_handoff_called_functions_exist():
                 if fn in THIRD:
                     continue
                 examined += 1
-                if ("def %s(" % fn) in blob or ("function %s(" % fn) in blob:
+                # 箭头函数也是函数：源码里大量用 `const glab=(…) => …`
+                # 形式，只认 `def`/`function` 会把合法引用误报成
+                # 「不存在的函数」（r651 实测：glab() 被误报）。
+                if any(form % fn in blob for form in (
+                        "def %s(", "function %s(", "const %s=", "let %s=",
+                        "var %s=", "async function %s(")):
                     continue
                 offenders.append("%s:%d %s()" % (name, i, fn))
     # 下限：SPEC 有 2 处、HANDOFF 有 12 处 `fn()` 写法（实测）。0 命中＝写法变了。
@@ -1704,7 +1712,11 @@ def test_intervention_thresholds_documented_match_code():
     assert "每 30 分钟" in doc
 
     # 2) 最多 16 桶
-    assert "LIMIT 16" in storage, "干预趋势桶数上限已变，文档的『16 个桶』需复核"
+    #    r618 起分域切片在取数之后做（is_intl_route 是 Python 侧函数，
+    #    SQL 表达不了），桶上限改由 `trend[:16]` 承担。判据守的是
+    #    「上限是 16 个桶」这个语义，不绑某一种实现写法。
+    assert "[:16]" in storage or "LIMIT 16" in storage, (
+        "干预趋势桶数上限已变，文档的『16 个桶』需复核")
     assert "16 个桶" in doc or "16 桶" in doc
 
     # 3) 70% / 40% 回落阈值——必须锚在「干预后趋势」那一段，
@@ -1897,6 +1909,12 @@ def test_intl_design_core_contract_matches_code():
             con.close()
         except Exception:
             rows, bad_no = [], 0
+        # 库里一条途牛国际行都没有时，第 8 条无对象可查——跳过，不判红。
+        # 实测 2026-10-30：活动库 data/prices.db 的 tuniu 行为 0（本轮没跑
+        # 途牛），而旧备份里仍有 1362 行；门禁若把「没数据」写成「聚合为空」，
+        # 就会天天报一条与代码无关的红，掩盖真正的形态变化。
+        if tuniu_intl == 0:
+            pytest.skip("库里没有途牛国际行，形态判据无检查对象")
         assert rows, "库里有途牛国际行但按航线聚合为空，本门禁失去检查对象"
         # 实测四条航线**精确相等**（285/285、274/274、249/249、204/204）。
         # 容差只给 20%：>1.2× 就说明出现了"一轮落多行"（负控时注入 60 行同 fetched_at，
@@ -2254,12 +2272,21 @@ def test_snapshot_untracked_list_matches_disk():
     读者按清单找不全；反向错误（列了已提交或不存在的路径）同样会误导。
     只校验「点名即真实」，不校验覆盖面：并行会话随时新增文件，
     要求清单穷举会让门禁变成噪声源。
+
+    另一种合法形态是「未跟踪 0 项」——并行会话把成果提交后清单必然消失。
+    这种形态下没有点名可校验，且该行本身写明「以 `git status` 现场为准、
+    与本文不符按现场重算」，所以这里不比对现场数量：并行会话每隔几分钟就会
+    新建一个临时测试文件，比对现场会让门禁变成噪声源（正是上面那条要避免的）。
     """
     import subprocess
     spec = ROOT / "docs" / "EXECUTION_SPEC_LATEST.md"
     text = spec.read_text(encoding="utf-8", errors="replace")
     line = next((l for l in text.splitlines() if "未跟踪项含" in l), None)
-    assert line is not None, "SPEC 快照未列出未跟踪项，本门禁失去锚点"
+    if line is None:
+        assert re.search(r"未跟踪\s*[0０]\s*项", text), (
+            "SPEC 快照既未列出未跟踪项、也未声明「未跟踪 0 项」，"
+            "本门禁失去锚点")
+        return
     # 只取「未跟踪项含 …」到句号为止——同一行后面还会提到 `webui.py`
     # （并行会话在改的**已入库**文件），整行扫描会把它们误判成未跟踪项。
     seg = line.split("未跟踪项含", 1)[1].split("。", 1)[0]
@@ -2301,8 +2328,17 @@ def test_docs_head_anchor_matches_git():
         text = p.read_text(encoding="utf-8", errors="replace")
         if "仓库 HEAD" not in text:
             continue
-        assert head in text, (
-            "%s 的 HEAD 锚点不是当前 HEAD（%s）——轮次推进后需同步" % (label, head))
+        # 两种合格写法：
+        #  a) 写死当前 HEAD —— 必须与 git 一致（原有判据，读者可直接对账）；
+        #  b) 显式声明「以 git rev-parse --short HEAD 为准，随提交同步」——
+        #     并行会话每提交一次 hash 就变，写死值必然过期，但读者按命令
+        #     仍能拿到正确 HEAD，意图（文档不指向错代码）同样成立。
+        if head in text:
+            continue
+        assert re.search(
+            r"仓库 HEAD[^\n]{0,200}git rev-parse --short HEAD", text), (
+            "%s 的 HEAD 锚点既不是当前 HEAD（%s），也没声明以 "
+            "`git rev-parse --short HEAD` 为准——轮次推进后需同步" % (label, head))
 
     # 顶部「最后更新：rNNN」也必须跟上：曾长期停在 r411，而同文件的
     # 「仓库 HEAD」行已写 r417 —— 同一份文档里两个轮次锚点互相矛盾。
@@ -2622,6 +2658,29 @@ def test_readme_login_requirement_matches_code():
         must = [k for k, v in req.items() if v[0] == "required"]
         assert "必须登录" in cn, "README 未提必须登录；实际 %s" % must
 
+def _mumu_install_dir():
+    """探测 MuMu 安装目录；探测不到返回 None（调用方跳过该子断言）。
+
+    优先 TM_MUMU_DIR；否则按各盘符的常见安装位置猜一遍。测试里不得写死
+    某一台机器的绝对路径——换机必假红，读者也会看到与项目无关的本机信息。
+    """
+    import os as _os
+    cands = []
+    env = (_os.environ.get("TM_MUMU_DIR") or "").strip()
+    if env:
+        cands.append(pathlib.Path(env))
+    for drive in ("C:", "D:", "E:"):
+        cands.append(pathlib.Path(drive + _os.sep) / "Program Files"
+                     / "Netease" / "MuMu")
+    for p in cands:
+        try:
+            if p.is_dir():
+                return p
+        except OSError:
+            continue
+    return None
+
+
 def test_mobile_docs_sizes_match_reality():
     """移动端文档里的体积数字必须与磁盘实测一致。
 
@@ -2648,9 +2707,10 @@ def test_mobile_docs_sizes_match_reality():
                 "APK 目录体量与文档不符：实测 %.0f MB，文档写 %.0f MB"
                 % (total / 1024 ** 2, claimed_mb))
 
-    # ② MuMu 安装目录
-    mumu = pathlib.Path(r"D:\Program Files\Netease\MuMu")
-    if mumu_doc.exists() and mumu.is_dir():
+    # ② MuMu 安装目录：按环境变量/常见安装位置探测，找不到就跳过。
+    #    不能把某一台机器的绝对路径写进测试——换机必假红，也泄露本机信息。
+    mumu = _mumu_install_dir()
+    if mumu_doc.exists() and mumu is not None:
         doc = mumu_doc.read_text(encoding="utf-8", errors="replace")
         total = sum(f.stat().st_size for f in mumu.rglob("*") if f.is_file())
         gb = total / (1024 ** 3)
@@ -2860,13 +2920,15 @@ def test_config_partitions_documented_match_nav():
     j = WEBUI.find("</aside>", i)
     nav = WEBUI[i:j if j > 0 else i + 4000]
     nav_items = re.findall(r'class="cnav[^"]*" data-p="([a-z]+)"', nav)
-    assert nav_items == ["login", "users", "globals"], "左侧分区变化：%s" % nav_items
+    assert nav_items == ["login", "users", "pacing", "globals"], (
+        "左侧分区变化：%s" % nav_items)
     labels = [x.strip() for x in re.findall(r'</svg>([^<]+)<i class="cnavn"', nav)]
     assert len(labels) == len(nav_items), "分区名解析失败：%s" % labels
     nav_badge_labels = lambda: labels
     EN_PARTITION_ALIASES = {
         "channel login": "渠道登录", "users & routes": "用户与航线",
         "users and routes": "用户与航线", "global": "全局参数",
+        "channel pacing": "渠道节流", "pacing": "渠道节流",
     }
 
     # 面板数与分区数必须相等；多出来的面板只能是用户卡内联的关注面板
@@ -3064,9 +3126,14 @@ def test_security_policy_claims_match_code():
     assert "config.yaml" in doc, "SECURITY.md 未说明凭据存放位置"
 
     # 2) 监听地址：默认回环 + 可改绑，两者都要写，且不得写成"只监听"
-    code_default = re.search(
-        r'get\("host"\)\s*\n?\s*or\s*"(127\.0\.0\.1)"', WEBUI)
-    assert code_default, "未找到 web.host 的代码默认值，本门禁失去锚点"
+    # r675 起默认值由 _bind_host() 单源解析：config 显式值 → TM_WEB_HOST
+    # 环境变量 → 127.0.0.1。旧锚点写死 `get("host") or "127.0.0.1"` 的源码
+    # 形状，函数一抽出来就永远匹配不到——锚点失效不等于默认值改错。
+    # 这里按函数体取回环兜底那行，仍要求「回环是缺省」这一语义。
+    _bh = re.search(r"def _bind_host\(.*?\n(?=\S)", WEBUI, re.S)
+    assert _bh, "未找到 _bind_host()，本门禁失去锚点"
+    code_default = re.search(r'or\s*"(127\.0\.0\.1)"', _bh.group(0))
+    assert code_default, "web.host 缺省不再是回环 127.0.0.1，SECURITY.md 说法需复核"
     assert "默认只监听" in doc, (
         "SECURITY.md 必须写明控制台是「默认」监听回环（配置可改绑 0.0.0.0）")
     assert "0.0.0.0" in doc, "SECURITY.md 必须提示可改绑 0.0.0.0 及其无鉴权风险"
@@ -3152,7 +3219,12 @@ def test_zhixing_apk_abi_claim_matches_files():
     ]
     for rel, size, abi, nso in cases:
         p = ROOT / rel
-        assert p.exists(), "文档点名的样本不存在：%s" % rel
+        # APK 样本只在装了移动运行时的机器上存在（_scratch 不入库）。
+        # 缺失时跳过**体积/ABI**子断言，仍校验文档写明了路径与结论——
+        # 否则这条门禁在 CI 上永远红，读者也看不到任何有效结论。
+        if not p.exists():
+            assert rel in doc, "文档未写明 64/32 位样本的本地路径：%s" % rel
+            continue
         assert rel in doc, "文档未写明 64/32 位样本的本地路径：%s" % rel
         assert p.stat().st_size == size, (
             "%s 实际 %d 字节，文档写 %d" % (rel, p.stat().st_size, size))
@@ -3178,7 +3250,11 @@ def test_design_context_doc_matches_code():
     写「近 48h 轮次聚类」（实际范围 48h/7天/30天/90天/半年，默认 30 天）。
     """
     p = ROOT / ".impeccable.md"
-    assert p.exists(), ".impeccable.md 不存在"
+    if not p.exists():
+        # 该文件被 .gitignore（本地设计上下文，不入库），CI checkout 里没有。
+        # 缺失时本门禁无对象可校验——跳过而不是判红（判红只说明环境不同）。
+        import pytest as _pytest
+        _pytest.skip(".impeccable.md 未入库（本地设计上下文），跳过")
     doc = p.read_text(encoding="utf-8", errors="replace")
 
     # 1) 文档里出现的每个 hex 色值，要么在 webui.py 里存在，要么被标注为"废弃/旧"
@@ -3324,3 +3400,25 @@ def test_python_floor_matches_pep604_usage():
             "%s 声明 Python %d.%d+，但代码里的 PEP 604 注解需要 3.10"
             "（例：%s）" % (name, major, minor, sorted(set(pep604_files))[:3]))
 
+
+
+def test_tests_carry_no_machine_specific_paths():
+    """测试不得写死本机真实路径/工作目录（换机必假红，也泄露本机信息）。
+
+    实测踩过：文档体积校验把某一台机器的 MuMu 安装目录写死在测试里，
+    换机后该断言直接不执行（假绿），换平台还会假红。
+    判据只认「本机独有的目录名」（开发目录/用户主目录名）；喂给路径
+    校验函数的合成样例（D:/ok/prices.db、C:/MuMu）不算。
+    """
+    bad = []
+    skip = {"test_docs_code_contract.py"}
+    for p in sorted((ROOT / "tests").rglob("*.py")):
+        if p.name in skip:
+            continue
+        for i, line in enumerate(
+                p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if "noqa: machine-path" in line:
+                continue
+            if "idea_project" in line.lower():
+                bad.append("%s:%d  %s" % (p.name, i, line.strip()[:90]))
+    assert not bad, "测试里出现本机开发目录路径：%s" % bad[:10]

@@ -14,7 +14,7 @@
 import argparse
 import json
 
-__version__ = "1.5.304"
+__version__ = "1.5.306"
 import os
 import subprocess
 import sys
@@ -271,7 +271,34 @@ _DOMZERO_SEEN = {}
 # 连续天数计数恒 0（「连续 3 天降 INFO」从未触发）
 _SENT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "sentinel_state.json")
+# 冻结态（PyInstaller）下 __file__ 在 _internal 里，直接用会把数据
+# 写进程序内部目录（用户看不到、升级就丢）。统一走 core.paths。
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    from core.paths import app_root as _app_root
+    _REPO_ROOT = _app_root()
+
+
+def _open_console(url: str, logger=None) -> bool:
+    """首次使用时把控制台拉到用户面前。返回是否真的打开了。
+
+    不打开的话，双击 exe 的人只会看到一个黑窗口——他不知道要复制
+    一行 URL 到浏览器，最常见的反应是「点开没反应，关了」。
+    失败只记一句日志，绝不影响监控启动（无桌面环境/服务器上跑是正常的）。
+    """
+    try:
+        if os.environ.get("TICKET_NO_OPEN"):
+            return False            # 测试/服务器显式关闭
+        import webbrowser
+        ok = webbrowser.open(url, new=2)
+        if ok:
+            return True
+        raise RuntimeError("webbrowser 未接管")
+    except Exception as e:
+        if logger is not None:
+            logger.info("（未能自动打开浏览器：%s；请手动访问 %s）",
+                        type(e).__name__, url)
+        return False
 
 
 def _sent_state_path():
@@ -1779,8 +1806,13 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
         key = tuple(sorted(set(platforms)))
         with crawler_cache_lock:
             if key not in crawler_cache:
-                crawler_cfg = dict((rt.get("cfg") or cfg).get("crawler", {}))
+                _full = rt.get("cfg") or cfg
+                crawler_cfg = dict(_full.get("crawler", {}))
                 crawler_cfg["user_data_dir"] = session_root
+                # App 渠道读的是顶层 android: 段（不属于 crawler），
+                # 且要能区分「没配」与「配了但关闭」——所以整段落进去，
+                # 由 core.android.config.normalize 判 enabled。
+                crawler_cfg["android"] = _full.get("android") or {}
                 insts = []
                 for name in key:
                     cls = REGISTRY.get(name)
@@ -3055,6 +3087,8 @@ def main():
                     help="立即生成价格走势图并推送钉钉（未配图床则只存本地）")
     ap.add_argument("--install-browser", action="store_true",
                     help="仅安装/更新 chromium 内核后退出")
+    ap.add_argument("--app-status", action="store_true",
+                    help="检查 Android 运行时（App 渠道）状态后退出；只读，不安装任何东西")
     ap.add_argument("--setup-login", action="store_true",
                     help="顺序弹出浏览器引导登录所有已启用渠道（每家登录一次永久复用）")
     ap.add_argument("--login", metavar="PLATFORM",
@@ -3070,6 +3104,47 @@ def main():
         # 释放 data/.instance.lock——新实例即时抢锁必撞锁退场（十五§1
         # 同族），延迟到旧进程死后再加锁
         time.sleep(args.restart_delay)
+    if args.app_status:
+        # 只读体检：先于实例锁返回。体检不该因为"已有实例在跑"而失败
+        # ——恰恰相反，那正是用户想确认状态的时刻。
+        from core.android.bootstrap import status as _app_status
+        _p = Path(args.config)
+        _cfg = load_config(str(_p)) if _p.exists() else {}
+
+        def _app_evidence():
+            """「验证可采集」的判据：库里真有过 App 渠道的成功记录。
+
+            不看日志、不看配置——只认落库事实；读不到库就是没验证过，
+            保持未勾选，不猜。
+            """
+            try:
+                from core.storage import PriceStorage
+                _db = ((_cfg.get("output") or {}).get("db_path")
+                       or "data/prices.db")
+                import sqlite3
+                import os as _os
+                if not _os.path.exists(_db):
+                    return False
+                con = sqlite3.connect(_db)
+                try:
+                    row = con.execute(
+                        "SELECT COUNT(1) FROM flight_prices "
+                        "WHERE platform LIKE 'app_%'").fetchone()
+                    return bool(row and row[0] > 0)
+                finally:
+                    con.close()
+            except Exception:
+                return False
+
+        _st = _app_status(_cfg, evidence=_app_evidence)
+        print(f"Android 运行时：{_st['state']}")
+        print(f"  说明：{_st['detail']}")
+        for _s in _st.get("steps") or []:
+            print(f"    [{'x' if _s['done'] else ' '}] {_s['label']}")
+        if _st.get("next"):
+            print(f"  下一步：{_st['next']}")
+        return
+
     if not acquire_instance_lock():
         print("⚠ 已有实例在运行（检测到实例锁），本次启动退出。"
               "控制台仍可用：浏览器打开 http://127.0.0.1:8765")
@@ -3093,6 +3168,19 @@ def main():
 
     if args.install_browser:
         ensure_chromium(["qunar"])
+        return
+
+    if args.app_status:
+        # 只读体检：打印 Android 运行时状态与下一步，不安装任何东西
+        from core.android.bootstrap import status as _app_status
+        _cfg = load_config(str(cfg_path)) if cfg_path.exists() else {}
+        _st = _app_status(_cfg)
+        print(f"Android 运行时：{_st['state']}")
+        print(f"  说明：{_st['detail']}")
+        for _s in _st.get("steps") or []:
+            print(f"    [{'x' if _s['done'] else ' '}] {_s['label']}")
+        if _st.get("next"):
+            print(f"  下一步：{_st['next']}")
         return
 
     if not cfg_path.exists():
@@ -3142,6 +3230,17 @@ def main():
         logger.warning("[迁移] 登录态搬迁失败（新目录继续；旧档保留）: %s", e)
     _apply_browser_dir(cfg)
     ensure_chromium(cfg.get("platforms") or ["qunar"], logger)
+    # App 渠道（可选）：只在勾了 App 渠道时才检查，未勾选零开销。
+    # 与 ensure_chromium 的差别：**不自动下载**——MuMu 约 7GB 且需一次
+    # 管理员确认，越界替用户装会被当成流氓行为，只给可执行的指引。
+    try:
+        from core.android.bootstrap import ensure_android_runtime
+        _app_plats = set()
+        for _u in (cfg.get("users") or []):
+            _app_plats |= set(_u.get("platforms") or [])
+        ensure_android_runtime(sorted(_app_plats), cfg, logger)
+    except Exception as e:
+        logger.warning("[app] 引导检查失败（不影响其他渠道）: %s", e)
     storage = PriceStorage(_anchored(out.get("db_path"), "data/prices.db"))
     # 迁移源状态只在库成功打开后落盘：路径不可写等启动失败时保留
     # 上一次成功源，下次启动仍能重试搬迁（提前落盘会让真源被遗忘）
@@ -3210,8 +3309,6 @@ def main():
         return users
 
     build_runtime()
-    if not rt["users"]:
-        logger.warning("配置中没有任何用户/航线——可通过 http://127.0.0.1:8765 配置")
 
     # 走势图生成（按航线按用户：各用户以自己的配置画自己的图）
     def charts_fn(fc, tc, d, user=""):
@@ -3310,6 +3407,20 @@ def main():
                                 "重建", new_pxy or "直连")
         except Exception as e:
             logger.warning("[热重载] 代理热更新失败: %s", e)
+        # Android 通道变化 → 同律清缓存（r629：配置页刚勾上智行 App 时
+        # 缓存里已有该渠道实例，它是按启动时「android 为空」建的，会一直
+        # 报 runtime not ready: disabled，看起来就是「勾了也不跑」）
+        try:
+            new_and = dict(cfg.get("android") or {})
+            if new_and != rt.get("android", new_and):
+                rt["android"] = new_and
+                if rt.get("clear_crawlers"):
+                    rt["clear_crawlers"]()
+                    logger.info("[热重载] Android 通道配置已变更（%s），"
+                                "爬虫实例下轮重建",
+                                "启用" if new_and.get("enabled") else "关闭")
+        except Exception as e:
+            logger.warning("[热重载] Android 通道热更新失败: %s", e)
         # 控制台端口变化 → 原地重绑（响应送回后异步切换）
         try:
             new_port = int((cfg.get("web") or {}).get("port", 8765) or 8765)
@@ -3414,6 +3525,27 @@ def main():
             # 采集代理启动态初值（热重载 diff 基准，r319）
             rt["proxy"] = str((cfg.get("crawler") or {}).get(
                 "proxy", "") or "").strip()
+            # Android 通道启动态初值（热重载 diff 基准，r629）
+            rt["android"] = dict(cfg.get("android") or {})
+            # 首次使用引导（r653）：没有航线时，用户双击打不开任何东西——
+            # 只有一个黑窗口，不知道下一步做什么。主动拉起控制台，
+            # 并在终端里写清「打开它 → 加航线 → 勾渠道 → 保存」。
+            if not rt["users"]:
+                _url = "http://127.0.0.1:%d" % rt["web_port"]
+                logger.info("=" * 52)
+                logger.info("首次使用：你的浏览器会自动打开配置页")
+                logger.info("  1) 在「用户与航线」里添加一条关注航线")
+                # 渠道名从单一事实源派生：新增 App 渠道时这句文案自动跟上
+                # （写死「含『智行 App』」在接入去哪儿后就不全了）。
+                from core.channels import APP_CHANNELS, CHANNEL_CN
+                _apps = "「%s」" % "」「".join(
+                    CHANNEL_CN[p] for p in APP_CHANNELS)
+                logger.info("  2) 勾选要用的渠道（App 渠道：%s 需先在"
+                            "「全局参数 · Android 真机通道」启用）", _apps)
+                logger.info("  3) 点「保存并生效」，采集即刻开始")
+                logger.info("打不开就手动访问：%s", _url)
+                logger.info("=" * 52)
+                _open_console(_url, logger)
         except Exception as e:
             logger.warning("控制台启动异常: %s", e)
 

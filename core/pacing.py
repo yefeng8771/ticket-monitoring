@@ -25,6 +25,9 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 PLATFORMS = ("ctrip", "fliggy", "qunar", "tongcheng", "tuniu")
+# App 渠道（可选）：需要独立节奏 key，但**不属于**内置浏览器渠道集合。
+# 清单来自零依赖的 core/channels.py（曾在此本地另写一份，加渠道必然漏改）。
+from core.channels import APP_CHANNELS, path_cn  # noqa: E402
 
 _HHMM = re.compile(r"^(\d{1,2}):(\d{2})$")
 
@@ -182,10 +185,12 @@ def parse_pacing(cfg):
         crw.get("health_slowest_factor"), DEFAULTS["health_slowest_factor"],
         out["health_slow_factor"], 20.0, float)
     # 每渠道独立节奏（3 区扩展）：最小采集间隔，0=跟随全局 TTL
+    # App 渠道也要有 key：它们共用一台设备，节奏通常比浏览器更宽，
+    # 缺 key 会让调度层在取值时退化成"无节奏"。
     cad = crw.get("cadence") or {}
     _cad = {}
     if isinstance(cad, dict):
-        for _p in PLATFORMS:
+        for _p in PLATFORMS + APP_CHANNELS:
             try:
                 _v = int(cad.get(_p) or 0)
             except (TypeError, ValueError):
@@ -348,9 +353,18 @@ def classify_failure(statuses, note=""):
         return "soft"
     if _IP_CODE_RE.search(low) or any(k in low for k in _IP_MARKS):
         return "ip"
-    if "blocked" in sts or any(k.lower() in low for k in _CAPTCHA_MARKS):
+    # **结构化状态优先于 note 文本**（r625）：路径状态是采集器给出的结论，
+    # note 只是给人看的说明。实测一条 status=login、note 写成
+    # 「需要登录，可能会弹验证码」的样本会被下面的 captcha 关键词吃掉，
+    # 于是「该去重登」被判成「验证挑战」→ 冷却 300 秒而不是引导用户登录。
+    # 顺序反过来也同样危险（登录墙里出现「风控」字样会被判 ip）。
+    if "login" in sts:
+        return "login"
+    if "blocked" in sts:
         return "captcha"
-    if "login" in sts or any(k in str(note or "") for k in _LOGIN_MARKS):
+    if any(k.lower() in low for k in _CAPTCHA_MARKS):
+        return "captcha"
+    if any(k in str(note or "") for k in _LOGIN_MARKS):
         return "login"
     return ""
 
@@ -383,6 +397,16 @@ class ChannelBreaker:
                 self.enabled = bool(enabled)
             if login_cooldown_s is not None:
                 self.login_cooldown_s = max(0, int(login_cooldown_s))
+
+    def mark_cause(self, plat, kind):
+        """只记「这轮被什么拦的」，不改变任何节流动件（r626）。
+
+        用于「功能已被用户关掉」的场景：事实要留痕，但不该再要求一个
+        不会执行的动作（如 needs_warmup）。
+        """
+        with self._lock:
+            st = self._rec(str(plat))
+            st["reason"] = str(kind or "")
 
     def _rec(self, plat):
         return self._st.setdefault(str(plat), {
@@ -593,45 +617,96 @@ def shadow_path_preference(paths, min_samples=5, low=0.3):
     return {"prefer": ranked[:2], "avoid": avoid}
 
 
+def _with_channel(hint, effect, lead):
+    """分域结论后补一句渠道全貌（r630）。
+
+    实测 qunar：国际域 48%→53%（几乎没动）而渠道整体 44%→84%（大好）。
+    只给前者，读者会一直折腾国际；两句一起给才判断得出「该换域」。
+    渠道级与域级等价时（非域 scope、或数字相同）不追加，避免噪音。
+    """
+    if not lead:
+        return hint
+    cb, ca = effect.get("before"), effect.get("after")
+    if cb is None or ca is None:
+        return hint
+    dsb, dsa = effect.get("scope_before"), effect.get("scope_after")
+    if cb == dsb and ca == dsa:
+        return hint
+    rel = ("同期渠道整体 %.0f%% → %.0f%%"
+           % (cb * 100, ca * 100))
+    # 只有「该域确实没跟上」时才解释「整体已可用」；域本身已达标
+    # （如 tongcheng 30%→100%）时说这句会自相矛盾。
+    dsa_v = dsa if dsa is not None else 0.0
+    dsb_v = dsb if dsb is not None else 0.0
+    if ca >= 0.7 and dsa_v < 0.7:
+        rel += "（整体已可用，是这个域没跟上——可换域或先观察）"
+    elif ca > cb and ca - cb > 0.1 and dsa_v - dsb_v < 0.1:
+        rel += "（改善主要来自别的域）"
+    return hint + "；" + rel
+
+
 def effect_verdict(effect):
     """把干预前后对比翻译成一句可执行结论（供建议引擎/面板复用）。
 
     effect: storage.intervention_effect() 的返回。
     返回 (state, hint, severity)；无干预或样本不足时如实说"还不能判断"。
+
+    分域口径（r619）：这次干预的 scope 是 dom/intl 时，结论必须按**该域**
+    的 before/after 判。原先只读渠道级数字，实测形态是：
+    国际自检后国际仍 0%，但渠道级因国内一直很好而 100% → 判「干预有效」
+    → 调用方（webui）据此把「路径劣化」的 advice 改写成「恢复中」，
+    用户于是不再处理一个仍然全红的域。数字难看只是表象，这里关掉的是
+    「可判断 + 可干预」。
     """
     e = effect or {}
     if not e.get("has"):
         return "none", "", "ok"
     b, a = e.get("before"), e.get("after")
+    # 该域口径优先。非域名 scope（重登槽位等）没有 scope_* 字段，走渠道级。
+    _sc = str(e.get("scope") or "").strip().lower()
+    _domain = ""
+    if _sc in ("dom", "intl") and ("scope_after" in e
+                                   or "scope_before" in e):
+        _domain = ("国际" if _sc == "intl" else "国内")
+        b, a = e.get("scope_before"), e.get("scope_after")
+        _an = int(e.get("scope_after_n") or 0)
+    else:
+        _an = int(e.get("after_n") or 0)
+    _lead = (_domain + "域：") if _domain else ""
     # 回落优先于一切：干预后先好后坏，一致性已不成立，不该被
     # "干预前无样本"或"样本不足"掩盖。
     if e.get("regressed"):
-        return "regressed", ("干预后出现过恢复但最近一个窗口回落到 %.0f%%："
+        return "regressed", ("%s干预后出现过恢复但最近一个窗口回落到 %.0f%%："
                             "一致性不成立，建议复查会话/入口"
-                            % ((a or 0) * 100)), "act"
+                            % (_lead, (a or 0) * 100)), "act"
     if a is None:
-        return "pending", ("干预后还没有新样本（%s）：等下一轮采集再判断"
-                           % (e.get("action") or "干预")), "wait"
+        # 该域零样本时说清是「这个域还没有」，不拿渠道级的数字顶替
+        return "pending", ("%s干预后还没有新样本（%s）：等下一轮采集再判断"
+                           % (_lead, e.get("action") or "干预")), "wait"
     # 样本护栏：干预后只有 1-2 次就宣布"已恢复"是过度自信。
-    if int(e.get("after_n") or 0) < 3:
-        return "provisional", ("干预后仅 %d 个样本（成功率 %.0f%%）："
-                               "再观察一轮再定论"
-                               % (int(e.get("after_n") or 0), a * 100)), "wait"
+    if _an < 3:
+        return "provisional", ("%s干预后仅 %d 个样本（成功率 %.0f%%）："
+                               "再观察一轮再定论" % (_lead, _an, a * 100)), "wait"
     if b is None:
-        return "unknown_before", ("干预后成功率 %.0f%%（%d 次）；干预前窗口"
-                                  "无样本，无法对比" % (a * 100,
-                                                     int(e.get("after_n") or 0))), "ok"
+        return "unknown_before", ("%s干预后成功率 %.0f%%（%d 次）；干预前窗口"
+                                  "无样本，无法对比" % (_lead, a * 100, _an)), "ok"
     if a >= 0.7 and a > b:
-        return "improved", ("干预有效：%.0f%% → %.0f%%"
-                            % (b * 100, a * 100)), "ok"
+        return ("improved", _with_channel(("%s干预有效：%.0f%% → %.0f%%"
+                                  % (_lead, b * 100, a * 100)),
+                                 e, _lead), "ok")
     if a >= 0.7:
-        return "recovered", ("干预后已回到 %.0f%%（干预前 %.0f%%）"
-                             % (a * 100, b * 100)), "ok"
+        return ("recovered", _with_channel(("%s干预后已回到 %.0f%%（干预前 %.0f%%）"
+                                   % (_lead, a * 100, b * 100)),
+                                  e, _lead), "ok")
     if a > b:
-        return "partial", ("有改善但仍偏低：%.0f%% → %.0f%%，建议再自检一次"
-                           % (b * 100, a * 100)), "wait"
-    return "no_effect", ("干预未见改善：%.0f%% → %.0f%%，换路径/重登后再试"
-                         % (b * 100, a * 100)), "act"
+        return ("partial", _with_channel(("%s有改善但仍偏低：%.0f%% → %.0f%%，"
+                                          "建议再自检一次"
+                                          % (_lead, b * 100, a * 100)),
+                                         e, _lead), "wait")
+    return ("no_effect", _with_channel(("%s干预未见改善：%.0f%% → %.0f%%，"
+                                       "换路径/重登后再试"
+                                       % (_lead, b * 100, a * 100)),
+                                      e, _lead), "act")
 
 
 def advise(plat, ch=None, paths=None, now=None, node=None,
@@ -735,6 +810,9 @@ def advise(plat, ch=None, paths=None, now=None, node=None,
     for _sk, _sv in scopes.items():
         _sp = (_sv or {}).get("paths") or {}
         for _name, _v in _sp.items():
+            # 提示里给人看的名字：账本键名对 App 渠道是英文 id
+            # （app-list/android-runtime），原样入句读者不知道卡在哪一步。
+            _shown = path_cn(_name)
             _n = int((_v or {}).get("attempts") or 0)
             _valid = max(0, _n - int((_v or {}).get("empty") or 0)
                          - int((_v or {}).get("unsupported") or 0))
@@ -778,7 +856,7 @@ def advise(plat, ch=None, paths=None, now=None, node=None,
                         "hint": "%s %s 近 24h 被登录墙拦 %d/%d 次、仅 %d 次"
                                 "出数——根因是会话失效，限流与换路都无效；"
                                 "点「去登录」重存该渠道会话"
-                                % (_dom, _name, _login_n, _n, _okish),
+                                % (_dom, _shown, _login_n, _n, _okish),
                         "eta_s": 0}
             # 登录拦截占多数、但这条路其他航线仍在正常出数 → 会话是好的，
             # 是航线级拦截。不要提重登（无效），如实说明并给可行动作。
@@ -789,7 +867,7 @@ def advise(plat, ch=None, paths=None, now=None, node=None,
                         "hint": "%s %s 有 %d/%d 次被登录墙拦，但同一会话其他"
                                 "航线仍在出数（%d 次）——会话是好的，属航线级"
                                 "拦截；先点「自检」核实，别急着重登"
-                                % (_dom, _name, _login_n, _n, _okish),
+                                % (_dom, _shown, _login_n, _n, _okish),
                         "eta_s": 0}
             # r388：只对"最近真的在试"的路下结论。某条兜底路径可能几小时
             # 没被用到（主路径一直成功就不走它），拿半天前的旧样本报
@@ -807,7 +885,7 @@ def advise(plat, ch=None, paths=None, now=None, node=None,
                         "hint": "%s %s 近 24h 有效率 %.0f%%（%d 次有效）"
                                 "——已在日志记录路径偏好（影子模式，暂不改变"
                                 "采集顺序）；可点「自检」验证这条域的路"
-                                % (_dom, _name, float(_raw) * 100, _valid),
+                                % (_dom, _shown, float(_raw) * 100, _valid),
                         "eta_s": 0}
     bad = None
     for name, v in paths.items():
@@ -934,6 +1012,8 @@ class Pacing:
                                    self.cfg["per_minute"])
         self._last = {}
         self._health = {}
+        # 最近一次失败归类（熔断关闭时也要能说清被什么拦的）
+        self._cause = {}
         self._plan = []
         self._round = {"at": "", "fast": 0, "slow": 0, "skip": 0,
                        "trips": [], "busy": [],
@@ -1186,6 +1266,12 @@ class Pacing:
 
         `retry_after` 来自响应头（秒）。有它就以它为准，没有才用自算阶梯。
         返回 (kind, cooldown_s)；kind 空串表示"不算拒绝"。
+
+        熔断开关关闭时（r625）：分类照做（`cause` 仍记在通道状态里供界面
+        显示「这次是被什么拦的」），但**不返回 kind**——调用方拿 kind 当
+        「已熔断」的信号（写 auto_trip 台账、打「命中…熔断 Ns」、自动弹窗）。
+        原实现在此只让 trip() 返回 0，kind 照旧返回，于是关掉开关后界面仍
+        宣称「已熔断」、账本仍写一条自动干预 —— 开关看起来生效了，实际没有。
         """
         kind = classify_failure(statuses, note)
         if not kind:
@@ -1193,6 +1279,24 @@ class Pacing:
                    for s in (statuses or [])):
                 self.reset(plat)
             return "", 0
+        if not self.cfg["breaker_enabled"] and kind not in ("soft", "login"):
+            # 未熔断，但把归因留在 Pacing 上（可见性不因开关而消失）：
+            # 面板仍能说「这次是被验证码拦的」，只是不再宣称已熔断。
+            with self._lock:
+                self._cause[str(plat)] = kind
+            return "", 0
+        if kind == "soft" and not self.cfg.get("warmup_enabled"):
+            # 预热开关关闭（r626）：不置 needs_warmup。那个标志只有
+            # note_warmup_ok()（预热成功）才会清，而预热被关掉就永远不执行
+            # ——标记会**永久挂着**；等用户哪天重开预热，一个几小时前的软拒
+            # 会立刻触发一次"强制预热"。事实照旧留痕（reason / _cause），
+            # 面板仍能说「这轮是软拒」，只是不再要求一个被关掉的动作。
+            # 不调 trip()：它的 soft 分支会置 needs_warmup，而预热被关掉
+            # 之后没有任何代码会清它。这里只留归因。
+            self._breaker.mark_cause(str(plat), "soft")
+            with self._lock:
+                self._cause[str(plat)] = "soft"
+            return "soft", 0
         # 软拒不清 needs_warmup：预热成功（拿到风控 cookie）后由
         # note_warmup_ok() 清；否则下一轮继续先预热。
         cd = self.trip(plat, kind, retry_after=retry_after)
@@ -1215,6 +1319,12 @@ class Pacing:
         channels = self._breaker.snapshot(now)
         with self._lock:
             health = {k: dict(v) for k, v in self._health.items()}
+            cause = dict(self._cause)
+        # 熔断关闭时的归因（r625）：未熔断不等于没被拦。把它挂到通道上，
+        # 界面才能说「这轮被验证码拦了，熔断已关」而不是一片正常。
+        for p, k in cause.items():
+            if p in channels and not channels[p].get("reason"):
+                channels[p]["blocked_but_open"] = k
         for p, b in self._bucket.snapshot(now).items():
             if p in channels:
                 channels[p]["bucket"] = b

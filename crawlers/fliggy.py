@@ -42,6 +42,12 @@ class FliggyH5Login(BaseCrawler):
         return FLIGGY_H5_LOGIN_URL
 
 
+# 飞猪 H5 兜底通路的**单一名字**（r607）：`FliggyH5Crawler` 自己把路径记成
+# `H5`，兜底再拼前缀就成了 `H5:H5` —— 同一条通路两个名字，健康卡会显示成
+# 两行，退役判定按字面也认不出来。这里所有记账都走同一个常量。
+_FLIGGY_H5_PATH = "H5"
+
+
 class FliggyCrawler(BaseCrawler):
     name = "fliggy"
     use_mobile = False  # 桌面 UA（PC SSR 页面）
@@ -265,15 +271,18 @@ class FliggyCrawler(BaseCrawler):
             if not os.path.isfile(h5.session_state_path):
                 if any(p.get("status") in ("login", "blocked")
                        for p in self.paths):
-                    self.path_note("H5", "login", detail="未保存淘宝 H5 会话")
+                    self.path_note(_FLIGGY_H5_PATH, "login", detail="未保存淘宝 H5 会话")
                 return []
             rows = h5.fetch(from_city, to_city, dates, ret_date)
-            for rec in h5.paths:
-                self.paths.append(dict(rec, path="H5:" + str(rec.get("path") or "")))
+            # `FliggyH5Crawler` 自己就把每条路径记成 `H5`（它也 path_reset），
+            # 名字已经够区分了；再包一层前缀只会得到 `H5:H5` —— 同一条通路
+            # 在账本里出现两个名字，健康卡显示成两行、退役判定按字面认不出
+            # （r607）。原样透传，记账名由 H5 采集器单源决定。
+            self.paths.extend(dict(r) for r in h5.paths)
             return rows
         except Exception as e:
             self.logger.warning("[fliggy] H5 回退异常: %s", e)
-            self.path_note("H5", "error", detail=str(e)[:140])
+            self.path_note(_FLIGGY_H5_PATH, "error", detail=str(e)[:140])
             return []
 
     # ───── 国际支线（r325，调研 _scratch/intl/report_fliggy.md）─────

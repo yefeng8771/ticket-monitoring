@@ -63,11 +63,19 @@ def _measure(port, width):
 
 @pytest.mark.parametrize("width", [1440, 1100, 900, 620, 420])
 def test_all_rows_share_right_edge(server, width):
-    """五行操作按钮右缘必须完全一致（这是用户截图里的核心症状）。"""
+    """登录行操作按钮右缘必须完全一致（这是用户截图里的核心症状）。
+
+    r645：行数契约原写死 5——r644 新增「智行 App 真机」卡后变 6，
+    断言随之过期，但**右缘实测仍完全一致**（1440: 6 行全部 307/1327）。
+    这里改为「不少于 5 行」：守的是「同一张卡里每一行的按钮贴同一条右缘」，
+    而不是「渠道恰好五家」——渠道数会随接入变化，对齐意图不会。
+    """
     rows = _measure(server, width)
-    assert len(rows) == 5, rows
+    assert len(rows) >= 5, rows
     rights = {r["right"] for r in rows}
     assert len(rights) == 1, "右缘不齐 %r @%dpx" % (sorted(rights), width)
+    lefts = {r["left"] for r in rows}
+    assert len(lefts) == 1, "左缘不齐 %r @%dpx" % (sorted(lefts), width)
 
 
 @pytest.mark.parametrize("width", [1440, 1100, 900, 620, 420])
@@ -76,6 +84,25 @@ def test_all_rows_share_height(server, width):
     rows = _measure(server, width)
     heights = {r["h"] for r in rows}
     assert len(heights) == 1, "行高参差 %r @%dpx" % (sorted(heights), width)
+
+
+def test_dual_slot_sub_date_line_never_wraps():
+    """飞猪双槽的说明必须单行——它是「五行等高」的根因，单独守一道。
+
+    900 档实测（r543）：双槽只有 157px 宽，「必须登录 · 已保存 ·
+    会话待验证」折成两行 33px，把飞猪行撑到 69px，同页其余四行 52px。
+    上面那条几何守卫会在真跑浏览器时抓到，这条只守 CSS 意图，跑得快、
+    失败信息直指原因（是"说明折行"而不是"某行莫名高了"）。
+    """
+    import webui
+    src = webui.PAGE
+    i = src.index("#loginRows .lgslots:has(.lgslot+.lgslot){grid-template-columns:auto auto")
+    seg = src[i:i + 900]
+    assert "#loginRows .lgslots:has(.lgslot+.lgslot) .lgsub{" in seg, seg
+    rule = seg[seg.index("#loginRows .lgslots:has(.lgslot+.lgslot) .lgsub{"):]
+    rule = rule[:rule.index("}") + 1]
+    assert "white-space:nowrap!important" in rule, rule
+    assert "text-overflow:ellipsis!important" in rule, rule
 
 
 def test_name_column_left_edges_align(server):

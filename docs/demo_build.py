@@ -42,8 +42,15 @@ window.__BAKED__=%s;
     return Promise.resolve(J({ok:false,demo:true,
      err:'在线演示为静态站：保存仅在本机真实控制台可用'}));
    return Promise.resolve(J(B.config));}
-  if(u.indexOf('/api/login-state')===0)
-   return Promise.resolve(J(B.login||{ok:true,plats:{}}));
+  if(u.indexOf('/api/login-state')===0)   return Promise.resolve(J(B.login||{ok:true,plats:{}}));
+  /* 节流面板快照：演示站健康页 loadPacing() 打的就是这条。缺了它会渲染
+     「读取失败」——面板是渠道成功率/干预/溯源的主观测面，公开演示必须可看。 */
+  if(u.indexOf('/api/pacing')===0){
+   if(o&&String(o.method||'GET').toUpperCase()==='POST')
+    return Promise.resolve(J({ok:false,demo:true,
+     err:'在线演示为静态站：节流干预仅在本机真实控制台可用'}));
+   return Promise.resolve(J(B.pacing||{ok:false,demo:true,
+    err:'演示节流快照缺失'}));}
   if(u.indexOf('/api/trend')===0){
    const q=new URLSearchParams(u.split('?')[1]||'');
    const k=q.get('from')+'|'+q.get('to')+'|'+q.get('date')+'|'+q.get('days');
@@ -206,6 +213,11 @@ def build():
             "2026-11-05 14:00:45 [INFO] ticket-monitor: ===== 本轮扫描结束 =====",
         ], "plat": "qunar", "ts": "2026-11-05 14:00"},
         "config": webui._demo_config_payload(),
+        # 节流面板（issue #8 同批发现的发布面缺口）：shim 未拦截 /api/pacing，
+        # 演示站健康页的节流区直接渲染成「读取失败」。面板是产品的核心可观测面
+        # （渠道成功率/干预/溯源都在这里），公开演示站必须能看。
+        # 载荷复用真实演示单源，不另写一份样例。
+        "pacing": webui._demo_pacing_payload(),
         "login": {"ok": True, "plats": {
             p: {"saved": False, "active": False,
                 "stale": False, "pending": False}
@@ -242,7 +254,10 @@ def build():
              % (version, sha, datetime.date.today().isoformat()))
     page = page.replace("</head>", stamp + "</head>", 1)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w", encoding="utf-8") as f:
+    # newline="\n"：文本模式在 Windows 会把每个 \n 翻成 \r\n，而 .gitattributes
+    # 钉的是 eol=lf。不锁死的话，每次重新烘焙都会把工作树变回 CRLF，
+    # test_eol_consistency 立刻红——烘焙产物与仓库规范必须是同一种形态。
+    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write(page)
     print("baked:", OUT, "(%.0f KB)" % (os.path.getsize(OUT) / 1024))
 

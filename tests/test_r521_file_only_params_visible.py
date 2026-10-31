@@ -39,27 +39,25 @@ def test_backend_reads_the_file_only_keys_back():
             "/api/config 没有回读 %s（网页上无法显示它的当前值）" % k
 
 
-def test_config_page_renders_a_readonly_note():
+def test_config_page_renders_editable_controls_instead_of_a_readonly_note():
+    """r523 起这些键必须**可编辑**：只读说明块已按要求撤除。
+
+    历史：r521 曾用 `glnote()` 只读列出它们（当时判断「改完要重载」），
+    但用户明确要求「配置页不允许存在无法配置的项」，于是改成控件。
+    这条契约随之反转——**不变量变成了「不许再退回只读」**。
+    """
     w = _w()
-    assert "const glnote=" in w, "缺少只读说明块构造器"
-    i = w.index("const glnote=")
-    seg = w[i:i + 600]
-    assert "gn-p" in seg and "he(r[2])" in seg, \
-        "键路径没有转义就拼进 HTML"
-    # 调用点必须在 glgrid **之外**，否则会被当成一个格子在网格里占位
-    j = w.index("glnote('仅可在 config.yaml 中修改")
-    before = w[max(0, j - 400):j]
-    assert "</div>'" in before, \
-        "说明块仍在 .glgrid 内部（会占掉一个格子）"
+    assert "glnote('仅可在 config.yaml 中修改" not in w,         "又退回了「只能改文件」的只读说明"
+    for pk in ("glbSessMax", "glbMaxConc", "glbMua", "glbTls",
+               "glbDbgDir", "glbLcd", "glbNearD", "glbLgd"):
+        assert pk in w, "缺少控件 %s" % pk
 
 
-def test_note_lists_all_four_keys():
+def test_cadence_controls_exist_for_all_five_channels():
     w = _w()
-    i = w.index("glnote('仅可在 config.yaml 中修改")
-    seg = w[i:i + 1200]
-    for k in ("crawler.session_max_days", "crawler.max_concurrency",
-              "crawler.tls_impersonate", "crawler.login_desktop"):
-        assert k in seg, "说明块没有列出 %s" % k
+    for p in ("qunar", "fliggy", "ctrip", "tongcheng", "tuniu"):
+        assert "glbCad_'+p" in w or ("glbCad_" in w and p in w),             "缺少 %s 的节奏控件" % p
+    assert "GLB.cadence=Object.assign" in w, "cadence 控件写不回 GLB"
 
 
 def test_saving_web_config_does_not_drop_unlisted_keys():

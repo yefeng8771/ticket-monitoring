@@ -149,16 +149,28 @@ def test_opscard_desktop_unchanged(pg):
 
 # ---- W-2：稀疏系列只画点不连线 ----
 
-_SPARSE = ("const cr=curRoute();cr.range='48h';cr.r.history="
-           "{direct:[['10-01 08:00',1000,0],['10-01 20:00',1010,0],"
-           "['10-02 08:00',1020,0]],"
-           "transfer:[['10-02 04:00',900,0],['10-02 08:00',950,0]]};"
+# r244b：数据必须用**真实形态**——航线图按 2h 分桶（48h→BUCKET=120min），
+# 缺口下限是 120×1.2=144min。旧样例直飞每 12h 一点（720min > 144），
+# 在分桶语义下**本来就是真断档**，断言「3 点必连线」与实际设计冲突，
+# 误报成「线没画出来」。真实数据是每 2h 一个点，故直飞给 25 点、
+# 中转保持 2 点（稀疏系列的原始意图不变）。
+_MK = "window._mk=(n,base)=>{const a=[];for(let i=0;i<n;i++){const d=new Date(Date.UTC(2026,9,1,0,0,0)+i*2*3600e3);const p=x=>String(x).padStart(2,'0');a.push([p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':00',base+i,0]);}return a;};"
+_SPARSE = ("const cr=curRoute();cr.range='48h';"
+           + _MK + 
+           # 中转价位必须落在直飞的价格窗内：原先用 900/950，比直飞
+           # 1000 低太多，被 _keep 的异常价过滤整段剔除（_outHidden+2），
+           # ht 变空 → 稀疏注不出现，测试误判成「注丢了」。
+           "cr.r.history={direct:window._mk(25,1000),"
+           "transfer:[['10-02 04:00',1005,0],['10-02 08:00',1010,0]]};"
            "cr.r.th={direct:800,transfer:800};")
 
 
 def test_sparse_series_no_line(pg):
-    """折线：中转 2 点稀疏系列不画连线——直飞 3 点 2 段贝塞尔，
-    中转若画线会 +1；修复后全程贝塞尔恒 2。"""
+    """折线：中转 2 点稀疏系列不画连线。
+
+    直飞按真实 2h 节奏给 25 点 → 24 段贝塞尔；
+    中转只有 2 点（n<3）只列点、不连线（原意图）。
+    若稀疏系列也连线，段数会变成 24+1。"""
     pg.evaluate("switchView('mon');showMonTab('trend');setMode('line');"
                 + _SPARSE + "chart();")
     cap = pg.evaluate("""()=>{const cap={bz:0};
@@ -166,7 +178,7 @@ def test_sparse_series_no_line(pg):
       CanvasRenderingContext2D.prototype.bezierCurveTo=function(){cap.bz++;};
       try{chart();}finally{CanvasRenderingContext2D.prototype.bezierCurveTo=ob;}
       return cap;}""")
-    assert cap["bz"] == 2, "稀疏系列仍画连线（2 点系列 +1 段贝塞尔）: %s" % cap
+    assert cap["bz"] == 24, "稀疏系列仍画连线（2 点系列 +1 段）或直飞断档: %s" % cap
 
 
 def test_sparse_series_note_present(pg):
@@ -180,11 +192,10 @@ def test_sparse_series_note_present(pg):
 def test_full_series_no_note_and_line_kept(pg):
     """满系列回归：双系列 ≥3 点时连线保留、稀疏注不在场。"""
     pg.evaluate("switchView('mon');showMonTab('trend');setMode('line');"
-                "const cr=curRoute();cr.range='48h';cr.r.history="
-                "{direct:[['10-01 08:00',1000,0],['10-01 20:00',1010,0],"
-                "['10-02 08:00',1020,0]],"
-                "transfer:[['10-01 12:00',900,0],['10-01 20:00',930,0],"
-                "['10-02 08:00',950,0]]};cr.r.th={direct:800,transfer:800};"
+                "const cr=curRoute();cr.range='48h';"
+                + _MK +
+                "cr.r.history={direct:window._mk(25,1000),transfer:window._mk(25,900)};"
+                "cr.r.th={direct:800,transfer:800};"
                 "chart();")
     cap = pg.evaluate("""()=>{const cap={bz:0};
       const ob=CanvasRenderingContext2D.prototype.bezierCurveTo;
@@ -192,7 +203,7 @@ def test_full_series_no_note_and_line_kept(pg):
       try{chart();}finally{CanvasRenderingContext2D.prototype.bezierCurveTo=ob;}
       return cap;}""")
     note = pg.evaluate("()=>$('ringNote').textContent")
-    assert cap["bz"] == 4, cap          # 双系列各 2 段
+    assert cap["bz"] == 48, cap         # 双系列各 24 段（25 点/系，2h 节奏）
     assert "仅列点" not in note, note
 
 

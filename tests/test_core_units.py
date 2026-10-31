@@ -15,6 +15,7 @@ from crawlers.fliggy import FliggyCrawler  # noqa: E402
 from core.alerter import Alerter  # noqa: E402
 
 import json  # noqa: E402
+from font_probe import cjk_font_path, has_cjk_font
 
 
 # ---- qunar PC 版 wbdflightlist 解析（v5.0 渠道 PC 化） ----
@@ -2234,8 +2235,8 @@ def test_flights_table_two_line_sub_grows_height(tmp_path):
     该机制本就不生效，跳过。"""
     from PIL import Image
     import os as _os
-    if not _os.path.exists("C:/Windows/Fonts/msyh.ttc"):
-        pytest.skip("行高拆行判定依赖 Windows 中文字体度量（CI 无雅黑）")
+    if not has_cjk_font():
+        pytest.skip("行高拆行判定依赖中文字体度量（CI 无雅黑）")
     import report as _rep
     base = {"price": 1000, "name": "CZ6981", "depTime": "08:00",
             "arrTime": "10:00", "_platform": "qunar", "transCity": ""}
@@ -3331,3 +3332,25 @@ def test_rounds_tie_price_qual_direct_any_member_ok(tmp_path, monkeypatch):
         ("qunar", "SHA", "URC", "2026-10-01", 740, _direct(740), _t1)])
     s4 = _rep._rounds(db4, "SHA", "URC", "2026-10-01", "02:00", th_d=720)
     assert s4 and s4[0][1] == 700 and s4[0][3] is False, s4
+
+def _has_cjk_font():
+    """本机是否有可用的中文字体（不写死任何盘符/安装路径）。
+
+    Windows 用 fonts 目录下的雅黑系文件探测，其它平台交给 fontconfig/
+    Pillow 自己找；探测不到就跳过依赖字体度量的渲染烟测。
+    """
+    import os as _os
+    import sys as _sys
+    if _sys.platform.startswith("win"):
+        root = _os.path.join(_os.environ.get("WINDIR", ""), "Fonts")
+        if not _os.path.isdir(root):
+            return False
+        return any(_os.path.isfile(_os.path.join(root, n))
+                   for n in ("msyh.ttc", "msyhbd.ttc", "simhei.ttf"))
+    try:
+        from PIL import ImageFont
+        ImageFont.truetype("DejaVuSans.ttf", 12)
+        return True
+    except Exception:
+        return False
+

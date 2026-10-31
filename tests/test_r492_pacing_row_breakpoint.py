@@ -56,8 +56,13 @@ def test_row_layout_is_continuous_across_the_breakpoint():
 
     tmp = os.path.join(ROOT, "_scratch", "_r492_t")
     os.makedirs(tmp, exist_ok=True)
+    # 必须走生产的页面渲染路径：PAGE 里还有 __PATH_CN__ 这类服务端注入的
+    # 占位符。只换 __PAGEVER__ 时 `const PATH_CN=__PATH_CN__;` 会在顶层抛
+    # ReferenceError，整个 <script> 从这里停住，后面的常量（SRX_BRAND_IMG
+    # 等）全都没初始化——实测表现为「Cannot access 'SRX_BRAND_IMG' before
+    # initialization」，看着像产品缺陷，实际是夹具没按生产口径渲染。
     with open(os.path.join(tmp, "index.html"), "w", encoding="utf-8") as f:
-        f.write(webui.PAGE.replace("__PAGEVER__", "r492t"))
+        f.write(webui._page_html("r492t"))
 
     class H(SimpleHTTPRequestHandler):
         def log_message(self, *a):

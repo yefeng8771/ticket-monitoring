@@ -25,6 +25,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from crawlers.ctrip import CtripCrawler  # noqa: E402
+from font_probe import cjk_font_path, has_cjk_font
 
 _LOG = logging.getLogger("r283")
 _CT = CtripCrawler({}, _LOG)
@@ -100,9 +101,9 @@ def test_ctrip_cabin_code_dirty_values_still_rejected():
 def test_report_cabin_annotation_two_char(monkeypatch, tmp_path):
     """PNG 总表次行括注「经济舱(B0)」：cabinCode 两字符形态与单字母
     同律出括注（退改等级之根）；qunar R2/R3 既有两字符码同样受益。"""
-    if not os.path.exists("C:/Windows/Fonts/msyh.ttc"):
+    if not has_cjk_font():
         pytest_skip = __import__("pytest").skip
-        pytest_skip("渲染烟测依赖 Windows 中文字体度量（CI 无雅黑）")
+        pytest_skip("渲染烟测依赖中文字体度量（CI 无雅黑）")
     import report as _rep
     seen = []
     _orig = _rep._fit_text
@@ -126,3 +127,25 @@ def test_report_cabin_annotation_two_char(monkeypatch, tmp_path):
     _rep.render_flights_table([("direct", [f])], "测试标题", out_path=out)
     assert any("经济舱(B0)" in s for s in seen), \
         f"两字符括注未出，实绘: {[s for s in seen if '经济舱' in s]}"
+
+def _has_cjk_font():
+    """本机是否有可用的中文字体（不写死任何盘符/安装路径）。
+
+    Windows 用 fonts 目录下的雅黑系文件探测，其它平台交给 fontconfig/
+    Pillow 自己找；探测不到就跳过依赖字体度量的渲染烟测。
+    """
+    import os as _os
+    import sys as _sys
+    if _sys.platform.startswith("win"):
+        root = _os.path.join(_os.environ.get("WINDIR", ""), "Fonts")
+        if not _os.path.isdir(root):
+            return False
+        return any(_os.path.isfile(_os.path.join(root, n))
+                   for n in ("msyh.ttc", "msyhbd.ttc", "simhei.ttf"))
+    try:
+        from PIL import ImageFont
+        ImageFont.truetype("DejaVuSans.ttf", 12)
+        return True
+    except Exception:
+        return False
+

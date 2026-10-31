@@ -37,10 +37,14 @@ SRC_TUNIU = "tuniu"
 SRC_CTRIP = "ctrip"
 SRC_CTRIP_BD = "ctripbd"
 SRC_FLIGGY = "fliggy"
-_KNOWN_SOURCES = (SRC_TUNIU, SRC_CTRIP, SRC_CTRIP_BD, SRC_FLIGGY)
+# App 渠道发现源：去哪儿 App「低价机票」（真机，每天一条最低价）
+SRC_APP_QUNAR = "app_qunar"
+_KNOWN_SOURCES = (SRC_TUNIU, SRC_CTRIP, SRC_CTRIP_BD, SRC_FLIGGY,
+                  SRC_APP_QUNAR)
 # 推送词面：源价口径标注（tuniu/ctripbd/fliggy=榜单裸价 / ctrip=日历价）
 _SRC_LABEL = {SRC_TUNIU: "榜单", SRC_CTRIP: "日历",
-              SRC_CTRIP_BD: "主题榜", SRC_FLIGGY: "飞猪榜"}
+              SRC_CTRIP_BD: "主题榜", SRC_FLIGGY: "飞猪榜",
+              SRC_APP_QUNAR: "App低价"}
 
 # 特价雷达渠道能力（只陈述现役发现源，不把未接入写成可用）。
 SPECIAL_CAPABILITY = {
@@ -50,6 +54,10 @@ SPECIAL_CAPABILITY = {
     "fliggy": {"sources": [SRC_FLIGGY], "note": "PC 特价榜"},
     "qunar": {"sources": [], "note": "lowFlight 缓采；H5 低价榜"},
     "tongcheng": {"sources": [], "note": "采集未接入；H5 特价榜"},
+    # App 渠道：真机「低价机票」→ 每天一条最低价（页面未标价格口径）。
+    # 不需要 Playwright，也没有页面签名；依赖 MuMu + 已登录会话。
+    "app_qunar": {"sources": [SRC_APP_QUNAR],
+                  "note": "真机低票价（14 天窗口；口径未标注）"},
 }
 
 # 核实容忍带：核实价 > 源价 ×1.15 判「榜单价虚高/口径差」丢弃

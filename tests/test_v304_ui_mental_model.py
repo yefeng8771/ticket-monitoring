@@ -99,7 +99,7 @@ def test_channel_entry_is_a_matrix_and_radar_trend_has_no_white_end_labels():
         '<div class="chboard-head"><span>渠道</span>',
         '<div class="chband-grid">',
         'class="chlink-surface"',
-        "function chlinkChip(c,special){",
+        "function chlinkChip(c,special,withAuth){",
         "function spMonPanState()",
         "spmon-chartwrap.pan-x",
         "线尾圆点=最新采集价",
@@ -144,7 +144,10 @@ def test_radar_chart_breaks_line_on_basis_change():
     import webui
     src = webui.PAGE
     i0 = src.index("function spMonDraw")
-    seg = src[i0:i0 + 9000]
+    # 窗口按函数边界取，不再用固定 9000 字符——绘图逻辑后来长到窗口外，
+    # 守卫会以「找不到 PCHART.line」假红（实测 15087 行落在 9000 字符之后）。
+    nxt = src.find(chr(10) + "function ", i0 + 10)
+    seg = src[i0:nxt if nxt > 0 else i0 + 20000]
     assert "mainBasis" in seg, "缺口径主尺（跨口径不连线）判定"
     # r374：收笔统一由 PCHART.line → PCHART.gaps 分段完成，
     # 段内不跨缺口连线，单点段画独立圆点。
@@ -436,26 +439,36 @@ def test_mirror_fold_keeps_trigger_geometry():
     """用户实报「展开位置都发生了偏移」。镜像开合曾让触发器跨屏移动
     1428px：收起态把网格压成 1fr（右半栏 654 → 整行 1319）+ 内容
     display:none（触发器重排到最右）+ 轨道 padding/min-height 清零
-    （纵移 9px）。定案：列宽不变、内容只隐藏可见性、轨道高度/内边距同值。
-    实测 1428px → 2px（余量＝「收起/展开镜像」两字宽度取整）。"""
+    （纵移 9px）。
+
+    r424 的应对是「列宽不变、内容只藏可见性」——位移降到 2px，但用户随即
+    指出另一半：「能收起来，但是也给不了右边用」。占位保位只解决了按钮不动，
+    折叠本身没把空间交还。r524 定案：触发器移到轨道末尾（贴右缘），收起时
+    胶囊与视图钮真正移除、右列塌成按钮宽——实测 0px 位移 **且** 列表 +431~571px。
+    本用例守「位移」这一半；释放列宽由下面那条守。"""
     import webui
     src = webui.PAGE
-    assert "#searchview .srx-grid:has(.srx-mirror.srx-folded){grid-template-columns:repeat(2,minmax(0,1fr))}" in src, \
-        "折叠态压成单列会把镜像从右半栏变整行（跨屏位移）"
+    # 折叠态必须让左列表拿走余宽，右列只留按钮
+    assert "#searchview .srx-grid:has(.srx-mirror.srx-folded)" \
+           "{grid-template-columns:minmax(0,1fr) auto}" in src, \
+        "折叠态网格没有把右列塌成按钮宽（列表拿不回整行）"
     # 该规则必须限定在「本来就是两列」的宽度：≤1100px 网格主动收单列，
-    # 再无条件套 2fr 会把镜像卡压成半宽（390/460 实测横跳 44px）。
+    # 再无条件套双列会把展开态整行宽的镜像卡压成半宽。
     i0 = src.index("@media(min-width:1101px){\n #searchview .srx-grid:has(.srx-mirror.srx-folded)")
-    assert src.index("}", i0) > src.index("minmax(0,1fr))}", i0), "网格两列规则应被宽度媒体查询包住"
-    assert ".srx-mirror.srx-folded .srx-mrail>.srx-mtools{visibility:hidden!important}" in src
-    # 轨道不得清零 padding / min-height（两态同律）
+    assert src.index("}", i0) > src.index("minmax(0,1fr) auto}", i0), \
+        "网格列规则应被宽度媒体查询包住"
+    # 触发器必须排在轨道末尾，两态才都贴同一右缘
+    i = src.index("return '<div class=\"srx-mrail\">'+rail+")
+    seg = src[i:i + 900]
+    assert seg.index("srx-mtools") < seg.index("srx-foldbtn"), \
+        "折叠钮不在轨道末尾，收起态会停在空带中间"
+    # 轨道盒几何不得动：padding / min-height / 边框宽度 / overflow 都是布局盒
+    # 的一部分（border-bottom:0 少 1px 让按钮下移 1px；
+    # overflow:visible 让 sticky 失效，hidden 又会在获焦时被滚进视野）。
     i = src.index("#searchview .srx-mirror.srx-folded .srx-mrail{")
     seg = src[i:src.index("}", i) + 1]
     assert "padding:0" not in seg, seg
     assert "min-height:0" not in seg, seg
-    assert "justify-content" not in seg, seg
-    # 边框宽度与 overflow 也是布局盒的一部分：`border-bottom:0` 少 1px 让按钮
-    # 下移 1px；`overflow:visible` 让 sticky 失效、`hidden` 又会在获焦时被滚进
-    # 视野（scrollLeft 0→158）——两态都必须沿用展开态自身值。
     assert "border-bottom:0" not in seg, seg
     assert "border-bottom-style:none" not in seg, seg
     assert "overflow:visible" not in seg, seg
@@ -932,16 +945,22 @@ def test_mirror_collapse_leaves_only_its_reopen_entry():
 
     r424：隐藏方式必须是 visibility 而不是 display——display:none 会让触发器
     重排，实测收起后按钮从 (1209,367) 跳到 (872,1080)（1428px），正是用户报的
-    「展开位置都发生了偏移」。改为占位隐藏后位移降至 2px；网格也不得压成
-    1fr（那会把镜像从右半栏变成整行）。"""
+    「展开位置都发生了偏移」。当时用占位隐藏把位移压到 2px。
+    r524 用户指出了占位方案的代价：「能收起来，但是也给不了右边用」——钱没省
+    在折叠上。改为 display:none **并**把触发器移到轨道末尾、右列塌成按钮宽：
+    位移 0px，列表同时 +431~571px（两半都保住）。所以这里守的是
+    「收起态不得留下可点的残留」，不再要求 visibility 占位。"""
     import webui
     src = webui.PAGE
-    # 折叠态：渠道胶囊与视图组只隐藏可见性、保留占位
-    assert ".srx-mirror.srx-folded .srx-mrail>.srx-mtab" in src
-    assert (".srx-mirror.srx-folded .srx-mrail>.srx-mtools{visibility:hidden!important}"
-            in src), "收起态改用 display:none 会把触发器重排（位移 1428px）"
+    # 折叠态：渠道胶囊与视图组真正移除，不留可点残留、也不留占位空带
+    i = src.index(".srx-mirror.srx-folded .srx-mrail>.srx-mtab,")
+    seg = src[i:i + 200]
+    assert "display:none!important" in seg, \
+        "收起态残留占位写法——右列宽度不会释放给左列表"
+    assert "visibility:hidden" not in seg, \
+        "收起态又用 visibility 占位（用户实报「给不了右边用」）"
     # 工具带保留与展开态相同的 padding/min-height；边线只透明、不删宽度
-    # （删宽度少 1px 盒高，居中的触发器实测下移 1px）
+    # （删宽度少 1px 盒高，触发器实测下移 1px）
     i = src.index("#searchview .srx-mirror.srx-folded .srx-mrail{")
     seg = src[i:src.index("}", i) + 1]
     assert "border-bottom-color:transparent!important" in seg, seg
@@ -985,28 +1004,82 @@ def test_sticky_table_header_stays_opaque():
 def test_special_channel_links_align_with_main_links():
     """用户实报「渠道入口那个只扁平了，但是设计语言呢？对齐布局呢？」。
 
-    次行「特价」入口原本排在行首的「特价」标签之后，整体右移 33px：
+    次行「特价」入口排在行首的「特价」标签之后就会整体右移 33px：
     1512 主入口 l=477 / 特价首条 l=510，390 主入口 l=28 / 特价 l=59 ——
     同一条渠道的两行入口左缘对不上，读作「缩进不齐」。
-    定案：标签下沉到行尾当注释，值回到行首；实测 510→478、59→29。
+    r430 把标签沉到行尾，入口回到行首，但标识列随特价条数漂移
+    （1280 档 533/523/533/533/512）。
+    r542 定案：标签绝对定位钉在本行右端当注记（脱离文档流，不再推任何
+    入口），入口左缘与上方四格卡片的**文字**左缘同轴——实测 1512
+    267＝267、1280 252＝252；窄档每个入口自带「PC 特价」面位小标，
+    行首标签重复且右推 21px，直接隐藏。
     """
     import webui
     src = webui.PAGE
     i = src.index(".chspec-k{font-size:10px!important")
     seg = src[i:src.index("}", i) + 1]
-    # r430：标签曾用 order:9 沉到行尾——首条入口确实回到行首，但标识列会
-    # 随各渠道特价条数漂移（1280 档 533/523/533/533/512，390 档 174/164/174/
-    # 174/153）。改回行首固定列：真实数据实测三档均单一取值（463/233/29），
-    # 且与上方四格网格左缘同列——「对齐」这一意图不变，实现从「沉行尾」换
-    # 成「固定首列」。
-    assert "order:0!important" in seg, seg
-    assert "order:9" not in seg, "「特价」标签又沉到行尾，五条带标识列各漂各的"
-    assert "flex:0 0 auto!important" in seg
-    assert "margin-left:0!important" in seg
-    # 标签能沉到行尾的前提：容器是 flex 且允许换行（窄屏 32px 行高保持不变）
+    # 行首（order:0）把入口右推 33px，行尾（order:9）让标识列随条数漂移，
+    # 钉最右端则离内容 700px——三种都读作「没对齐 / 不相干」。
+    assert "order:2!important" in seg, "「特价」标签又离开了入口之后的位置"
+    assert "order:0!important" not in seg and "order:9" not in seg
+    assert "position:absolute!important" not in seg,         "标签脱离文档流会离它标注的那行很远"
+    assert "margin-left:6px!important" in seg
     j = src.index(".chband-specs{display:flex!important")
     spec = src[j:src.index("}", j) + 1]
-    assert "flex-wrap:wrap!important" in spec, spec
+    assert "flex-wrap:wrap!important" in spec
+    assert "position:relative!important" not in spec,         "标签已回到行内流，容器不该还留着为绝对定位准备的 relative"
+    # 窄档隐藏行首标签（每个入口自带「PC 特价」面位小标）
+    k = src.index(".chband-specs .chspec-k{display:none!important")
+    assert k > 0, "窄档行首又挂了一个「特价」，与面位小标重复"
+    # 窄档标题里的 PC/H5 与面位小标重复，读作「PC 特价 PC ↗」
+    t = src.index(" .chband-specs .chlink-top b{display:none!important}")
+    assert t > 0, "窄档特价行又把 PC/H5 读了一遍（面位小标已说明端）"
+
+
+def test_channel_card_titles_never_outgrow_the_fixed_row():
+    """用户实报「展开筛选条件的这个面板…大小布局对称，不够协调」。
+
+    渠道卡 grid 行高钉死 44px，而 r433 让标题可换行：1280 档不重复登录
+    账号时「机票搜索（与国内同页，页内切国际）」折 5 行、78px，被 44px
+    行高裁切压字（实测 top/bot 各溢 17px、clippedText=True）。
+    定案：登录账号上提到带级 meta（同渠道四格本就是同一个账号），
+    每格不再挂 56px 宽标签；标题限两行省略。实测 1512/1280/900/390
+    四档 20 张卡 overflow 全 0、五带等高。
+    """
+    import webui
+    src = webui.PAGE
+    i = src.index("function chlinkChip(c,special,withAuth){")
+    seg = src[i:src.index("\nfunction ", i + 10)]
+    assert "withAuth!==false" in seg, "登录账号又逐格渲染了"
+    assert "const auth=(c.login&&withAuth!==false)" in seg
+    # 账号必须仍有落点：带级 meta 拼上短要求
+    j = src.index("function chBandHTML(")
+    band = src[j:src.index("\nfunction ", j + 10)]
+    assert "const _acc=((cells||[]).map(c=>c&&c.login).filter(Boolean)[0])||''" in band
+    assert "(_sl+' · '+_acc)" in band, "账号名上提后没写进带级 meta"
+    assert "const _auth=!(_sl&&((cells||[]).some(c=>c&&c.login)))" in band, \
+        "已上提时仍会逐格重复账号"
+    # 标题限两行，超出省略（否则 44px 行高裁切压字）
+    k = src.index(".chlink-top b{font-size:12px!important")
+    t = src[k:src.index("}", k) + 1]
+    assert "-webkit-line-clamp:2!important" in t, t
+    assert "overflow:hidden!important" in t
+
+
+def test_special_row_text_starts_where_card_text_starts():
+    """特价行入口左缘必须等于卡片**文字**左缘，不是卡片盒左缘。
+
+    卡片 padding 0 10px、特价行容器 padding 0 1px 时，两者文字左缘差 9px
+    （1512 258 vs 267）。r542 把特价行容器内边距对齐到卡片内边距
+    （padding:0 10px；窄档卡片自带 9px 内边距故归零）。
+    """
+    import webui
+    src = webui.PAGE
+    i = src.index(".chband-specs{display:flex!important")
+    seg = src[i:src.index("}", i) + 1]
+    assert "padding:0 10px!important" in seg, seg
+    j = src.index(" .chband-specs{padding:0!important}")
+    assert j > 0, "窄档特价行容器内边距没归零（会与卡片外框差 10px）"
 
 
 def test_empty_capbar_does_not_reserve_a_blank_band():
@@ -1488,7 +1561,10 @@ def test_narrow_probe_puts_actions_after_the_form():
     import webui
     src = webui.PAGE
     i = src.index("@media(max-width:760px){\n   #searchview .srx-probe{display:flex;flex-direction:column}")
-    seg = src[i:i + 1100]
+    # 用块的真实结束边界切片；此前是固定 1100 字符窗口，中间插一条注释
+    # 就把 @media 块尾部挤出窗口，判据随之假红（r565 遇到过同型）。
+    j = src.index("\n  }\n", i)
+    seg = src[i:j]
     assert "#searchview .srx-probehead{display:contents}" in seg, seg
     assert "#searchview .srx-probeform{order:1}" in seg, seg
     assert "order:2;position:static!important" in seg.replace("\n", ""), seg
@@ -1686,7 +1762,10 @@ def test_config_fold_all_is_a_toggle_not_a_one_way_trap():
     import webui
     src = webui.PAGE
     i = src.index("function cfgFoldAll(){")
-    seg = src[i:i + 4200]
+    # 取整个函数到下一个顶层 function 为止。原来钉死 4200 字符窗口，
+    # r530 补了参数分区折叠单元后函数变长，'已全部展开' 被挤出窗口、
+    # 因无关演进假红（门禁守意图，不守源码长度）。
+    seg = src[i:src.index("\nfunction ", i + 10)]
     assert "let _anyOpen=false" in seg, seg
     # 判据必须是「还有敞着的就收」，写反会让首击变成全展开。
     # 且必须看正文可见性而不是 aria：被刻意排除折叠的分组标题/用户卡头
@@ -1710,7 +1789,10 @@ def test_config_fold_all_never_swallows_group_headings():
     import webui
     src = webui.PAGE
     i = src.index("function cfgFoldAll(){")
-    seg = src[i:i + 4200]
+    # 取整个函数到下一个顶层 function 为止。原来钉死 4200 字符窗口，
+    # r530 补了参数分区折叠单元后函数变长，'已全部展开' 被挤出窗口、
+    # 因无关演进假红（门禁守意图，不守源码长度）。
+    seg = src[i:src.index("\nfunction ", i + 10)]
     assert "keepHead" in seg, seg
     assert "b.classList.contains('grouplab')" in seg, seg
     j = src.index("function applyFolds(){")
@@ -1796,9 +1878,14 @@ def test_fold_all_also_collapses_the_user_card_that_wraps_headings():
     # 必须区分「自身是标题」与「体内含标题」两件事
     assert "if(body.classList.contains('grouplab'))return;" in seg, seg
     assert "if(body.querySelector('.grouplab')){" in seg, seg
-    # 含标题时必须按「标题之前/之后」分区收起，而不是整只 return
-    assert "const first=heads[0],last=heads[heads.length-1];" in seg, seg
-    assert "[...before,...after].forEach(k=>{k.style.display=hide?'none':'';});" in seg, seg
+    # 含标题时必须收正文、留标题——但**不锁实现写法**。
+    # r640b：旧实现只隐藏「首个标题之前 + 末个标题之后」两段，标题之间的
+    # 正文（A 用户名的推送设置等 13 块）全留在屏幕上：实测卡体仍有 315px
+    # 敞开，而卡头 aria 已写 false —— 报一个没发生的状态。现改为「卡体内
+    # 除 .grouplab 之外一律收起」。这里断言的是意图，不是某一段切片代码。
+    assert "[...body.children].forEach(" in seg, seg
+    assert "k.classList.contains('grouplab')" in seg, seg
+    assert "k.style.display=hide?'none':''" in seg, seg
     # 这条卡也要正确写回自己的二态
     assert "h.setAttribute('aria-expanded',String(!hide));" in seg, seg
 
@@ -1826,8 +1913,12 @@ def test_more_conditions_panel_sits_directly_under_its_trigger():
     m = src.index("#searchview .srx-fmore{display:none;")
     seg = src[m:m + 400]
     assert "margin-top:6px" in seg or "margin-top:0" in seg, seg
-    # 首列让位给 .srx-line 的标签列（60px），窄档不吃这份缩进
-    assert "#searchview .srx-fmore{margin-left:60px;margin-top:0;padding-top:6px}" in src
+    # r806：r469 曾给面板 `margin-left:60px`「对齐标签列」，但实测 1512
+    # 左缘 151.5 / 右缘 1410.5——左侧内缩 60px、右侧贴死卡缘，左右内衬
+    # 不对称（用户：「布局明显跟当前页面没有对齐、大小布局对称不够协调」），
+    # 60px 也不是标签列（.srx-lab 34px + gap 8 = 42）。改为与卡片内每一行
+    # 同缘。断言改成「左缘不缩进」，不再锁 60px 这个错值。
+    assert "#searchview .srx-fmore{margin-left:0;margin-top:0;padding-top:6px}" in src
 
 
 def test_folding_the_mirror_actually_releases_its_height():
@@ -1892,3 +1983,396 @@ def test_monitor_card_footers_have_no_decorative_dashed_rules():
     seg = src[i:i + 220]
     assert "border-top:0" in seg, seg
     assert "padding-top:7px" in seg, seg
+
+
+def test_probe_channel_entry_trigger_does_not_move_when_opened():
+    """r523：检索页探针脚注的「渠道入口」点开时，触发器不能换行换列。
+
+    实测缺陷：展开态写成 `.srx-chlinks[open]{grid-column:1/-1}`——整个 details
+    换到第 1 列并落到下一行，触发器随盒子从右缘跑到左缘（1512 档 x 1131→91，
+    位移 1040px；1280 档 915→76，位移 839px，另下沉 22px）。用户读作
+    「点同一个按钮，按钮自己跑了」，与 r424 镜像钮是同一族问题。
+
+    修法：展开时 details 退成 display:contents，两个子元素直接参与父网格；
+    summary 钉回第 1 行第 2 列原地不动，面板单独占满下一整行。
+    """
+    import webui
+    src = webui.PAGE
+    assert "#searchview .srx-probefoot .srx-chlinks[open]{grid-column:1/-1}" not in src, \
+        "展开态又把整个 details 换列换行了——触发器会横跳上千像素"
+    i = src.index("#searchview .srx-probefoot .srx-chlinks[open]{display:contents")
+    seg = src[i:i + 600]
+    assert ">summary{grid-row:1;grid-column:2}" in seg, \
+        "展开态没有把 summary 钉回原列，触发器仍会移位"
+    assert ">#srxChLinksBox{" in seg, "展开面板没有独立分配网格位置"
+    assert "grid-column:1/-1" in seg, "展开面板没有占满整行"
+    # 窄档单列必须另给坐标，否则面板会盖在触发钮上
+    j = src.index("@media(max-width:600px){\n #searchview .srx-probefoot{grid-template-columns:1fr")
+    assert "#srxChLinks[open]>summary{grid-row:2" in src[j:j + 400] or \
+           "srx-chlinks[open]>summary{grid-row:2" in src[j:j + 400], \
+        "窄档没有给 summary 分配第 2 行"
+
+
+def test_mirror_fold_gives_the_column_back_to_the_list():
+    """r524：收起镜像必须把右列宽度还给列表，按钮仍贴同一右缘。
+
+    实测缺陷：收起态用 visibility:hidden 保留占位——列宽仍是 653px、列表仍是
+    半宽，右边残留一条空带，按钮浮在带子中间（用户：「能收起来，但是也给
+    不了右边用，为什么不是左右按钮互相展开收起？」）。
+    修后实测：1512 档列表 654→1225（+571）、1280 档 553→1025（+472）、
+    1101 档 513→944（+431），触发器位移 0px，两态互切逐像素复位。
+    """
+    import webui
+    src = webui.PAGE
+    assert ".srx-mirror.srx-folded .srx-mrail>.srx-mtab,\n" \
+           ".srx-mirror.srx-folded .srx-mrail>.srx-mtools{display:none!important}" in src, \
+        "收起态仍在用占位隐藏，列宽不会释放"
+    assert "visibility:hidden!important" not in src[
+        src.index(".srx-mirror.srx-folded .srx-mrail>.srx-mtab,"):
+        src.index(".srx-mirror.srx-folded .srx-mrail>.srx-mtab,") + 260], \
+        "收起态残留 visibility 占位写法"
+    assert "#searchview .srx-grid:has(.srx-mirror.srx-folded)" \
+           "{grid-template-columns:minmax(0,1fr) auto}" in src, \
+        "折叠态网格没有把右列塌成按钮宽"
+    assert "#searchview .srx-grid:has(.srx-mirror.srx-folded)" \
+           "{grid-template-columns:repeat(2,minmax(0,1fr))}" not in src, \
+        "又回到「两列等宽」——收起后仍留半屏空列"
+
+
+def test_mirror_fold_button_is_last_in_rail():
+    """r524：折叠钮必须是轨道最后一个子元素，两态才都贴右缘。
+
+    展开态按钮排在 mtools 之前时，收起后 mtools 消失、按钮仍停在原位置
+    （实测 x=452，右缘还空 140px）。挪到末尾后两态 x 相同。
+    """
+    import webui
+    src = webui.PAGE
+    i = src.index("return '<div class=\"srx-mrail\">'+rail+")
+    seg = src[i:i + 900]
+    assert seg.index("srx-mtools") < seg.index("srx-foldbtn"), \
+        "折叠钮又排到工具钮前面了——收起态会停在带子中间"
+    assert "style=\"margin-left:6px\"" not in seg, \
+        "折叠钮仍靠 margin-left 参与排布，收起态基准会变"
+
+
+def test_chart_tooltip_is_clamped_to_the_visible_window_not_content_width():
+    """r526：特价监控浮窗右界必须按「可视右缘」，不能按内容总宽。
+
+    实测缺陷：390 档画布 1220px 塞进 320px 容器，钳位用 scrollWidth（内容总宽）
+    → 浮窗被允许放到 left=318(+host 30=348)，页内 right 401 越过视口 390。
+    用户读作「浮窗跑出屏幕」。修后 390 档 right 342 ≤ 可视右缘 350；
+    360 档 right 290 ≤ 320。
+    """
+    import webui
+    src = webui.PAGE
+    i = src.index("placeTipAxis(host,tip,cx,topY){")
+    seg = src[i:i + 1200]
+    assert "_visRight" in seg, "placeTipAxis 没有计算可视右缘"
+    assert "+r.width" in seg, "可视右缘必须是 scrollLeft + 可视宽"
+    assert "PCHART.placeAxis(_hostW,r.height,tw,th,cx-r.left+(host.scrollLeft||0),topY,_visRight)" in seg, \
+        "可视右缘没有传给 placeAxis"
+    j = src.index("placeAxis(boxW,boxH,tw,th,localX,topY,rightEdge){")
+    seg2 = src[j:j + 900]
+    assert "_re-tw-8" in seg2, "placeAxis 没有按右缘钳位"
+    assert "rightEdge==null?boxW:rightEdge" in seg2, "右缘缺省必须回落到内容宽（向后兼容）"
+
+
+def test_radar_gaps_break_the_line_and_mark_segment_ends():
+    """r527：真实空档必须断线，且断口两端要有「止于此」的端点标记。
+
+    实测（153 点、8.5h/12.5h 两个缺口）：`PCHART.gaps` 正确切出 [53,64,36]，
+    缺口处不连线不填充。但断口两端原本只有 2px 采样点，空白起点读作
+    「线被截断/渲染坏了」——用户说的「走势断档」。改为段首尾各画一个
+    1.15× 的实心端点：缺口仍然完全不画，语义不变。
+
+    另守两条既有契约：阈值下限 4h（雷达 2h 轮询，4h 才算断档），
+    以及 3h 间隔必须保持连续（不能把正常轮询间隔误判成缺口）。
+    """
+    import webui
+    src = webui.PAGE
+    assert "const _gapMin=4*3600*1000;" in src, "雷达缺口阈值下限被改动"
+    # 按函数真实结束边界切片：原先固定 700 字符窗口，函数内一加注释
+    # 就把后半段挤出窗口，判据随之假红（r647 遇到同型）。
+    i = src.index(" gaps(pts,gapMin){")
+    j = src.index("segs.push(cur);return segs;},", i)
+    seg = src[i:j]
+    assert "med*1.8" in seg, "自适应阈值被删——稀疏序列会把正常间隔判成断档"
+    assert "pts[i].t-pts[i-1].t>gap" in seg, "分段判定被改动"
+    # 端点标记：只在多段时才画，且必须比采样点更明显
+    j = src.index("if(style.vertexDots&&segs.length>1){")
+    seg2 = src[j:j + 420]
+    assert "seg[0]" in seg2 and "seg[seg.length-1]" in seg2, "端点只标了一侧"
+    assert "dot*1.15" in seg2, "端点没有比采样点更粗，读不出「止于此」"
+    # 端点不得把缺口连起来：该块内不能出现 lineTo / stroke
+    assert "lineTo" not in seg2, "端点块里画了线，缺口会被接上"
+    assert "stroke()" not in seg2, "端点块里描了边，缺口会被接上"
+
+
+def test_fold_all_also_collapses_parameter_sections():
+    """r530：「全部收齐」必须真的收掉参数分区的正文。
+
+    实测缺陷：参数分区（`#cfgglobals` 的「只读参数说明」等）用的是
+    `.subsec` 小标题 + 兄弟块，**没有** grouplab / rline / chcard / uhead2。
+    点「全部收齐」后：可见字段 52→52、整页可见元素 432→432 纹丝不动，
+    按钮却换成「已收齐 19」、aria-expanded=false——**按钮在报一个没发生的
+    状态**（用户：「各个 tab 展开状态没有办法一键全部收齐」）。
+
+    修后实测：字段 52→0、整页 432→43，再点一次 0→52 全还原，
+    文案「全部收齐 → 已收齐 30 → 已全部展开」、aria 同步翻转。
+    """
+    import webui
+    src = webui.PAGE
+    # 折叠单元：.subsec 标题 + 其后兄弟块，遇下一个 .subsec/grouplab 停
+    assert "const _subsecBodies=h=>" in src, "缺少 subsec 折叠体定义"
+    i = src.index("const _subsecBodies=h=>")
+    seg = src[i:i + 300]
+    assert "nextElementSibling" in seg and "subsec" in seg, "subsec 折叠体边界不对"
+    # 判据必须计入 subsec，否则二态开关会被钉死在「收齐」档
+    j = src.index("panel.querySelectorAll('.subsec').forEach(h=>{\n   if(_subsecBodies(h)")
+    assert j > 0, "_anyOpen 判定没有计入 subsec——第二击会没反应"
+    # 执行侧必须真的 _setFold 并落存档（否则重建后弹开）
+    k = src.index("FOLD.sub[panel.id+'|'+h.textContent.trim()]=hide")
+    assert k > 0, "subsec 折叠没有落存档，重渲染会长回去"
+    # 存档要有容器且有重建路径
+    assert "let FOLD={sec:{},route:{},ch:{},sub:{}}" in src, "FOLD 缺 sub 存档桶"
+    assert "FOLD.sub[k]!=null" in src, "applyFolds 没有恢复 subsec 折叠态"
+
+
+def test_health_diag_cards_share_one_action_baseline():
+    """r531：渠道健康的「自检」必须五张卡同一条基线（用户：「自检按钮」不对齐）。
+
+    实测（1512 / 1280，5 张卡）：
+    - 卡同高 163px、同 y；
+    - `.hdiag-e` 证据行恒在 y=463（**空证据卡也占位**，否则会把自检推下去）；
+    - 自检按钮恒在 y=498、h=32，卡底 540 —— 五张逐像素一致。
+    这条守 r433（动作不顶卡底）+ r436（证据行固定两行且空也占位）不被回退。
+    """
+    import webui
+    src = webui.PAGE
+    # r436：证据行固定两行、空也占位（>700 档）；单列档隐藏空行避免空洞
+    i = src.index(".hdiag-e{min-height:2.9em;display:-webkit-box")
+    seg = src[i:i + 220]
+    assert "-webkit-line-clamp:2" in seg, "证据行不再固定两行，自检会被推下去"
+    assert "min-height:2.9em" in seg, "证据行失去最小高度，空证据卡会把自检顶高"
+    assert "@media(max-width:700px){\n .hdiag-e:empty{display:none}" in src, \
+        "单列档没有回收空证据行"
+    # r433：动作行跟随正文，不得 margin-top:auto 顶到卡底
+    assert ".hdiag-card .hdiag-acts{display:flex;align-items:center;gap:6px;" \
+           "flex-wrap:wrap;margin-top:2px;padding-top:0;min-height:0}" in src, \
+        "动作行又改回顶卡底（自检会孤零零悬在下方）"
+    assert ".hdiag-card .hdiag-acts .btn2{margin-top:0;height:26px" in src, \
+        "自检按钮高度/间距被改动（五卡基线会错开）"
+    # 旧规则只允许出现在 r433 的历史注释里（"曾把动作行顶到卡底"）；
+    # 真规则不得复活。
+    import re
+    assert (".hdiag-a{margin-bottom:auto}" not in
+            re.sub(r"/\*.*?\*/", "", src, flags=re.S)), "又把动作区顶到底部了"
+
+
+def test_list_rows_use_one_hairline_style_not_mixed_dashed():
+    """r534：同一张卡里的列表行不得混用虚线与实线。
+
+    实测：`.spmon-flight` 是 `border-top:1px solid`，同卡的
+    `.spmon-run`（采集记录每一轮）却是 `dashed` —— 一页两套行线，
+    虚线在扁平语言里是多余的装饰（用户：「很多分割线，很不干净」）。
+    统一为发丝实线。
+    """
+    import re
+    import webui
+    src = webui.PAGE
+    i = src.index(".spmon-run{display:grid")
+    seg = src[i:i + 240]
+    assert "border-top:1px solid var(--r-hair)" in seg, "采集记录行又用虚线了"
+    assert "dashed" not in seg, "采集记录行混回虚线"
+    # 同为列表行的 spmon-flight 保持实线（两处必须同一种）
+    j = src.index(".spmon-flight{display:grid")
+    assert "border-top:1px solid var(--r-hair)" in src[j:j + 240], \
+        "航班行与采集记录行的线型不一致"
+
+
+def test_health_note_sits_right_under_its_trigger():
+    """r536：「说明」正文必须紧贴触发钮下方，且按钮两态零位移。
+
+    实测（1512，健康页渠道诊断卡）：
+    - 触发钮恒在 (1012,319)，文案「展开说明 ⇄ 收起说明」、aria 翻转；
+    - 说明正文展开后出现在 y=358，与按钮底(y=347)只隔 **11px**
+      （原来 20px，中间全是 srccap/uhead 的容器留白，读作「展开在下面」）。
+
+    不能把说明塞进 `.scfoot`：那是右对齐 flex，展开会撑宽该行、按钮横移近
+    800px（r412 实测 1305→509）。故位置保持卡外，靠负 margin 吃掉空隙。
+    r536b：空隙实为三层叠加（scfoot 下内边距 8 + srccap 下外边距 10 +
+    uhead 下内边距 10 = 28），负 margin 必须覆盖整段；判据只锁「负 margin
+    足以贴住按钮」这一意图，不锁具体像素值。
+    """
+    import re
+    import webui
+    src = webui.PAGE
+    m = re.search(r"#healthDiag>#scNote\{([^}]*)\}", src)
+    assert m, "说明的定位规则不见了"
+    body = m.group(1).replace(" ", "")
+    assert "display:none" in body and "line-height" in body, body
+    neg = re.search(r"margin:(-?\d+)px", body)
+    assert neg, body
+    # 三层底部空隙合计 28px，负 margin 至少要吃满这段才可能贴住按钮
+    assert int(neg.group(1)) <= -28, \
+        "负 margin 不足，说明与按钮之间会重新出现容器留白：%s" % body
+    # 说明必须在卡头之外（卡头几何不受展开影响）
+    i = src.index('<span class="scnote" id="scNote">')
+    head_end = src.rindex("</div>", 0, i)
+    assert head_end < i, "说明被塞回卡头里了"
+    # 且不得成为 .scacts 的兄弟按钮行成员（那会撑宽右对齐行）
+    acts = src.index('<span class="scacts">')
+    assert i > src.index("</span>", acts), "说明又进了 scacts 行"
+
+
+def test_overview_body_sits_directly_under_its_trigger():
+    """r537：展开概览的正文必须紧跟触发钮，不能被日期带隔开。
+
+    实测缺陷：`#srxOvBody` 里顺序是 band(含触发钮) → brief → capbar → kpis，
+    触发钮在价带工具行、正文在其后，中间隔着整条日期格带——
+    按钮底 347 到正文顶 389，**42px 全是 .srx-band-h/.srx-band-days**。
+    用户原话：「展开概览那个明显交互有问题，展开的中间还有元素常驻」。
+
+    修法：把 brief/capbar/kpis 移进价带的折叠体 `#srxBandBody` 且排在
+    日期带之前。实测间隙 42→**7px**，收起态三者一并 display:none。
+    """
+    import webui
+    src = webui.PAGE
+    body = src.index('<div id="srxBandBody" class="srx-foldbody">')
+    days = src.index('id="srxBandDays"')
+    brief = src.index('id="srxBrief"')
+    capbar = src.index('id="srxCapbar"')
+    kpis = src.index('id="srxKpis"')
+    for name, pos in (("srxBrief", brief), ("srxCapbar", capbar), ("srxKpis", kpis)):
+        assert pos > body, "%s 不在价带折叠体内（会被日期带隔开）" % name
+        assert pos < days, "%s 排在日期带之后，展开又会被格带隔开" % name
+    # id 全局唯一：折叠体外不得再有一份
+    for needle in ('id="srxBrief"', 'id="srxCapbar"', 'id="srxKpis"'):
+        assert src.count(needle) == 1, "%s 出现多份（重复 id）" % needle
+
+
+def test_demo_health_labels_say_demo_on_the_card_itself():
+    """r538：演示态的诊断卡必须自己说明是演示数据。
+
+    实测缺陷：演示环境 96 轮都是合成数据，页头有「DEMO · 合成健康」，
+    但五张诊断卡仍逐张写「最近一轮正常」——与真实环境一模一样的结论措辞，
+    用户读作「有很多补位数据，感觉有点奇怪」。
+    另外 `/api/health` 原本不带任何 demo 标志，前端无从判断。
+
+    修法：演示轻路径 `_attach_demo_paths` 下发 `demo=True` 并把每张卡的
+    label 前缀改为「演示 · 」。实测五张卡全部带前缀、无裁切、无横向溢出。
+    """
+    import io
+    import os
+    # 这两个是**服务端**函数，不在 PAGE 页面字符串里，必须读源码文件
+    src = io.open(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "webui.py"), encoding="utf-8", newline="").read()
+    # 后端：演示路径必须点名 demo 且改写 label
+    i = src.index("def _attach_demo_paths(out: dict) -> None:")
+    seg = src[i:i + 900]
+    assert 'out["demo"] = True' in seg, "演示载荷没有 demo 标志，前端无法区分"
+    assert '"label"] = "演示' in seg, "演示态诊断卡仍旧用真实口径措辞"
+    # 真实路径不得被误标
+    j = src.index("def _health_decorate(out: dict) -> dict:")
+    seg2 = src[j:j + 1200]
+    assert 'bool(DEMO["on"])' in seg2, "真实路径的 demo 标志必须取自 DEMO 开关"
+
+
+def test_filter_rows_share_one_left_edge_and_more_button_follows_content():
+    """r539：筛选面板四行的 chip 必须同一条左缘，且「更多条件」跟随内容。
+
+    实测缺陷：`.srx-chips` 是 `flex:1`，吃满整行剩余宽度，把
+    「展开更多条件」顶到容器最右缘（l=1329 / r=1411，中心 x=1370）；
+    四行 chips 的右端各不相同（812/1411/1321/1411），
+    整块读作参差、与卡片不对齐（用户：「展开筛选条件的面板布局明显跟
+    当前页面没有对齐，大小布局不够对称协调」）。
+
+    修后实测：四行 chips 左缘 1512 档统一 133、1280 档统一 118；
+    按钮紧跟快筛内容之后（右缘 583/567）而不是贴右缘；面板无溢出。
+    另测展开成本：同步 1ms、首帧 8.3ms —— 无长任务（用户感觉的「卡顿」
+    来自视觉参差，不是主线程）。
+    """
+    import webui
+    src = webui.PAGE
+    assert "#searchview .srx-line>.srx-chips{flex:0 1 auto}" in src, \
+        "chips 又改回 flex:1，会把「更多条件」顶到最右缘"
+    assert "#searchview .srx-line>.srx-more{margin-left:8px}" in src, \
+        "「更多条件」缺少与内容的间距"
+    # 行容器本身仍是 flex 且换行（窄档需要折行，不能 nowrap 溢出）
+    i = src.index("#searchview .srx-line{display:flex")
+    assert "flex-wrap:wrap" in src[i:i + 160], "筛选行丢了 wrap，窄档会横向溢出"
+
+
+def test_channel_bands_share_one_height():
+    """r541：渠道入口五个渠道带必须等高。
+
+    实测缺陷：五个带的高度由内部 chip 折行数决定——1512 档
+    85/94/94/85/85、1280 档 109/125/109/94/85：长名（去哪儿、飞猪）
+    的 chip 折成两行，短名只有一行。用户读作「大小布局不够对称协调」。
+
+    修法：chip 文案单行 + 省略（完整信息仍在 title：URL · 说明 · 登录要求），
+    并给网格固定行高。实测修后 1512/1280 五带全 91、390 档全 207，
+    无 chip 裁切、面板与页面均无横向滚动。
+    """
+    import webui
+    src = webui.PAGE
+    i = src.index(".chband-grid{display:grid!important;grid-template-columns:repeat(4,")
+    seg = src[i:i + 700]
+    assert ".chband-grid{grid-auto-rows:44px!important}" in seg, \
+        "渠道带没有再固定行高，长名 chip 会把该带撑高"
+    assert ".chlink{white-space:nowrap!important}" in seg, \
+        "chip 文案又允许折行，五带会再次参差不齐"
+    # 省略必须有兜底：chip 自身带 title 才允许截断
+    assert 'title="' in src[src.index("function chlinkChip"):src.index("function chlinkChip") + 3000], \
+        "chip 没有 title，截断后就看不到完整说明了"
+
+
+def test_filter_panel_columns_end_on_the_same_line():
+    """用户实报「展开筛选条件的面板布局跟当前页面没对齐，大小布局不对称」。
+
+    宽档（≥1101）是 12 列 areas：左栏 common(8) + history(5)/price(3)，
+    右栏 time(4) + evidence(4)。实测 1512：左栏底 752、右栏底 660 ——
+    右栏底部空出 92px，「检索特有」的左侧分隔线到 12px 就断了，
+    下方是一整块无内容的空白（用户读作「大小布局不对称、衔接空格很大」）。
+    定案：右栏最后一张卡吸收这段高度，两栏底边齐平（实测 752＝752），
+    面板总高不变 733（没有新增留白）。
+    """
+    import webui
+    src = webui.PAGE
+    i = src.index("#searchview .srf-evidence{align-self:stretch")
+    # 向上找到它所在的 @media 块头，切出整段
+    j = src.rindex("@media(min-width:1101px){", 0, i)
+    seg = src[j:src.index("\n}", i) + 2]
+    assert "#searchview .srf-evidence{align-self:stretch;min-height:100%}" in seg, seg
+    # r697 起右栏两张卡都拉伸（时间卡原为 start，实测同排底边差 102/135px）；
+    # 判据守「两栏底边齐平」这个意图，不再钉某一张卡的旧对齐值。
+    assert "#searchview .srf-time{align-self:stretch}" in seg, (
+        "起降时段又改回按内容收缩，同排两张卡会再次底边不齐（用户实报"
+        "「上下不对齐、廉价感」）")
+    assert "#searchview .srf-time{justify-content:space-between}" in seg, (
+        "时间卡拉高后余量没有在卡内分布，会变成卡底一大块死白")
+    # 左栏底边基准：history 与 evidence 必须同属一行，areas 才能对齐
+    assert '"history history history history history price price price evidence evidence evidence evidence"' in seg
+
+
+def test_narrow_probe_foot_sits_after_actions_not_between_form_and_head():
+    """用户实报「展开后中间还有元素常驻」「展开应该是展开的感觉，位置怎么偏了」。
+
+    窄档（≤760）把 .srx-probehead 摊平成 display:contents，再用 order 排
+    head(0) / form(1) / acts(2)。`srx-probefoot` 当时没给 order（默认 0，与
+    卡头同级），于是被排到**表单之前**——实测 390 展开后的纵向顺序是
+    标题220 → 说明239 → 状态行262 → 表单294 → 操作行472：
+    一块常驻状态夹在「刚点开的表单」中间，正是用户描述的病灶。
+    定案：状态行 order:3 收尾（它是结果反馈，放在动作之后才讲得通），
+    实测顺序变为 220/239/268/446/472，按钮本身两态位移仍为 0。
+    """
+    import webui
+    src = webui.PAGE
+    i = src.index("#searchview .srx-probeform{order:1}")
+    j = src.index("\n  }", i)
+    seg = src[max(0, i - 2000):j]
+    assert "#searchview .srx-probe .srx-probeacts{order:2" in seg, \
+        "操作行不再是扁平后的第 2 段"
+    assert "#searchview .srx-probefoot{order:3}" in seg, \
+        "状态行又落回默认 order:0，会插到表单前面"

@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import zstandard  # noqa: E402
 
 from crawlers.ctrip import CtripCrawler  # noqa: E402
+from font_probe import cjk_font_path, has_cjk_font
 
 _LOG = logging.getLogger("t15105")
 _CT = CtripCrawler({}, _LOG)
@@ -122,7 +123,7 @@ def test_aset_marketing_churn_still_excluded():
 def test_report_lay2_seg_carries_trans_go_date(monkeypatch, tmp_path):
     """二段行绘制文本含「二段 MM-DD HH:MM」：lay2dep 只有 HH:MM，
     跨天中转在推送图读不出二段日期（webui 明细已双载，图列对齐）。"""
-    if not os.path.exists("C:/Windows/Fonts/msyh.ttc"):
+    if not has_cjk_font():
         pytest.skip("渲染烟测依赖 Windows 中文字体度量（CI 无雅黑）")
     import report as _rep
     seen = []
@@ -155,7 +156,7 @@ def test_report_lay2_seg_carries_trans_go_date(monkeypatch, tmp_path):
 
 def test_report_lay2_seg_without_date_unchanged(monkeypatch, tmp_path):
     """无 transGoDate 行维持旧词面「二段 HH:MM」（同日中转不落键）。"""
-    if not os.path.exists("C:/Windows/Fonts/msyh.ttc"):
+    if not has_cjk_font():
         pytest.skip("渲染烟测依赖 Windows 中文字体度量（CI 无雅黑）")
     import report as _rep
     seen = []

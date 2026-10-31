@@ -162,8 +162,16 @@ def test_channel_board_renderer_replaces_flat_grid():
         assert _lv == "required", (_p, _lv)
         assert "必须登录" in _lb, (_p, _lb)
     assert "会话不共享" in links_src
-    assert "采集免登" not in src
-    assert "采集必须" not in src
+    # 这两条禁的是「用户可见文案」：曾把采集口径写成「采集免登 / 采集必须」
+    # 与登录要求打架。注释里出现同字（如「探针与定时采集必须拿到同一份
+    # android 段」）不是文案，不能算违规——先剥注释再断言，否则守卫会把
+    # 任何一句含该四字的说明判红（r630 实测）。
+    import re as _re
+    ui = _re.sub(r"/\*.*?\*/", "", src, flags=_re.S)
+    ui = _re.sub(r"(?m)^\s*#.*$", "", ui)
+    ui = _re.sub(r"(?m)//.*$", "", ui)
+    assert "采集免登" not in ui
+    assert "采集必须" not in ui
     assert 'class="chlgrid' not in src
 
 

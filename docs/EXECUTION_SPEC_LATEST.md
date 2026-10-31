@@ -1,4 +1,4 @@
-# 机票监控台 · 完整执行提示词（v1.5.304）
+# 机票监控台 · 完整执行提示词（v1.5.306）
 
 生成时间：2026-10-26
 工作目录：`D:\idea_project\ticket-monitoring`
@@ -32,7 +32,7 @@
 
 - 单文件 Python SPA：`webui.py`（`PAGE` 为整页 HTML/CSS/JS 字符串），`http.server` 提供服务。
 - **运行时下限 Python 3.10**：代码存在运行时求值的 PEP 604 注解（`core/radar_alerts.py:25`、
-  `crawlers/ctrip.py:1007`、`crawlers/tongcheng.py:1051`），3.9 导入即 `TypeError`。CI/打包用 3.11。
+  `crawlers/ctrip.py:1010`、`crawlers/tongcheng.py:1051`），3.9 导入即 `TypeError`。CI/打包用 3.11。
   这条由 `test_python_floor_matches_pep604_usage` 守着——要么代码去掉这些注解，要么别把徽章写回 3.9。
 - SQLite `data/prices.db`；关注清单 `data/flight_watch.json`；雷达快照 `radar_snapshots`。
 - Playwright Chromium profiles 在 `user_data/`，承载各渠道登录态。
@@ -42,8 +42,8 @@
 
 ### 1.2 当前基线（2026-10-27 核对；开工必须再核）
 
-- 版本：`main.py` `__version__ = "1.5.304"`；`/api/state` 返回的 `version` 同值（活体取证）。
-- 仓库 HEAD：`66f4798`（**r417**）；**r418 起的新轮次只存在于工作区、尚未提交**（截至 10-29 18:19 实测到 r521；区间端点会随并行会话推进而变化，**以工作区代码里的最高 rNNN 为准**）（下文引到它们时按未提交改动理解）。**r374 及更早的章节是历史，不是"本轮"**；r395–r417 为账本诚实性系列（详见 `docs/RATE_LIMIT_PLAYBOOK.md` §16.9–16.19），r412–r421 另含界面收口：
+- 版本：`main.py` `__version__ = "1.5.306"`；`/api/state` 返回的 `version` 同值（活体取证）。
+- 仓库 HEAD：`7e221ec`（以 `git rev-parse --short HEAD` 为准；此处随提交同步，读者以命令输出为准）；**r418 起的新轮次只存在于工作区、尚未提交**（区间端点会随并行会话推进而变化，**以工作区代码里的最高 rNNN 为准**，读取方式：`grep -oE "\br[0-9]{3}[a-z]?\b" webui.py | sort -u | tail -1`）（下文引到它们时按未提交改动理解）。**r374 及更早的章节是历史，不是"本轮"**；r395–r417 为账本诚实性系列（详见 `docs/RATE_LIMIT_PLAYBOOK.md` §16.9–16.19），r412–r421 另含界面收口：
   - r395–r404：路径溯源、登录墙不冒充 error、empty 必须有证据、门拒不触发退避；
   - **r405**：把「empty 必须有证据」的守卫从字面标记改成正则，又抓出两处（状态错 vs 文案错）；
   - **r406**：新增「在用口径」——退役通路不再拖低渠道健康度（见 §2.5）；
@@ -61,7 +61,7 @@
   - **r417**：建议条自报「查询成功率」口径，并说明已排除的退役通路；
   - **r418 起（工作区未提交；r422 空号）**：r418 撤掉区块间 5 条满宽 border-top（分隔交给留白，只在数据行留线）；r419 概览卡动作移到卡头右侧；r420 节流面板并进健康卡（台账式重排：台账头/逐渠道/本轮节流/反复出现/干预）；r421 健康与「节流与干预」两张通道表同序（`SRX_PLAT_ORDER`）+ 健康加「分会话」维度（`slots`）；r423 来源接入改为**卡头的第二段**（不再是独立一行），说明移到卡头之外、展开只让卡片长高；r424 窄档下「展开/收起探针」与动作组不再错行；r432 渠道诊断卡头改为行向 wrap（来源接入条并回标题行，吃掉标题右侧 673px 空白，不再占满第二行自成一段；窄屏换行时吃满整行而非挤在标题旁只剩一半宽），诊断卡改五等宽一行（3+2 两行卡宽不一致，1280 实测 354/536），「自检」紧跟正文不再被推到卡底；r458 三图浮窗收敛到 `PCHART.placeAxis` 一份算术（横向翻边/纵向定顶），按钮与表单控件圆角全部回到 `--r3`（清掉扁平层残留的 5/6/7px），配置页 `.cfgfieldset` 去掉 16px 横向内边距与自绘表面（同卡字段列同左缘），三图十字线统一 3/3 节距、画布焦点环统一 inset 2px，节流面板加一层 `--r-surface-2` 软面（此前整块全透明，读作一段长文）；弹层焦点移交改为仅键盘触发（`_LASTKBD`）——程序化 focus 同样命中 `:focus-visible`，鼠标打开时关闭钮曾全程亮 2px 蓝环；弹层标题去 emoji 改 `#i-file` 图标 + 计数胶囊；雷达折线十字线改跟指针 x（原吸附最近采样点，一天 3 次采集时指针 25/45/65/85% 四处恒在 48/626/626/1204，读作「悬浮不跟手」）。
 - 本机 8765：进程 `python main.py`，PID 记在 `.monitor.pid`；先用 `netstat -ano | grep :8765` 确认该 PID 仍在监听，再读 `/api/state`。
-- 工作区：**2026-10-28 04:46 实测 107 项变更（含 15 项未跟踪）**（早前 03:05 记的 70 项、01:29 记的 68 项、13:59 记的 49 项均已过期）。**未跟踪部分稳定在 15 项**，但已修改文件数在持续上涨（70→107 主要是并行会话在改更多已跟踪文件，不是新增文件）。未跟踪项含 `tests/test_eol_consistency.py`、`tests/test_docs_code_contract.py`、`tests/test_r374_unified_ui.py`、`tests/test_r385_prov_passthrough.py`、`tests/test_r420_pacing_panel_rebuild.py`、`docs/release-notes-v1.5.304.md`、`docs/MOBILE_CHANNEL_OPTIONS.md`、`docs/MOBILE_PATH_B_PLAN.md`、`docs/MOBILE_MUMU_ACCEPTANCE.md`、`docs/MOBILE_RUNTIME_VERIFICATION.md`、`docs/MOBILE_ZHIXING_A12_RESULT.md`，以及并行会话的临时补丁 `wui*.patch`（勿提交）。**并行会话正在持续改写源码（`webui.py` 等），数量随时变化**——以 `git status` 现场为准。**这些改动尚未经最终验收，只能当作待验证假设，不得直接宣布完成**；开工先跑第 1.3 节核验，数量与清单对不上说明有并行会话或已提交，按现场重算。
+- 工作区：**2026-10-29 18:27 实测 6 项变更、未跟踪 0 项**（并行会话已把 r418 起的成果全部提交进 HEAD `e28866d`；早前 10-28 记的「107 项 / 15 项未跟踪」已整体过期）。**以 `git status` 现场为准**——数量随时变化，与本文不符说明有并行会话在改或刚提交，按现场重算，不要按本行对账。
 - 上一轮记录的 UI 门禁：`docs/uitest.py` **658/658，零 JS 错误**（`docs/uitest_result.txt` 为当次实录）。
 - pytest 基线以开工实测为准（命令见 §1.3 第 5 条）。**历史数字只作对照**：本轮（2026-10-28 20:00）门禁为 **4299 passed / 0 failed**；同日 18:00 为 4288、17:20 为 4285、13:56 为 4273、12:51 为 4269、12:09 为 4264、10:54 为 4262；2026-10-27 19:16 为 4135；同日 15:05 为 4075；r374 早前为 4016 passed；本文件更早记录的 3853 passed 已过期，不得引用为现状。
 - 2026-10-27 实测基线（HEAD `5f39d6a` + 未提交改动，串行独占）：
@@ -130,6 +130,13 @@
 | 溯源展开块版面 | 标题写「携程 · 最近尝试与干预」与上方行内渠道名重复（390 档三行内出现两次）；表头「入口/动作」沿用数据行的 `--r-ink-2`，同一排表头出现两种颜色；窄档表头 `display:none` 后内容贴死小标题（实测间距 0px） | 标题只写「最近尝试与干预」；表头各列统一 `--r-ink-3`；`.pace-dsub` 下边距 6px（实测三处间距对称：390 档 6/8/6，1440 档 6/0(表头)/8/6/0）。门禁 `test_trace_detail_reads_like_a_section_not_a_repeat` |
 | 节流重建 | 10 秒轮询整块 innerHTML 重建，键盘焦点坠回 body | 每个动作带 `data-pk` 稳定键（`ctrip:trace`/`warm:qunar`），重建后按同一键回焦 |
 | 溯源必须真能收起 | 用户报「点击展开溯源…都收不起来」 | 2026-10-29 真点验证（1440/390 两档）：展开→再点→详情节点消失、行高回到收起态且完全相等（1440 **44→44→44**、390 **80→80→80**），触发钮 top/left 零位移；面板整体高度同源回归（1440 591→791→591、390 934→1095→934）。判据固定为「行高回到收起态 ±1px + 详情不可见」，不能只看文字是否变成「收起」 |
+| 副标题截断而非折行 | `.pace-sec .pace-sub` 一律 `white-space:nowrap + overflow:hidden + text-overflow:ellipsis + flex:1 1 auto`，全文进 `title`。2026-10-29 四档实测 78 个文本块：**无行数≥4 的块、无横向溢出容器**；唯一 `scrollWidth>clientWidth` 的是 `.pace-sub` 自身，那正是**省略号生效的证据**。320 档它只剩 78px（内容 175px），靠 title 兜底。必须截断的理由：同组四个标题里若只有一行折成两行，行高 17→33px，读作「排版坏了」（390 实测过）。门禁 `test_pacing_subtitles_truncate_instead_of_wrapping` | — |
+| 面板行高同档 | `.pace-kv` 用 line-height:1.7（11px→18.7px），同面板另两档是 16.5/18px | 节流面板内文字行高只能一档 1.5：`.nm`/`.e1` 是 18px（1.5×12）、`.glip`/`.e2` 是 16.5px（1.5×11），2026-10-29 实测 `.pace-kv` 却用 `line-height:1.7`（11px→**18.7px**），同一面板三档行高；多出的 2.2px 还把「量尺图例 → 这一段」的视觉间距顶成 **9px**（阶上应为 8），改 1.5 后回到 8。门禁 `test_pacing_panel_text_shares_one_line_height_tier` |
+| 配色图例同语法 | 三图 `.mon-legend` 共用 `font-size:12px / gap:12px / padding:8px 2px 0 / 色块 16×3` | 四档实测 CSS 口径完全一致。**但高度不要求相等**：关注图 `#wsLegend` 是 48px、另两图 27px——它第一个子元素是说明文字、第二个是 **40px 高可点选按钮**（在多条关注航班间切换），是「选择器 + 图例」复合体。钉成等高会逼着删掉切换能力。门禁 `test_color_legend_grammar_is_shared_across_charts` |
+| X 轴刻度必须抽稀 | 四处生成器统一有上限 | 2026-10-29 实测：趋势 `nTick+1`、关注 K 线 `Math.ceil(n/(W<560?4:8))`、雷达折线固定 4 条都可控，**唯独雷达 K 线是 `candles.map` 全量**——20 个交易日就有 20 个「MM-DD」挤在轴带上必然重叠。已改为与关注 K 线同一套抽稀（首尾必留）。门禁 `test_every_x_axis_generator_thins_its_labels` |
+| 雷达容器横向 0 内边距 | 三图画布在容器内缩进 趋势 10 / 关注 10 / **雷达 0** | **看着像不一致，实为必要**：雷达画布宽度由 `c.style.width=W` 精确定设，容器再加 10px padding 会让 `scrollWidth` 1220→**1240**（390 档 320→**340**），凭空多 20px 横向滚动。趋势图画布取 `c.offsetWidth` 天然吃 padding，保留 10px 没问题。门禁 `test_radar_chart_host_keeps_zero_horizontal_padding` |
+| 图标描边三档 | 动作图标 `stroke-width:1.8`，品牌剪影（`bic-plane` 航司/机型图形）`1px`，品牌 logo `.logo .ic` `1.7px` | 590 个可见 svg 实测：1.8×450 / 1×135 / 1.7×3；三档按「图形越大描边越细」分层，不合并；门禁 `test_icon_stroke_widths_follow_the_three_tiers` 只钉「不得出现第四档」 |
+| 小节标题字重一致 | 「本轮节流」漏加 `<b>` 只有 400，与同列另三个 600 混排；「反复出现」的有重复分支也漏加 | 四个小节标题统一 `<b>`（600 / 11px）；门禁 `test_every_pacing_section_title_carries_the_same_weight` 遍历全部 `pace-sec` 断言其后紧跟 `<b>` |
 | 面板内文字按钮同一字重 | `.pace-sec :is(a,button)` 写 `font-weight:400`，而行尾「展开溯源」是 600；同一面板六个文字按钮里，一个「刷新 · 时间」400、五个「展开溯源」600，同字号两种粗细读作两个层级 | `.pace-sec` 的按钮统一 **600**（全站按钮档）。1440/900/390/320 实测按钮宽仅 +3px，小节高度、副标题行数、裁切状态均不变 |
 | 面板字号的「多档」不是缺陷 | 普查显示 `b` 同时是 16px 与 11px、`button` 同时 600/400 | 分别是指标格**数值**（16px/600，金额档）与小节**标题**（11px/600/0.5px）；语义不同、不该合并。判据要按角色分组，不能按标签名 |
 | 复发备注 | 窄屏把备注放开成 `white-space:normal`，一条 200 字备注撑成 3 行，5 条记录吃掉 680px（实测 360 档行高 136px） | 备注恒为单行截断（窄屏同样 `nowrap`），全文放 `title`；截断不等于丢信息 |
@@ -447,6 +454,35 @@
   - 2026-10-29 实测：搜索页两处渠道图标底座原为硬编码 `5px` / `6px`（比例 27.8% / 27.3%），意图相同却写成两个数；改为 `calc(18px*.273)` / `calc(22px*.273)`，渲染 4.914 / 6.006px，视觉零变化、意图写明。
   - 三图档位控件（`.rngchip` / `#spMonMode button` / `#wsRanges button`）实测圆角全部 `8px`、高全部 `26px`，已同构。
 
+### 3.2c 数字列对齐（2026-10-29 实测）
+
+531 个「整格是数字」的单元格分 11 组，**10 组是 `Cascadia Mono` + `tabular-nums`**；
+唯一例外在雷达 `#spMonTable`——位于 `.sr-only`（读屏专用隐藏表），不可见，不算缺陷。
+数字扫读靠等宽 + tabular-nums：比例字体让 1/7 宽度不等、纵向参差。
+
+**判据陷阱**：不要按「某选择器块里有没有 `font-family`」判数字字体。`#ftable td.price`
+自身只写 `font-size`/`color`，等宽是从别的规则链继承的——按字面找会假红，实测渲染色才是准。
+
+### 3.2a 无卡中卡 / 无装饰阴影（2026-10-29 实测，1440 与 390 双档）
+
+- **嵌套卡片 0 处**：判据为「圆角≥8 + 四边描边或有阴影 + 面积≥120×60」，并排除可交互控件内部与表格数据格。正控确认判据确实识别得出卡片（400+ 处），不是漏检。
+- **带阴影的大卡只有 1 处**：`.pvcard`（560×138），它是 `role=dialog` + `aria-modal` 的**弹层**，已被 §3.2 列为 `--r-pop` 合法例外，不是装饰性投影。
+- 结论：扁平语言（卡片无阴影、无卡中卡）在**两个断点**下均成立。
+
+### 3.2b 跨断点 × 跨主题一致性矩阵（2026-10-29 实测）
+
+320/390/768/1440 × light/dark 共 8 个组合，逐项核验本轮建立的关键契约：
+
+| 项 | 320 | 390 | 768 | 1440 | 判据 |
+|---|---|---|---|---|---|
+| 横向溢出 | -10 | -10 | -10 | -10 | `scrollWidth-clientWidth` ≤ 0 |
+| 三图浮窗越界（24 点扫描） | 0 | 0 | 0 | 0 | 浮窗边沿不超出定位容器 ±2px |
+| 节流溯源可收起 | OK | OK | OK | OK | 收起后行高回到原值 ±1（320/390：80→80→80；768/1440：44→44→44），详情消失 |
+| 焦点环可见（真实 Tab） | 0 缺失 | 0 | 0 | 0 | 13~14 类元素全部有环 |
+| AA 严重不达标（<4.0） | 0/207 | 0/207 | 0/211 | 0/211 | 双主题均为 0 |
+
+**核验方法上的坑**：在页面内用 Promise + 旧节点引用连续点击，节点在重建后失效，会量到 `h 80/0/0` 这种假信号——**每次都要重新查询元素**，不能持有引用。
+
 ### 3.3 密度纪律
 
 - "紧凑"不等于"挤"。信息行 32–36px，可点击行 ≥ 36px（触屏热区地板同为 36px，见 §4.1 第 10 条），区块间距 12–16px。
@@ -468,6 +504,8 @@
 7. **不遮挡**：吸顶元素必须实底；图表、表格、列表的任何覆盖层不得遮住数据。
 8. **计数同源**：同一数字在一页只允许一种口径；跨日期总量、所选日期量、筛选后可见量必须分别标注。
 9. **空态有出路**：空态必须说明原因并给一个可执行入口，不得让"加载中…"永久停驻。
+10. **每个可点元素都要有悬停反馈**。2026-10-29 实测 132 个可交互元素，发现 `.pill.ok`「有人已达标」（`role=button` + onclick + `cursor:pointer`）在三个视图里**悬停零变化**——`.pill:hover{filter:none;background:…!important}` 与 `.pill.ok{background:var(--okbg)!important}` 同为 (0,2,0)、后者更靠后，把 hover 的灰底整条压掉。修法：补同特异度、更靠后的 `.pill.ok:hover`，**保持语义绿**（不改成中性灰），底色压深 12%（18% 会让 hover 态掉到 4.35:1 欠 AA，12% 为 4.75:1）。门禁 `test_clickable_status_pill_has_hover_feedback`。
+    - **判 hover 反馈必须用真实鼠标**：CSSOM 里「有匹配的 `:hover` 规则」不等于「规则生效」——本例 57 类元素 100% 都有 `:hover` 规则，真实鼠标一测才发现 `.pill.ok` 被 `!important` 压死。反过来，用采样时的坐标去 `elementFromPoint` 也会因滚动失效而误判。
 10. **键盘与触屏等价**：所有折叠/切换/行内动作可 Tab 到、可 Enter/Space 触发、focus 环可见。
     - 触屏热区地板 = **36px**（`pointer:coarse` 下由 `@media` 三档统一抬升；门禁钉在
       `docs/uitest.py` 的「coarse 裸 button 36px」与「nav span 36px 地板」两条）。
@@ -1240,6 +1278,15 @@
   契约含**行为级**断言：关掉时 `penalty` 必须为 1.0 且 `disabled=True`，
   同时**开启时仍必须降到 3.0**（不能为了修关闭把功能关掉）。
   负控（还原成 `bool(...)`）→ 2 条立刻变红（`penalty: 3.0`）。
+- **干预按钮在途必须换文案，不能只置灰**（r522）：节流面板四个会真打链路的
+  入口里，预热（3–8 秒）写「预热 XX 中…」、自检（10–60 秒）写「正在自检 XX」
+  ——**只有「解除」只置灰、文案不变**。而解除恰恰是慢的：它要跑一次真实查询，
+  后端才回答「解了到底通没通」，全程 10–60 秒。只置灰的话读者看不出它在干活，
+  会以为点了没反应（`PACE_BUSY` 只是事后拒绝，看不见变化仍会重复点）。
+  现在按钮变「解除中…（约 10–60 秒）」+ `aria-busy`，`finally` 里还原原文案
+  （`_rTxt`），避免异常时永久卡在「…中」。
+  实测：真渲染 + 桩住 `fetch`（永不 resolve）→ 按钮文本、`disabled`、
+  `aria-busy` 三项同时到位。负控（删掉文案赋值）→ 契约立刻变红。
   同轮核实：`pacing.py` 里只有这一处 `bool(cfg)` 转换；保存端写的是真布尔，
   因此这条只在**手写配置**时触发，正是需要兜住的场景。
   **同类缺口不止一处**（r520）：`breaker.enabled` 与 `warmup.enabled` 原先
@@ -1265,6 +1312,379 @@
   实测 1280/900/420 三档：4 行齐全、无截断、无横向溢出。
   **契约教训**：第一版用 `'"session_max_days"' in seg` 子串匹配，把键改名成
   `"session_max_days_X"` 后**负控全绿**——现改为解析出键集合做精确成员判断。
+- **悬浮窗压缩的探针证据与真渲染门禁**（r599；r524 已记同一条的 CSS 侧）：
+  uitest `v297 图表点按显示明细` 在 390 档长期红，实测 `right 401 > vw 390`、
+  体形 53×158。查下去不是钳位算术错，而是 **absolute 盒子默认 shrink-to-fit**：
+  可用宽度＝包含块右缘的剩余空间。探针直接量同一段文字：`left=0` 时 143×49，
+  `left=400` 时 53×158——宽度被位置决定，而落位函数又读到这个**假宽度**去钳位，
+  把 left 固定回同一处，自我维持。
+  **只改钳位算术治不好**：负控把右界强行改成 `vw-8`，浮窗照样折叠。
+  静态断言也抓不住：回退 CSS 后 `test_all_three_tooltips_cap_their_width_and_shrink_to_fit`
+  只变红在声明缺失上，改由别的规则覆盖时仍绿。所以补一条真渲染门禁
+  （`test_r599_tip_width_not_shrunk_by_anchor.py`）：**贴到只剩 12px 可用宽**再换内容，
+  宽度不得低于宽松态、不得折成竖条。第一版按「贴到刚好不塌」的位置测，
+  **负控漏网**（回退 CSS 后仍绿）——测量位置本身必须压到真实失败态。
+- **配置页不允许存在无法配置的项**（r523，用户明确要求）：r521 那块「仅可在
+  config.yaml 中修改」的**只读说明被整体撤掉**，改成真正的编辑控件；补齐了
+  原先只能改文件的 9 组键：`crawler.session_max_days` / `max_concurrency` /
+  `mobile_user_agent` / `tls_impersonate` / `debug_dir` / `login_desktop` /
+  `breaker.login_cooldown_s` / `cadence.<5 渠道>` / `schedule.near_days`。
+  每一项都补齐三段：**回读**（`/api/config` GET）→ **控件**（`GLB.<k>=…`）→
+  **落盘**（POST 写入 cfg 再 `safe_dump`）；缺任何一段都等于「配不上」，
+  契约逐段断言。这些键都不是启动级（启动级只有 4 路径 + host + run_on_start），
+  因此**保存即热生效**，不需要重启。
+  **一个差点写错的语义**：`cadence` 的真实含义是「该渠道单独的最小采集间隔
+  （**整数分钟**，0..10080）」，后端 `int()` 取整；我最初把控件写成「节奏倍率」
+  并允许小数，实测 `{'qunar':1.5}` 落盘后被解析成 `1`——控件显示与实际生效值
+  对不上。现控件与写入端都改成 `parseInt` / `int()` + 10080 上限，与
+  `core/pacing.py` 同口径；契约专门钉「控件侧不得用 parseFloat」。
+  实测：往返一致（`cadence.qunar=45→45`、`near_days=5`、
+  `login_cooldown_s=1200`、`max_concurrency=3`）；10 个控件在 1280/900/420
+  三档全部渲染、无横向溢出、只读说明块已不存在。
+- **`crawler.proxy_map` 也必须能在配置页配**（r600）：r523 按「逐键清点」补齐时
+  漏了它——`crawlers/base.py` 真生效（一家被限流不牵连另一家，是提高渠道成功率的
+  关键旋钮），`config.example.yaml` 也有说明，但配置页既无控件也不显示值。
+  现补齐三段：GET 回读 `globals.proxy_map` → 5 个 `glbPm_<渠道>` 控件（「渠道出口」
+  独立小节）→ POST 落盘。写入统一走 `_proxy_map_clean()`：与全局 proxy 同一条
+  `^https?://[^\s/]+:\d+$` 校验，**空值不落键**（否则「跟随全局」与「显式直连」
+  两种语义混在一起）。不校验的代价特别难归因：漏 scheme 的 `127.0.0.1:7897`
+  会让该渠道 httpx 抛 InvalidURL，表象是「这一家渠道全红」。
+  门禁 `test_r600_proxy_map_configurable.py`（含清洗函数真调用 + 负控：去掉正则即红）。
+  **教训**：清点「能否配置」不能只看配置页有没有那句只读说明——按
+  `config.example.yaml` 的叶子键逐个反查控件才找得到这类静默缺口。
+- **「没有无法配置的项」要做成不变式，不是一张名单**（r601）：r523 补了 9 键、
+  r600 补了 `proxy_map`、r601 又补出 `users.routes.alert_threshold`
+  （`core/alerter.py` 真读，`route.alert_threshold > 0` 才走旧总阈值提醒；
+  示例配置留着兼容注释，页面却既不显示也不可改）——三轮都是「发现了再
+  补名单」，名单外的下一个键继续静默缺席。现改为从 `config.example.yaml`
+  **枚举 83 个叶子键**逐个要求落点，门禁
+  `test_r601_every_config_key_reachable.py`。豁免表必须附可验证的承载方式
+  （理由里提到的入口要真在源码里），防止缺口藏进豁免。
+  **落点判据踩过两次假绿**：①只查「键名带引号出现在源码里」，
+  而 `setRoute` 的同步白名单正好有一句 `k==='alert_threshold'`——删掉编辑
+  控件仍全绿；②只查「键名作为事件处理器实参」，把 `glbBbs`/`glbCad_`+p
+  这类控件 id 承载的当成缺口（误报 11 项）。现判据＝写回表达式 ∪ 事件绑定
+  ∪ glcell 实参 ∪ 动态表 ∪ 控件 id 承载。
+  **控件位置也有一次真错**：第一版把旧总阈值塞进「筛选与时段约束」折叠区，
+  源码断言全绿但页面上量到 **0×0**（`display:none`）——用户根本看不到。
+  现控件放在「心理价」常驻行（与直飞/中转阈值同排），并补一条真渲染门禁：
+  控件要量到尺寸、标签含「总阈值」、输入后 `CFG[…].alert_threshold` 真的变。
+  实测 88×34、输入 1234 → `alert_threshold="1234"`、`routeKeys` 里已含该键
+  （保存载荷就是 CFG，故必落盘）。
+- **分通路必须能定位「为什么掉」**（r602）：渠道健康的通路维（r415）原先只给
+  成功率（`H5 80% · PC 100%`）。同样的 20%，是「登录墙」还是「软拒」决定用户
+  该做什么——前者重登能解，后者只能等自愈。真实账本（2026-10-29 实测
+  `data/prices.db`）确有这个形态：`qunar H5 ok 131 / login 70 / soft_reject 8`、
+  `qunar API ok 5 / login 20`。后端 `core/storage.py` 早已把 login/soft 分开计数，
+  **缺的是展示**——现只在计数 >0 时附注 `（需登录 7 · 软拒 1）`，正常通路不加噪声。
+  实测渲染：`H5 20%（需登录 7 · 软拒 1） · H5/API 50%（需登录 2） · PC 100%`；
+  390/320/1280/1600 四档 + 三通路全带两类失败的最坏内容均 `scrollWidth ≤
+  clientWidth`、`.hscope` 右沿未越卡界。门禁
+  `test_r602_path_failure_class_visible.py`（含真渲染 + 负控：去掉附注即红）。
+  **同一账本两处渲染必须同口径**：节流面板速览的通路行（`pws.push`）也是
+  只报百分比。只改健康卡，同屏就会出现「健康卡说需登录 7、节流面板只说
+  20%」的两种说法——正是用户反复提的「不要让两个面板互相矛盾」。现两处
+  共用同一套 `login`/`soft` 附注规则；契约用**精确拼装片段**分别断言两处
+  都在（`_fx.push('需登录 '+_v.login)` / `_pf.push('需登录 '+w.login)`）。
+  宽口径 `w.count("'需登录 '+")==2` 会因徽标 caption 里那处也计数而**假绿**
+  （负控实测 3≠2），已改为按表达式定位。
+- **r601 的通用不变式当场抓到了新缺口**（r603）：并行会话新增
+  `core/android/config.py`（智行/美团 App 只能走真机，无可用 Web 入口），
+  7 个字段齐全且逐个钳制，但配置页**一个控件都没有**。门禁直接报出
+  `['android.install_dir','android.vm_index','android.boot_timeout_s',
+  'android.action_timeout_s','android.snapshot']`——这正是把「无不可配置项」
+  做成不变式（而不是人工名单）的价值：新键加进来就会当场变红。
+  **注意 `enabled`/`provider` 当时被宽口径漏过**——它们与别处同名字面量
+  重名，靠「键名出现在源码里」判不出来。现 7 个字段全部补齐并逐个断言。
+  控件范围与后端钳制**逐项一致**（`vm_index 0..64`、`boot 10..600`、
+  `action 5..900`）：界面能填出后端会悄悄改掉的值，本身就是「配了不生效」。
+  实测渲染 1280/390 两档 7 个控件全部可见、无横向溢出；写回 `vm_index=3`、
+  `boot_timeout_s=999 → 600`（钳到后端上限）、`install_dir` 均落到 `GLB.android`。
+  门禁 `test_r603_android_config_editable.py`（负控：删掉配置区块即红）。
+- **配了却没被扫的渠道不能整行消失**（r604）：健康卡的行来自日志里**出现过**的
+  渠道（`core/health.py` 的 `_flush` 只遍历本轮 events）。`max_concurrency`
+  限制同轮并发，一轮常只有 2–3 家被扫到，其余几家就这样静默消失——用户勾了它，
+  翻遍健康卡找不到，读作「这个渠道不存在」。后端补下发 `enabled_platforms`
+  （配置里勾过的并集），前端在格带下补一行「未扫描：…（已勾选，但近 24h 无
+  扫描记录）」。**不能读前端 CFG**：健康页不加载配置表单，`CFG` 此时是 null
+  （实测 `cfgPlats=[]`，那段代码永不生效）。门禁
+  `test_r604_unscanned_channels_visible.py`。
+  渲染判据也要小心：健康面板在未激活的 mon 子标签下整块 `display:none`，
+  量宽度/查祖先只能测出「视图没切过去」；改判 `hbody` 的渲染产物里是否含该文本。
+- **`_State` 的类属性被写进函数体 = 静默失效**（r604b，门禁实测发现）：
+  合并时 `login_sessions` / `login_errors` / `login_saved_cb` / `login_pending`
+  四行落在了 `_app_login_ctx()` 的 `return {...}` **之后**——`return` 之后的
+  代码不可达，四个类属性从未定义。13 条 `test_channel_status` 在 setup 阶段
+  就 `AttributeError`。这不是「报错」而是**静默失效**：重复点登录不被拦、
+  刚登完就被建议重登、保存失败不落账、登录后不清采集器缓存（新 cookie 不生效）。
+  已把四行移回 `_State` 类体，并加常驻守卫
+  `test_r604b_state_attrs_not_dead_code.py`：真 `import` 后 `hasattr` 检查，
+  外加「`_app_login_ctx` 的 return 之后不得再有代码」守成因。
+  该守卫第一版把多行 `return {...}` 的续行当成「return 之后的代码」而假红，
+  现按括号配平跳过续行。
+- **隐式夹取必须当场回写并说明**（r605）：健康保护有两条真实约束，后端
+  `core/pacing.py` 的 `parse` 与前端 onchange 都会施加：
+  `health_slow_ratio ≤ health_ok_ratio`（降频线 ≤ 合格线）、
+  `health_slowest_factor ≥ health_slow_factor`（重降频 ≥ 轻降频）。
+  规则本身没问题（两边一致），问题是**夹了不说**：输入框留着用户键入的
+  原值（实测键入 0.9），`GLB` 与落盘都是 0.7——「我配了 0.9，实际跑 0.7」，
+  不报错也不提示。`glcell` 早就留了 `.verr` 出错位，但全站从未使用。
+  现加 `glbClamp(el,id,applied,reason)`：回写真实生效值 + 显示原因，6 秒收起。
+  **`.glcell .verr{display:none}` 会压过空串**：必须显式给 `block`，否则
+  回写发生了、解释永远看不见（实测 `display` 仍是 `none`）。
+  实测：键入 0.9 → 输入框回到 0.7、`GLB.health_slow_ratio=0.7`、
+  提示「降频线不能高于合格线（0.7），已按合格线生效」可见。
+  门禁 `test_r605_config_clamp_is_visible.py`（负控：去掉回写即红，且渲染
+  断言实测用户看到的是 0.9）。
+- **配置页每个数字输入都要有范围校验**（r606）：`glcell` 对**所有**数字输入
+  都挂了 `oninput="glbCheck(this)"`，但 `glbCheck` 按 `GLB_RANGES` 查表，
+  查不到就静默放行。实测全局参数面板 31 个数字控件里只有 5 个在表内，
+  其余 26 个键入越界值时——输入框留着原值、onchange 把他夹掉、保存的是夹后值。
+  现按各自 onchange 的实际边界逐项登记，动态 id（`glbCad_*`）走
+  `GLB_RANGES_DYN` 前缀规则，`glbRangeOf()` 作为唯一解析入口，**保存侧也用它**
+  （否则「输入标红、保存放行」两套结论）。
+  **比率/倍数类必须 `parseFloat`**：`parseInt('0.05')===0` 会让合法值永远判越界
+  （表里用 `dec:1` 标记）。
+  **抄边界不能凭印象**：`per_minute` 后端下界是 **0**（0=不限），我照 onchange
+  手抄成 1 —— 默认值 0 立刻被判越界、**保存被拦**（`test_save_demo_readonly_gate`
+  与特价保存两条同时红）。边界不是文案，加 `test_declared_zero_is_valid_*`
+  与 `test_table_bounds_match_backend_clamps` 守「后端允许 0 的项下界必须是 0」。
+  实测：31 个控件零缺口；比率越界（5）标红、合法小数（0.8）不误报、
+  整数越界（1）标红、动态 id（99999）标红。
+- **门禁自己也崩过一次**（r606）：`tools/test_all.py` 打印失败项时遇到
+  用例文本里的 `❌`，GBK 控制台抛 `UnicodeEncodeError`，**整轮结果作废**
+  （退出码既不是 0 也不是 1，跑测方只看到 traceback）。已加
+  `sys.stdout/stderr.reconfigure(errors="replace")`——输出只是给人看的，
+- **登录页的「必须登录」要一行写清，不能逐格重复**（r608 / r608b）：
+  ① 页面顶部说明还写着「同程/途牛建议」，与 r414「五渠道全部必须登录」冲突；
+  ② 飞猪双端走的是自带 DOM（`lgShortStatus`），绕过共享的 `slotBody`，
+  把 `requirement` 整个丢了——同页四家写「必须登录」、飞猪两端只有
+  「PC 未登录 / H5 未登录」，读者会以为飞猪不用登录。
+  统一走 `slotBody` 后，半格只有 **145px**（单渠道格 324px），三段拼不下折成
+  两行，飞猪卡 69px、其余 52px——r412 的几何守卫当场报 `[52, 69] @900px`。
+  终态：半格（`slotBody(s,1)`）只放状态，「必须登录」提到**卡片头**
+  `.lgreq`（弱色 10px 小字，每卡一次）；五行实测全部 52px，r412 五档全绿。
+  **测量环境必须与门禁同源**：先用 `--demo` 探针测全是 52px（demo 账号名更长），
+  而 r412 用真实模式（直接实例化 `webui._Handler`）才复现折行——
+  demo 量不出这个缺陷。
+- **「每个采集器都能记 error」要判能力**（r609）：`app_zhixing.py` 被判缺牌，
+  但它继承 `AppBaseCrawler`、统一走 `safe_fetch()`，异常在那里就记成
+  `app-error`。判据改为「自带 或 基类提供」，且基类判据必须**落在
+  `safe_fetch` 的函数体里**——查整个文件会假绿（`PATH_STATUS` 元组和
+  `path_note` 的默认兜底都含 `"error"`，删掉那两行后断言照样通过；
+  负控第三次才真红）。
+- **干预前后必须用同样长的窗口比**（r610）：`intervention_effect()` 的 before 取
+  「干预前 N 小时」，而 after 原写 `fetched_at >= at`——**一路统计到现在**。
+  实测：干预当场生效（之后 24h 内 10/10 成功），8 天后渠道因别的原因恶化，
+  那 90 条失败仍落进 after → **1/100 = 10%**，面板写「干预未见改善」；
+  用户看到「上次干预无效」，而它其实救回来过。修法：after 也加
+  `AND fetched_at < datetime(at,'+N hours')`，两段等长闭合。
+  **不收走回落观测**：`trend`（30 分钟分桶）与 `regressed` 看的是干预之后全程，
+  回答「后来有没有回落」；after 回答「这 N 小时里救回来没有」——两件事。
+  契约 `test_r610_intervention_window_symmetry.py` 把 improved / no_effect /
+  regressed 三种情形都钉住（负控：恢复无界 after 后，样本数与成功率两条真红：
+  `40 <= 20`、`30 <= 5`）。
+- **「治好」判定必须封顶**（r611）：`intervention_success_rate()` 判
+  `healed = any(win)`——窗口里只要有**任意一条**成功就算救回来了。而窗口
+  右界原先只有「同渠道下一次人工干预」，对**最后一次**干预它为空，
+  窗口一路延伸到 `now`。窗口越宽越容易命中偶然成功，指标必然高估。
+  实测：干预后 24h 内 10 次全失败 → 20 天后因别的原因偶然成功一次 →
+  旧实现 `healed=1 / rate=1.0`，读作「这次干预 100% 有效」。
+  修法：右界再加 `I.at + N 小时` 封顶（有下一次干预时取更早者），
+  与 `intervention_effect` 同口径。
+  **副作用是诚实的**：更老的干预因落在窗口外而不再出现在结果里
+  （`n=None` = 该动作没有可判样本），不是「0 次成功」；面板本来就按
+  `unjudged` / 「样本不足」分开表述。
+  门禁 `test_r611_intervention_heal_window_capped.py`（负控：去掉封顶后
+  三条真红，其中 `warmup: healed=1` 正是被冒充的形态）。
+  **与 r610 同族**：那边是均值被远期稀释，这边是存在性被远期放大——
+  凡带 `any()` 的「命中即成功」，窗口必须双侧闭合。
+- **「分域成功率」的分子分母必须真的是那个域**（r617）：
+  `intervention_success_rate()` 的 `scopes` 子表（r511）本意是回答
+  「国际自检救回几次、国内自检救回几次」，面板也确实照着这话在展示：
+
+      近 7 天成功率 自检 88%（7/8）（国际 75% · 国内 100%）
+
+  但子表记的是**该渠道全部样本**，没有按航线分域过滤——两个域拿到同一份
+  数字。最坏的形态：窗口里国内 4 条全绿、国际 4 条全红，「国际自检」
+  会判成**治好**（国内的成功给它背了书），面板于是建议用户继续点国际自检。
+  这正是「可区分 / 可指定干预」被数据掏空的一类：数字看着分了域，
+  结论却是从另一个域借来的。
+  修法：`dom`/`intl` 两种 scope 按 `is_intl_route(from,to)` 切片——**与
+  `path_stats`、`intervention_effect` 同一个分域函数**，不另造一套；
+  该域窗口内零样本时记 `unjudged`（判不了，不是失败，更不拿别的域顶替）。
+  非域名 scope（重登的槽位名等）保持渠道级口径。
+  门禁 `test_r617_intervention_scope_is_scoped.py`（负控：关掉分域过滤后
+  两条真红，「国际 4 全败 + 国内 4 全胜」被判成国际治好）。
+  **连带修正**：r511 的样例把国际航线写进了国内自检的窗口里（`_row` 恒写
+  `BKK→CAN`），在 r617 之前没人发现，因为子表根本不看航线；同时它把
+  「分域之和恒等于动作级 n」当作不变量——分域切片后正确的式子是
+  **分域 n 之和 ≤ 动作级 n**（该域没样本时落在 unjudged），拆分不放大即可。
+  **通用判据**：凡「按某个维度拆开的指标」，都要问一句「这个维度的取值
+  真的参与了筛选吗」——只加一列 label、不参与 where，是最容易骗过
+  review 的假拆分。
+- **同一段读数里的趋势也得是同一边界的**（r618）：r512 给
+  `intervention_effect` 加了 `scope_before/scope_after`，但同一条
+  「干预后对比」下面挂的 `trend`（“干预后每 30 分钟：100% · 0% · …”）
+  和 `regressed`（“最近回落”）仍按**渠道全部样本**算。读者会同时看到：
+
+      本次干预针对：国际域 前 24h 0%（4） → 0%（4）
+      干预后每 30 分钟：100% · 100% · 100%     ← 这些是国内的绿灯
+
+  国际刚干预完一直不通，却挂着满屏 100% 和「最近回落」（那是国内某窗
+  回落带出来的）。修法：趋势同样按 `is_intl_route` 切到这次干预的域；
+  非域 scope 保持渠道级。**判定词义也顺带厘清**：该域从头到尾没好过是
+  「干预无效」，不是「先好后坏」——`regressed` 只在「曾经 ≥70% 且末窗
+  <40%」时为真，所以别把它当「现在很糟」的同义词读。
+  门禁 `test_r618_intervention_trend_follows_scope.py`（负控：`want_intl`
+  置空即两条真红）。
+  **同族三连**：r617 修分域成功率、r618 修分域趋势——两处都是「维度名
+  加上了，where 没跟上」。同类改动请成对检查：**凡出现「本次干预针对 X」
+  的同一块，它后面所有数字都必须是 X 的。**
+- **结论（不是数字）也必须按这次干预的域来判**（r619）：
+  `core.pacing.effect_verdict()` 只读渠道级 `before/after`，而 webui 用它
+  做了一件有副作用的事——verdict 一旦是 `improved/recovered`，就把渠道的
+  `path_degraded` 建议**改写成 `recovering`**：
+
+      if (_st0 in ("improved", "recovered") and advice.state in
+              ("path_degraded", "degraded")): advice.state = "recovering"
+
+  实测形态：国际自检后国际仍 0%，但渠道级因国内一直很好而 100% →
+  verdict 判「干预有效」→ 面板把「路径劣化、该处理」换成「恢复中、再观察」，
+  用户就此不再处理一个仍然全红的域。**数字难看只是表象，这里关掉的是
+  「可判断 + 可干预」**——比 r617/r618 更接近操作后果。
+  修法：scope 是 dom/intl 且有 `scope_*` 字段时，verdict 全程用该域数字，
+  hint 前缀写明「国际域 / 国内域」；该域零样本时说「该域还没有新样本」，
+  不拿渠道级顶替；非域名 scope 与无分域字段的老调用一字不变。
+  门禁 `test_r619_verdict_follows_intervention_scope.py`（负控：关掉分域
+  分支后三条真红）。
+  **四连同族**：r617 成功率、r618 趋势、r619 结论——同一个「分域」维度在
+  三层都要贯通；只修展示层不修结论层，面板照样会给出反向建议。
+- **关掉熔断，就不能还宣称「已熔断」（r625）**：
+  `crawler.breaker.enabled: false` 在配置页可关，`ChannelBreaker.allow()`
+  也确实放行。但 `Pacing.observe()` 原样返回 kind，而调用方把 kind 当
+  「已熔断」的信号——于是关掉开关后仍然：写一条 `action=auto_trip` 干预台账
+  （干预次数被虚增）、打「[节流] 命中 captcha，熔断 300s」告警、触发
+  「命中人机验证自动开窗」。而通道 `state` 仍是 `ok`，面板显示「正常」，
+  这一轮**明明被验证码拦过**的事实彻底消失。开关看起来生效了，实际没有。
+  修法：`observe()` 在开关关闭时返回空 kind（不写台账/不告警/不开窗），
+  但把归因记进 `_cause`；快照挂成 `blocked_but_open`，面板显示
+  「被拦 · 未熔断 / 熔断已关闭」。**软拒与登录墙不受此开关影响**——
+  它们不是「熔断」语义（软拒要提示先预热，登录墙要引导去重登）。
+  **顺带修掉一处判定优先级**：`classify_failure` 原先把 note 里的
+  captcha 关键词排在 `status=login` 之前，于是一条状态明明是登录墙、
+  说明里带「可能会弹验证码」的样本被判成 `captcha` → 冷却 300 秒，
+  而正确动作是让用户去重登。现在**结构化状态优先于说明文本**。
+  门禁 `tests/test_r625_breaker_off_is_honest.py`（负控：去掉开关分支，
+  三条真红——回报熔断、归因丢失、yaml 里的 `"false"` 不生效）。
+- **关掉的动件不能留下「等着它执行」的标记**（r626，与 r625 同族）：
+  `crawler.warmup.enabled: false` 可关，`_warm_once()` 也直接 return。
+  但 `ChannelBreaker.trip()` 的 soft 分支**无条件**置 `needs_warmup=True`，
+  而这个标志**只有 `note_warmup_ok()`（预热成功）才会清**——预热被关掉就
+  永远不会执行，于是标记永久挂着。两个后果：面板一直显示「需要预热」
+  而这个动作被用户关了；以及用户哪天重开预热，一个几小时前的软拒会立刻
+  触发一次「强制预热」（`_warm_once` 里 `forced = needs_warmup` 是绕过名单
+  的直接触发条件）。
+  修法：`Pacing.observe()` 在「软拒 + 预热已关」时不经 `trip()`，改用
+  `ChannelBreaker.mark_cause()` 只留归因；软拒 kind 照旧返回（那不是熔断语义），
+  登录墙也不受影响。
+  门禁 `tests/test_r626_warmup_off_leaves_no_sticky_flag.py`（5 条，
+  负控：去掉守卫 → 「留下粘滞标记」「重开后触发陈旧强制预热」两条真红）。
+  **通用判据（r625+r626 合并）**：关掉一个动件时，除了「判定短路」和
+  「副作用停止」，还要检查**有没有留下指向它的持久状态**（needs_* / 待办位），
+  否则那个状态永远等不到清除，还会在重新打开时被当成「当前事实」。
+- **「已弹出」必须是事实，不是「线程起来了」（GitHub #10 的后一半，r620）**：
+  #10 原修复只堵了「无图形环境」一种已知原因（`os.name=="posix"` 且无
+  `DISPLAY`/`WAYLAND_DISPLAY`）。但窗口开不出来还有很多种：缺 Playwright
+  浏览器内核、profile 被采集占用、显示服务异常、goto 超时。而原实现是：
+
+      threading.Thread(target=_run, daemon=True).start()
+      _State.logger.info("[登录] 已弹出 %s 登录窗口", key)
+      return {"ok": True, ...}
+
+  线程刚要开始跑就回报成功——正是 issue 里「点了没反应，换八个浏览器都没用」
+  的形态。**判据不能是「已知失败原因」清单，而是「窗口真的开了吗」这个事实。**
+  修法：`_login_window` 在 `page.goto` 成功后置位 `ready_evt`；接口等它
+  （45s 上限，goto 自带 40s 超时），拿到才回报成功；线程先失败/超时则回报
+  `kind="window_failed"` + **具体原因**（把真实异常带给点击者，不是"详见日志"），
+  并清掉 `login_sessions`（否则用户会被「窗口已打开」永久挡住）。
+  两个必须同时处理的细节：
+    - **排队不是失败**：线程先要拿 `channel_slot`，采集正在跑时那是正常等待；
+      `session["queued"]` 用来区分，等待方不误报「缺浏览器内核」。
+    - **日志时序**：「登录窗口已打开」必须由真正开窗那一侧写（`_login_window`
+      在 goto 之后），不能在起线程处先写成功句。
+  门禁 `test_r620_login_reports_only_real_window.py`（负控：把就绪等待改回
+  无条件成功，两条真红——回报成功、日志谎报「已弹出」）。
+  **通用判据**：凡是「异步启动 + 立刻回报成功」的接口（弹窗、子进程、后台任务），
+  都要问一句「成功的判据是启动了，还是到达了那个可观测状态」。
+- **文档里写的配置键必须真的存在**（r621）：#11 的回复与 README FAQ 都把监听
+  地址/端口写成 `network.host` / `network.port`，真实键是 `web.host` / `web.port`。
+  用户照改 yaml **改不生效且不报错**——比不告诉他更糟：他会以为已经放开了
+  局域网访问。
+  门禁 `test_r621_docs_config_keys_exist.py`：把 README/SPEC/HANDOFF 里所有
+  `` `段.键` `` 拿去和 `config.example.yaml` 对账（只校验示例里真实存在的顶层段，
+  避免把 `setup.py` 这类文件名误判；**注释态的可选键也算存在**——实测
+  `crawler.proxy` / `crawler.browser_dir` 都是以 `# key:` 形式给出的）。
+  负控：把 `web.host` 改回 `network.host` 即红。
+  **同类判据**：文档里的路径/键/命令，凡「照着做会静默失败」的，都值得一条对账门禁。
+- **干预账写不进去时不许装没事**（r612）：`save_intervention()` 原来
+  裸写库，失败就被上层 `except` 吞掉。干预照做、页面照显示「已触发」，
+  而溯源/成功率里**根本没有这条**——用户看到的「干预成功率」分母比实际
+  少，且无从察觉。这是「可溯源」被静默掏空的一种。
+  修法：写失败先打一条带上下文的 warning（`[干预账] 写入失败（这条干预
+  不会出现在溯源里）：<action> <plat> · <err>`）再 `raise`，让调用方
+  的失败路径照常把错误回给界面；成功返回 `True`。
+  门禁 `test_r612_intervention_write_failure_is_visible.py`。
+  **通用判据**：凡是「审计/账本类」的写入，失败必须同时有【日志】与
+  【向上抛】两件事——只记日志不抛 = 界面仍报成功；只抛不记日志 =
+  用户看不到为什么这条干预消失了。
+- **已注册渠道要在页面上勾得到、叫得出名字**（r613 / r614）：
+  `app_zhixing` 早在 `REGISTRY`、健康正则、告警映射里，用户 `platforms:` 里写上
+  就会被实例化——但配置页的渠道勾选来自 `PLATS`（只有 5 家浏览器渠道），
+  没有任何入口，只能改 yaml（r613 补 chip，并点明它依赖 Android 真机通道总开关）。
+  名字那头也漏了：健康卡与节流面板各有一张 `CN` 表只列 5 家，智行 App 被渲染成
+  **`aapp_zhixing`**（首字兜底 `a` + 原始 id）。两张表改为
+  `Object.assign({…5 家…}, APP_PLAT_NAME)`，与登录卡同源（r614）。
+  实测渲染：chip 6 个、点选真的进 `CFG.platforms`；健康卡显示「智行 App」、
+  不再含 `app_zhixing`。门禁 `test_r613_*` / `test_r614_*`。
+  **判据的坑**：chip 有两个来源（`PLATS` 动态表 + 显式追加），只查字面量会把
+  动态生成的 5 家误报成缺口（实测 fliggy/tongcheng/tuniu）；正确判据是
+  `REGISTRY` 每个键 ∈ (动态表 ∪ 显式 chip)。**新增渠道要同步三处**：
+  `REGISTRY`、健康/告警映射、配置页可勾选 + 名字表。
+- **名字表只剩一处抄写点，且必须在顶层**（r615 / r616）：
+  r614 修了两张 `CN` 表，但「5 家中文名」在前端还有第三份 `PCN`（概览脉冲条
+  tooltip），筛选 chip 又直接 `${he(p)}` 打原始 id —— 智行 App 在这两处仍是
+  `app_zhixing`。三处统一并 `APP_PLAT_NAME`（r615）。
+  **真正的坑在作用域，不在抄写次数**：r614 把 `const APP_PLAT_NAME=…` 写进了
+  `renderHealth()` 的函数体（**缩进 0，肉眼看像顶层**），而 `PCN`、节流面板
+  `CN`、`appPlatName()` 都在顶层读它。结果整页脚本只抛
+  `APP_PLAT_NAME is not defined`，`S` 永不初始化 —— **全站白屏**，
+  而当时 r613/r614/r615 共 11 条断言**全绿**（静态字符串检查，源码里那句
+  声明好端端地待着）。`typeof X!=='undefined'` 救不了 TDZ，也救不了
+  函数作用域：声明在函数里时，顶层 `typeof` 就是 `'undefined'`。
+  修法：声明提到顶层第一个引用之前。**判据必须上运行时**——
+  `test_r616_no_page_errors_across_views.py` 真开页面走遍
+  `mon(overview/specials/trend/watch/details/health) + search + cfg(login/users/globals)`
+  十个面，要求 `pageerror == 0`、`typeof S === 'object'`、
+  `typeof APP_PLAT_NAME === 'object'`；负控：把声明挪回 `renderHealth()` 体内
+  即整份红（实测 `apn == 'undefined'`）。
+  **教训**：静态断言测不到「这行代码在哪个作用域」。凡是「声明的可见范围」
+  这类属性，只有真加载页面才判得了。
+- **同一条通路只能有一个记账名**（r607）：`FliggyCrawler._h5_fallback()` 会临时
+  建一个 `FliggyH5Crawler` 取数再并路径，而后者**自己**就把路径记成 `H5`
+  （它先 `path_reset()` 再 `path_note("H5", …)`）；兜底却又拼了一层前缀：
+
+      self.paths.append(dict(rec, path="H5:" + str(rec.get("path") or "")))
+
+  于是同一条通路在账本里出现 `H5` 与 `H5:H5` 两个名字。后果都在用户可见面上：
+  健康卡分通路小标把同一条路显示成**两行**；`core/storage._retired_paths()` 按
+  **字面** entry_path 比对，两个名字互不认识，已退役的兜底仍拖着「在用」口径；
+  通路成功率被拆成两份样本，任一份都可能不足判定下限。
+  修法：名字由 H5 采集器单源决定，兜底**原样透传**；兜底自己的两条记账
+  （缺会话 / 异常）也统一走 `_FLIGGY_H5_PATH` 常量，不再留写死的字面量。
+  实测包装逻辑：`H5 → H5`、`H5:listingsearch → H5:listingsearch`、
+  `PC → H5:PC`（不会二次加前缀）。门禁 `test_r607_h5_path_has_one_name.py`
+  （含真跑包装 + 负控：恢复旧前缀即红，账本里出现 `H5:H5`）。
 - **网页重登必须入干预账**（r478）：`interventions` 原先只有
   warmup / verify / probe / reset / auto_trip 五种 action，网页重登
   （点「弹窗登录」→「我已登录完成」）一条都不写。而重登恰是对成功率影响最大的
@@ -1421,9 +1841,11 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 | 键盘 | 三处都可 Tab 聚焦，←/→ 逐点、Home/End 跳首尾 |
 | 悬停开销 | 三处都必须「合帧 + 底座复用」：关注走势每次 mousemove 全量重算曾达 **3.22ms/次**（连续移动掉帧，读作"卡顿不跟手"），改位图底座后 **0.01ms**。r374 复查发现**航线走势自己反而没改**（实测 3.2ms/帧，是另两图的 10 倍）——它只是被当成标杆，不是真的同策略。现航线走势也走 `_CHBASE` 位图底座，三处实测同帧开销 0.46 / 0.30 / 0.47ms（1440）、0.50 / 0.16 / 0.07ms（390），均无 long task |
 | 浮窗定位 | 三处同一规则：贴宿主容器、水平跟十字线**只钳位不整块翻边**、垂直恒在顶部带、整体钳进容器（翻边实测会在指针越过阈值瞬间跳 170px，用户读作「悬浮窗乱飘」）；`position` 必须与容器坐标系一致（雷达曾 `fixed` + 容器坐标混用 → 滚动时留在原地）。算术只有一份 `PCHART.placeAxis(boxW,boxH,tw,th,localX,topY)`：DOM 浮窗经 `placeTipAxis` 落位，航线 canvas 浮窗直接取返回值绘制。**实测三图同一 fy 下浮窗 top 恒为 4/30/22 canvas px，不再随指针滑动**。钳位用的宽度必须**先测量再算**：浮窗内容刚被 `innerHTML` 换掉时 `offsetWidth` 可能还是上一帧的值（关注图浮窗在 158↔169px 间交替，实测有一帧读到 166 而最终渲染 169），按过期宽度夹右缘会让浮窗多越出 3px；`placeTipAxis` 取 `max(offsetWidth, getBoundingClientRect().width)`（后者强制同步重排），门禁 `test_tooltip_clamps_on_measured_width_not_a_stale_one` |
+| 横向滚动补偿 | 浮窗落位的 `left` 相对的是**滚动内容**起点，而 `cx-r.left` 量的是**可视区**偏移——容器可横向滚动时两者差一个 `scrollLeft`。2026-10-29 实测（320）：雷达容器 `scrollWidth 320 / clientWidth 281`、`scrollLeft=39`，浮窗贴左时 `left=26` 而可视左缘在 30，**被裁 4px**，读作「悬浮窗飘出图外」。修法：`cx-r.left+host.scrollLeft`，右缘钳位用 `Math.max(r.width, host.scrollWidth)`。修后 320/390 溢出 0 次、1440/768 无回退。门禁 `test_tooltip_placement_compensates_horizontal_scroll` |
 | 越界判据 | 「浮窗是否越界」要拿**它的定位容器**（`offsetParent`）当边界，不能拿 canvas：`.mon-chartwrap` 有 10px 内边距，canvas 比容器窄 20px，浮窗贴到容器右内缘时右沿会超出 canvas 但仍在容器内、视觉正确。按 canvas 判越界会误报（实测关注图 1440 误报 1 次、390 误报 4 次，改用容器后三图两档全为 0） |
 | 浮窗落位只有一个入口 | 连**同一张图的另一个分支**也不得自带翻边：关注图 K 线分支曾有 `if(left+tw>wrap.width-6) left=px-tw-12`，实测指针 75%→85% 时 left **1028→807（倒退 221px）**，而同一时刻折线分支是 1010→1127 单调递增。K 线浮窗体宽 270（折线 158），越界更早、跳得更频繁。门禁 `test_kline_tooltip_uses_the_shared_placement_not_a_flip` 只扫代码行（注释里引述旧实现不算） |
 | 浮窗读屏 | 三图悬停读数都要能被读屏拿到：DOM 浮窗用 `role="status" aria-live="polite"`；航线是画布内绘、DOM 里没有节点，必须补 `sr-only` live region 并同步同一条读数（离开画布时清空，防残留旧值）。曾只有关注图可达——雷达浮窗写着 `aria-hidden="true"`，航线完全没有节点 |
+| 浮窗宽度防御 | 三图浮窗都必须是「按内容收缩 + 限宽 270」：`.ws-tip` / `.spmon-tip` 写 `width:max-content; max-width:min(270px, calc(100vw-16px))`，航线画布浮窗用 `avail=Math.max(Math.min(c.offsetWidth-8,270),80)`。**`width:max-content` 是必需防御**：`position:absolute` 的浮窗贴右缘时，只给 `max-width` 会被浏览器按「可用宽」压缩，实测出现过 **53×158** 的被压扁浮窗（r524）。门禁 `test_all_three_tooltips_cap_their_width_and_shrink_to_fit` |
 | 浮窗度量 | 三处统一 12px / `padding:6px 9px` / 圆角 8 / 深底 `rgba(44,62,80,.93)` + 白字。此前是 10/11/12px 三档、6-8 与 6-9 两种内边距、圆角 6 与 8 两种 |
 | 当前价标记 | 三图末点半径统一 **3.2**（关注折线聚焦时放大到 3.5）。2026-10-29 实测关注折线非聚焦用 **2.4**，而雷达折线与关注 K 线都是 3.2 —— 直径 4.8px vs 6.4px、**面积差 78%**，同一个「当前价」标记在关注图明显小一圈，是用户所说「其他走势图看着不对」的来源之一。门禁 `test_current_price_marker_is_the_same_size_in_all_charts`。注意 `PCHART.line(...dot:1.6)` 是**孤点**半径（只有单个采样点的段），与顶点 1.7 不是同一语义，不要合并 |
 | 十字线 | 三处统一中性墨虚线（`--mut`，**3px 划线 / 3px 间隔**，opacity .5）。雷达曾用淡蓝实线、航线曾用 4/4 节距，与另两图同屏疏密不同；目标线仍是 4/4，两者节距刻意区分 |
@@ -1432,9 +1854,20 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 | 图例 | 三处共用 `.mon-legend` + 16×3 色块 + 12px **+ 缝宽 12px**（雷达此前没有色块图例，只有一句纯文字注脚；航线 13px、雷达 11px）。缝宽两处来源：`.legend{gap:16px}` 与 `#chartcard .legend{gap:12px}`——后者是 ID 选择器 (1,1,0)，曾压过 `.mon-legend` (0,1,0) 使航线图例比其他两图宽 4px |
 | 图例脚注 | 说明文字**不进图例容器**，另起一行 `.chart-note`（12px / margin-top 6px / line-height 1.5）。航线曾把说明写进 `.mon-legend` 并 `flex-basis:100%`，把图例盒子从 27px 撑到 64px（390 档 134px），另两图恒 27px |
 | 档位控件缝 | 三处 chip 同 `gap:2px`。航线用 `.mdgrp`、另两图用 `.mon-range`；`.mdgrp` 曾 `gap:normal` → 相邻 chip 实测间距 **0px**（连体按钮），另两图 2px（分段按钮） |
+| 触摸热区 36px 地板 | coarse 指针下小控件的**命中区**要够大，桌面观感不变。2026-10-29 逐元素命中测试（390 档）：三图档位 `.rngchip` 26px、`.cnav`/`.cc-chip` 32px、`.lgact .btn2` 32px、`#srccap .scbtn` 32px、`.pvx` 28px 的热区都只有自身盒高（上下各扩 **0px**）。**只加伪元素不够**——实测 `.rngchip` 上方 6px 命中 `DIV.uhead`、下方 3px 命中隔壁 chip，热区被邻居抢走；所以触摸档把盒高本身提到 32px，伪元素再补 36px。实测桌面 fine 仍 26px、触摸 32px、两档零横向溢出。探针坑：2px 步进遇伪元素下缘余量不足会提前 break 把可点高度报小（实测真实可达 ±14px，2px 步进只量到 4px）；视口外 `elementFromPoint` 恒返回 null 会假报无热区。门禁 `test_small_controls_get_a_touch_sized_hit_area_on_coarse_pointers` |
+| 焦点环全站可达 | 键盘 Tab 走到的每个可聚焦元素都必须有可见焦点环。2026-10-29 实测：健康 31 个 / 配置 28 个 = 0 缺失，**搜索页 36 个里 9 个缺失**（出发日/采集日 tab、`.srx-bandlogin`、`.srx-chip`、`.srx-more-rows`、`.srx-mtab`）。根因两层：`.srx-*` 自带 `outline:none`；扁平化的 `.srx-chip{box-shadow:none}` 又把补上的 inset 环清掉（实测 matches(':focus-visible') 为真但 box-shadow 为 none）。修法用 `#searchview :is(button,a,[role=button],summary,[tabindex]):focus-visible{box-shadow:inset 0 0 0 2px var(--blue)!important}`。**探针两个坑**：程序化 focus（JS 直接聚焦）不触发 `:focus-visible`（必须真按 Tab）；`inset 0 -2px` 是选中下划线不是焦点环，但 `inset 0 0 0 2px` 才是正规环。门禁 `test_search_view_keyboard_focus_is_visible` |
+| 绿字压绿底用加深档 | 成功态绿字放在绿色 tint 上必须用 `--ok-txt`，不能用 `--r-green`。2026-10-29 全站 6 视图 × 2 主题对比度普查：`.spmon-run .st.ok` 用 `--r-green` 压 `--r-green-soft` 实测 **4.32:1**（AA 小字需 4.5）。`--ok-txt` 正是为此准备（令牌注释：「--green 对 okbg 4.28:1 欠 AA → 5.63:1」）。改后**全站不足项归零**。普查脚本要认 `color(srgb …)`（`color-mix` 的结果，只认 `rgb()` 会把深蓝底当无背景、白字误判 1.11），且纯符号分隔符（`/ · —`）不参与 AA。门禁 `test_success_green_on_green_tint_uses_the_deep_token` |
+| 加载态三图同构 | 首帧都要有加载态，且结构一致 `<b>标题</b><span>说明</span>`。2026-10-29 实测：航线是裸文本「数据加载中…」（无标题档/无说明）、关注是「正在读取关注清单 + 说明」、**雷达首帧什么都没有**（先闪一下空画布）。现统一为「正在读取…」+「只画真实采集点，未采日期不补点」。雷达的静态占位挂在 K 线空态覆盖层上（初始 `style=display:flex`，因为 CSS 是 `display:none`），`spMonDraw` 入口统一收掉，各分支再决定是否重新显示空态——保证提前 return 的路径也不留占位。门禁 `test_three_charts_share_a_loading_state` |
 | 空态行高 | 三处空态同 `line-height:1.6`（`.chart-empty` 曾缺此行，另两处有） |
 | 范围/模式控件 | 三处共用 `.mon-range` 单源：26px 高、圆角 8、11px/600、软蓝选中底、零投影。此前航线是软蓝胶囊、关注是「文字+下划线」（后写 `!important` 覆盖又把选中态改成白底+投影）、雷达是下划线 tab |
 | 汇总条排版 | 三处数字同 22px/650 等宽、标签同 12px 且不做大写化/加字距。雷达此前 18px/800 + 10px 全大写 + `.08em`（中文大写与字距纯噪声） |
+| 悬停落点 | 三图悬停必须在**画布上**标出被读到的那一点，同一个记号：实心 4px + 1.5px `--card` 光圈（`PCHART.hoverDot`）。2026-10-29 实测三种写法并存——航线 `arc(...,4.5)` 纯实心（落在线上与线糊成一段）、关注 3.2px 实心+光圈、**雷达一个都不画**（只有一条 DOM 十字线，数据点上零变化）。像素判据：悬停前后同一点 15×15 块差 航线 117 / 雷达 143 / 关注 102，移开后必须归零。**雷达另需底图快照**（`spMonSnapshot`/`spMonRestore`）：贴图再画点，收起/越界时还原，否则留残影读作「停在了别的日期」。门禁 `test_every_chart_marks_the_hovered_point` + `test_radar_hover_restores_its_base_bitmap` |
+| 浮窗行文法 | 雷达折线与雷达 K 线都要走与关注图同一套 `行文法`：`.tm 时刻 / .tr 图标·色点·名称·价格 / .tm 明细`。改前雷达是 `<b>日期</b> · ¥价<br>时刻 · 渠道` 的自由文本（2 行 49px、**0 个图标**），而同屏关注浮窗是 3 行 69px 带 2 个品牌图标——同一种读数卡两种形状。点位上的 `ch` 本就是真实平台键（ctrip/fliggy/tongcheng 全有官方图标）。样式只补 `.spmon-tip .tm/.tr` 作用域，不改 `.ws-tip` 原件。门禁 `test_radar_tooltip_uses_the_shared_row_grammar` |
+| 面板同字号单行高 | 节流面板里**同一字号只能有一个行高**。2026-10-29 实测 78 个文字节点里两处双档：12px 按钮默认 `line-height:normal`（13 个）vs 正文 18px；11px 的 `.pace-now b i`/`.pace-stat b i` 从 16px 父级继承 1.2 比例算成 **13.2px** vs 其余 16.5px。改后 5 个字号档各一档、1440 与 390 同结果；面板总高 591→591、行高 44→44、按钮尺寸零变化。门禁 `test_pacing_panel_same_font_size_has_one_line_height` |
+| 配额轨三段可辨 | 轨上三段是三种语义（已发出 / 拉长间隔后发出 / 被跳过），不能用同一色相的深浅表达。2026-10-29 实测慢档段是 `color-mix(--r-blue 40%, --r-surface-3)` **浅蓝**——整条轨读成「深蓝+浅蓝」，与图例写的三档对不上，也看不出中间那段是「被降频」。现为 蓝 / 琥珀(`--r-amber`) / 中性灰。另：颜色曾写两份（`.pace-rail .rs` 与 `.pace-legend .rs`），改轨道后图例仍是旧值（实测轨道琥珀、图例浅蓝）。门禁 `test_rail_segments_and_legend_swatches_share_colors` |
+| 干预两组须分栏 | 底部 13 个同款灰底按钮只靠 18px 间隙隔开时，「预热 去哪儿 … 全部 自检 自动 去哪儿 …」读成一串，中间重复的渠道名被当成「同一组列了两遍」。两组同行时加发丝竖线分栏（与 `.pace-stat` 同一语言）。**竖线只在同行时有意义**：折行后它挂在第二组左缘、比第一组缩进 18px，读作「莫名缩进一格」。折行由 flex-wrap 决定、宽度阈值量不出（900 档仍同行、768 才折），用 `@container (max-width:780px)` 关掉。实测 1440/1024/900 有竖线，768/390/320 无。门禁 `test_tool_groups_are_separated_only_when_on_one_row` |
+| 图例覆盖全部系列 | 图例必须解释画布上画的**每一条线**。2026-10-29 实测雷达画 7 条线（1 红最低日 + 6 条灰其他日），图例只有 1 条——六条灰线在图上没有任何解释，而航线是「几条线几条图例」。现补「其他出发日 N 条」（色块与灰线同源 `--r-ink-3`，数量在尾巴）。同批修两处：`.mon-legend>span>b` 缺 `display:inline-block` 让色块独占一行（与航线 `.legend b` 不同排法）、文案 `'… 选中 ' + ' 11-14'` 拼出双空格。门禁 `test_radar_legend_covers_every_drawn_series` |
+| 控件圆角无越档 | 全站 6 视图渲染普查后，唯一的非令牌**控件**圆角是 `#srccap .scbtn` 的 **7px**，而同一来源条 28px 的 `.sclink` 是 6px、全站其余 28px 控件也是 6px。允许留下的非令牌值都必须能解释成「按尺寸等比缩放」（`.bic-ota/.bic-air` 的 `calc(var(--bic)*.26/.273)` 渲染 3.38~7.02px）、令牌本身（`--r2:11px`）或 `kbd` 键帽档。门禁 `test_no_non_token_control_radius_remains` |
 | 图例同日合并 | 雷达「最低日」与「选中日」为同一天时只保留一条；曾并排两个同日期色块，读作两条不同系列 |
 
 | 「加载更多」 | 虚线框 11px/400 + 另一条 `!important` 把圆角清零 | 归入次级按钮族：12px/600、圆角 r3、软面底、无边框（虚线在扁平语言里只表示空位/占位） |
@@ -1597,6 +2030,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 | `test_plan_declared_artifacts_exist` | plan「落地状态」段点名的产物路径必须存在，缺失须被标注 |
 | `test_计划文档checkbox状态须与实际一致` | 计划文档 0 勾选但产物已存在时须写明落地状态 |
 | `test_mobile_docs_sizes_match_reality` | 移动端文档的 APK 目录/MuMu 体积与磁盘实测一致（±20%） |
+| `test_tests_carry_no_machine_specific_paths` | 测试不得写死本机开发目录路径（换机假红/泄露本机信息；MuMu 安装位置按环境变量与常见位置探测，探不到就跳过） |
 | `test_mobile_runtime_status_claims_match_reality` | 文档称「未装 Android 运行时」时 adb 确实连不上设备 |
 | `test_doc_gates_do_not_skip_on_missing_anchor` | 元门禁：文档存在时，契约门禁不得因锚点缺失而 skip（须 assert 失败） |
 | `test_tracked_targets_referenced_by_gates_exist` | 元门禁：门禁引用的**已入库**文件必须存在——删掉 SPEC/PLAYBOOK 等不许静默变绿 |
@@ -1697,6 +2131,11 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 8. **剩余边界**：外部阻塞、未验证项、需要人工确认的点。
 
 明确区分状态：已实现 / 静态检查通过 / 行为测试通过 / 真实取数通过 / 浏览器端到端通过 / 性能实测通过 / 已发布。未验证就写未验证。
+- r697：检索页「展开筛选」面板里，同一排两张卡各自按内容收缩——1512 实测「共同筛选」底边 529.4、「起降时段」427.3，**底端差 102px**（1280 差 135px），右列上半段塌成半张卡 + 一大块空，用户截图直指「上下不对齐、廉价感」。根因是 `.srf-grid{align-items:start}` 且 `.srf-time{align-self:start}`（r544 只让右栏最后一张吸收余量）。改为同排 stretch 等高，并让时段卡内内容均布（否则余量全堆卡底，实测 114px 死白）。复验：1512/1280 两档 top 与 bottom 差均 0.0px、卡底内衬 12px；门禁 `test_r697_filter_cards_same_height.py`（负控=改回 align-self:start 即红）。
+- r698：同一面板第二排（加工与历史 / 价格带 / 检索特有）被 tallest 拉到等高的 223px 后，内容仍贴顶——`srf-price` 卡底空 **110.6px**、`srf-evidence` 空 **104.5px**，而左卡只空 12px，同排一半卡底部空一大截（用户「衔接空格很大很空」）。与 r697 同律：余量在卡内均布，三卡尾部内衬统一 12px、底边齐平。门禁并入 `test_r697_filter_cards_same_height.py`（第 4 条断言跨全部同名规则查找 justify-content，避免只命中 grid-column 那条）。
+- r707：把 r697/r698 的缺陷形态升级为**全站常驻门禁**——任何 flex 列卡若被拉伸、内容仍贴顶，卡底就会空出一片（判定：末子块底边距容器底 >40px）。基线普查六视图 `mon/overview|watch|specials|health`、`search`、`cfg` 命中 **0**；负控注入一张 300px 高、内容 60px 的同类卡后命中 tail=222，证明判据没有空转。门禁 `test_r707_no_stretched_card_tail_gap.py`。
+- r699：概览「收起」只收了价带主体，**标题行里的 466px 摘要 + 日期翻页 + 110px 出发日·采集日轴 + 52px 渠道登录**全都留着（15 个可见元素），用户读作「点了收起什么都没变、整体收不回去」。收起态改为只留标题与触发器；为此需要 ①零宽撑杆占住 auto 余量 ②`order:1/2` 保证撑杆在触发器之前 ③标题行 `min-height:34px` 钉住纵向——否则触发器 left 从 1339 掉到 197、top 差 1px，破坏「两态同坐标」。修后实测：收起态可见元素 2，触发器两态均 left=1338.5/top=256.9/w=62/h=26，位移 0。门禁 `test_r699_overview_collapse_really_collapses.py`（3 条）。
+- r700：检索页「展开/收起不在同一个位置」按**渲染几何**全量普查（26 个触发器 × 9 档宽，共 38 个样本）：390 档「展开概览」top 394→426（+32px，摘要把按钮挤到第二行）；320 档 left 226→52（-174px）且纵移 +52px。修法是窄档把摘要/翻页/轴/登录用 `order` 排到触发器之后——换行照旧，但按钮永远留在第一行右端。**注意档位：**只在 ≤520 重排；900/760 本来就放得下，一起改会把按钮横移 178px（实测 806→628），反而破坏同坐标。修后 38/38 样本位移均 ≤2px。门禁 `test_r700_triggers_same_position.py`（负控=去掉 320 档 order 规则即红，实测报 dl=-174.0 dt=+32.0）。
 
 ---
 
@@ -1713,3 +2152,12 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 - 补位/日历/真实三类彻底隔离，计数可解释，解析字段与 raw 一致。
 - pytest 0 failed、UI 门禁 0 失败 0 JS 错误、无新增 skip/xfail。
 - 8765 跑本轮最终代码，浏览器全流程复验通过，汇报含证据与未验证项。
+- r638：节流参数从「全局参数」拆成独立分区「渠道节流」（`panel-pacing`）。22 个控件（静默窗、两级 TTL、邻近比、起跑错峰、限速、熔断、成功率保护五档、预热、登录墙冷却、邻近天数、每渠道节奏）原先全部渲染在 `#cfgglobals`，与端口/UA/路径混在一起。控件与保存链路不变；健康卡入口改文案并落到新分区，CSS 三列/单列/窄档规则扩到新容器，导航计数按真实控件派生。门禁 `test_r638_pacing_is_its_own_section.py`（真渲染；负控=拼回 globals 时分不到控件）。
+- r640：关注走势的每个顶点曾画「卡片白底圆 + 1px 色环」，放大截图可见折线被切成串珠状白洞——用户「白白的折叠遮挡短点」「走势一定不可以断档」。采样证据本已由 `PCHART.line` 的 `vertexDots` 同色实心点（不透明度 ≥.85）承担，白心环是重复层，整层删除后线体连续。门禁 `test_r640_no_white_beads_on_line.py`（负控=把该层加回即红）。
+- r640b：配置页「全部收齐」在用户卡上空转——卡内的分组标题构造器（`glab` 常量，非全局函数）不带 `data-sec`，面板级循环碰不到；uhead2 分支只隐藏「第一个标题之前 + 最后一个标题之后」，标题之间的正文全留在屏幕上（实测卡体仍有 315px 敞开、13 个正文块可见，而卡头 `aria-expanded` 已写 false，等于报一个没发生的状态）。改为「卡体内除 `.grouplab` 之外一律收起」，只剩 6 个标题（回到内容的入口）。门禁 `test_r640b_foldall_user_card.py`（负控=注回旧的首尾切片即红）。判据必须逐面板切过去数**可见**正文块——隐藏面板 rect 恒 0，一次 querySelectorAll 统计会得到假绿。
+- r640c：`gp`（节流区 + 渠道节奏两个 .glgrid）结尾多写了一层 div 闭合标签，全页 div 开合 1240/1241。浏览器会忽略多余闭合，肉眼看不出来，但源码契约破了，且后续在附近加容器极易错位。门禁 `test_v1555_webui.py::test_page_div_balance`。
+- r645：配置页四层可见文字各走一条竖线（1512 实测 卡头 333.5 / 分组标题 343.5 / 设置行 345.5 / 参数格标签 325.5，最大差 20px）——用户「层级被改坏了，也没有对齐」。以卡头文字为基准逐层补齐实测差额：`.grouplab`/`.srow` 整块 `margin-left:-10px`，`.glcell` 自身 `padding-left: calc(var(--cfg-ico) - 9px)`（=22px）。**不要用 padding-left 对齐 grouplab**：它首个子元素是序号徽标 `.no`，改 padding 会把徽标推出边界（实测 -10px 反而右移到 355.5）。门禁 `test_r645_config_single_indent.py`；修后 1512/900/390 三档、四个分区全部同线。
+- r647：`PCHART.gaps` 在**样本不足**时会自我抵消——只有 2 个采样点时「间隔」样本仅 1 个，中位数即它本身，`×1.8` 后永远大于它，于是 48h 的空缺被画成一条连续直线（实测 `gaps([2 点相隔 48h], 4h)` → `[[2]]`，应为 `[[1],[1]]`）。改为：间隔样本 <3 时用 `gapMin` 单源判定，不许猜「正常节奏」。门禁 `test_r647_chart_gap_small_sample.py`（含三点/四点/单点的既有行为不变）。
+- r645b：登录行「恰好 5 行」的契约在 r644 新增「智行 App 真机」卡后过期，但实测 6 行 `left=307 / right=1327` **完全一致**——对齐本身没问题，是断言写死了渠道数。改为「不少于 5 行」并**加强**为同时校验左缘与右缘（`tests/test_r412_login_rows_alignment.py`，12 条全绿）。
+- r664：配置页「全部收齐」的词面曾在「全部收齐 / 已收齐 31 / 已全部展开」三档间跳，按钮宽度 83→85.1→94px，右对齐工具条里自身左移最多 11px、左侧邻居跟着挪（1512 实测 init/collect/expand = left 1313.5/1302.5/1302.5）；且 2.2s 无条件复位成「全部收齐」，而全收着时按下去其实是展开——按钮在报一个不会发生的动作。改为两个等长动作词「全部收齐 ⇄ 全部展开」常驻，计数改由 toast 播报。门禁 `test_r664_foldall_two_state_label.py`（浏览器实测两态 left/w 恒等 1313.5/83）。
+- r806：检索页「展开筛选」面板左右内衬不对称——r469 给它加了 `margin-left:60px`（想「对齐标签列」），实测 1512 面板左缘 151.5、右缘 1410.5：左侧内缩 60px、右侧贴死卡缘，而同卡「航线」行从 91.5 起；60 也不是标签列宽（`.srx-lab` 34 + gap 8 = 42）。同时展开体自己又套了一层 `border:1px + radius:r10 + padding:12px 14px`，挂在一张本来就有描边的卡里＝卡中卡＋第二圈描边＋第二层内衬（面板标题被推到 106.5）。两处一起改：左缘归 0，展开体不自绘表面。门禁 `test_r806_filter_panel_alignment.py`（浏览器量左右缘＋面板头同线；负控=改回 60px / 加回 border+padding 即红）。- r806b：同一面板里 `srf-card>header` 的下划线 ×5、行上边线 ×3、两栏竖发丝线 ×2，把刚「收干净」的卡片又切回网格（用户：「折叠起来了，但是有很多分割线，很不干净」）。去线后只留「当前筛选」脚注上一条（结果区与条件区的语义边界）。同排卡底内衬仍统一 12px、底边齐平（r697/r698 的结论不变，1366–1920 六档复测 misaligned_rows=0）。- r808：**裸 `header{...}`** 是全站分割线的真正来源——页面上 8 个 `<header>`（页面页头 `#hdcard`、关注卡头 `.ws-head`、筛选面板 5 个 `.srf-card>header`、明细分组头）全都吃到 `background:var(--card)` + `border-bottom` + `position:sticky` + `box-shadow` + 负 margin 出血，于是每张小卡顶着一片白色通栏横带（左右各外扩 18px）并自带一条分割线。把该规则与 6 处响应式 `header`/`header h1` 全部收进 `#hdcard`；实测 `.srf-card>header` 变成 0 内衬/透明底/21px 高，页面页头仍 sticky 58px、标题仍在 91.5。门禁 `test_r808_header_selector_scope.py`（解析 `<style>` 找「整段就是裸 header」的选择器；负控=把 `#hdcard{` 改回 `header{` 即红，实测 2 红）。

@@ -21,6 +21,7 @@ from crawlers.ctrip import CtripCrawler  # noqa: E402
 from crawlers.tongcheng import TongchengCrawler  # noqa: E402
 from core.flightnorm import (normalize, AIRPORT_NAME_CN,  # noqa: E402
                              AIRLINE_LCC, _is_lcc)
+from font_probe import cjk_font_path, has_cjk_font
 
 _LOG = logging.getLogger("t1555")
 _CT = CtripCrawler({}, _LOG)
@@ -490,7 +491,7 @@ def test_render_table_batch7_smoke(tmp_path):
     """总表渲染烟测：第七批词面（廊桥/取消率门控/廉航/舱位括注/
     compare 公务词条）真实 PIL 渲染无异常。"""
     from PIL import Image
-    if not os.path.exists("C:/Windows/Fonts/msyh.ttc"):
+    if not has_cjk_font():
         pytest.skip("渲染烟测依赖 Windows 中文字体度量（CI 无雅黑）")
     from report import render_flights_table
     f = {"price": 2200, "code": "9C8846", "name": "春秋9C8846",
@@ -518,7 +519,7 @@ def test_render_table_cancel_gate_low_no_word(tmp_path):
     """cancelRate 常态值（<CANCEL_RATE_ALERT）不出词——门控防次行
     容量回退率系统性抬升（教训）。"""
     from PIL import Image
-    if not os.path.exists("C:/Windows/Fonts/msyh.ttc"):
+    if not has_cjk_font():
         pytest.skip("渲染烟测依赖 Windows 中文字体度量（CI 无雅黑）")
     from report import render_flights_table
     f = {"price": 2200, "code": "CZ6981", "name": "南航CZ6981",

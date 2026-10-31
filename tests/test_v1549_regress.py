@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.alerter import (Alerter, gap_txt, kpi_tier_txt,  # noqa: E402
                           URGENT_FAIL_NOTE, _dw, _qual_price)
 from core.models import Route  # noqa: E402
+from font_probe import cjk_font_path, has_cjk_font
 
 
 def _mk_route(ad=1900, at=1700):
@@ -254,7 +255,7 @@ def test_flights_table_full_fields_capacity(tmp_path):
      优先级重组（丢折扣→机型重试拆行）后渲染必须成功且行高
     只增 16（拆两行），不得整行回退省略。"""
     from PIL import Image
-    if not os.path.exists("C:/Windows/Fonts/msyh.ttc"):
+    if not has_cjk_font():
         pytest.skip("行高拆行判定依赖 Windows 中文字体度量（CI 无雅黑）")
     import report as _rep
     base = {"price": 1000, "name": "CZ6981", "depTime": "08:00",
@@ -280,7 +281,7 @@ def test_flights_table_summary_list_budget(tmp_path):
     8 bits 在 880 预算下至少进 4 条（不缩水 [:4] 语义）、预算放大到
     4000 时 8 条全进；渲染端到端不抛。"""
     import os as _os
-    if not _os.path.exists("C:/Windows/Fonts/msyh.ttc"):
+    if not has_cjk_font():
         pytest.skip("字尺度量与渲染依赖 Windows 中文字体（CI 无雅黑）")
     from PIL import Image, ImageDraw, ImageFont
 
@@ -290,7 +291,7 @@ def test_flights_table_summary_list_budget(tmp_path):
             self._d = ImageDraw.Draw(im)
 
         def font(self, size):
-            return ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", size)
+            return ImageFont.truetype(cjk_font_path(), size)
 
         def textlength(self, t, font=None):
             return self._d.textlength(t, font=font)

@@ -14,6 +14,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -23,7 +24,12 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def test_demo_daily_covers_oldest_history_day():
     from core.demo import build_demo_db, demo_routes
     from core.storage import PriceStorage
-    path = os.path.join(tempfile.gettempdir(), "r324_demo_span_probe.db")
+    # 唯一临时文件：曾写死 `r324_demo_span_probe.db`，xdist 多 worker 并行时
+    # 两个进程同时建同一个库、或收尾 os.remove 撞上对方仍持有的句柄 →
+    # PermissionError [WinError 32]，表现为随机一项红（单跑必绿）。
+    # 用唯一文件名而不是 mkstemp：后者会预建空文件，build_demo_db 需要新建。
+    path = os.path.join(tempfile.gettempdir(),
+                        "r324_demo_span_%d_%s.db" % (os.getpid(), uuid.uuid4().hex[:8]))
     try:
         build_demo_db(path)
         conn = sqlite3.connect(path)

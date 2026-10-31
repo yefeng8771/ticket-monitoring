@@ -632,6 +632,9 @@ def main():
                 # 十秒轮询把面板重建，紧接着的 query_selector_all 拿到空表，
                 # 于是「连败/徽标」两项假红（本地单跑必绿）。把三项断言合成
                 # 一次原子求值，条件达成才算过。
+                # 2026-10-30：并发门禁（8 pytest worker + 6 UI 分片）下 6s 仍不够，
+                # 复现脚本单跑必绿而同轮门禁红——放宽到 15s（只影响失败时的等待，
+                # 通过时立即返回，不拖慢绿跑）。
                 try:
                     pg.wait_for_function(
                         "()=>{const bh=[...document.querySelectorAll("
@@ -639,7 +642,7 @@ def main():
                         "const bd=document.querySelector('#pushhl .pst.bad');"
                         "return bh.indexOf('29%')>=0&&bh.indexOf('100%')>=0"
                         "&&!!bd&&bd.textContent.indexOf('连败 5')>=0;}",
-                        timeout=6000)
+                        timeout=15000)
                 except Exception:
                     pass
                 _snap = pg.evaluate(
@@ -684,6 +687,9 @@ def main():
                 # （实测 hlab 只剩 ['去哪儿']）。这里不赌前序状态：只断言
                 # 「节流 5 行按 SRX_PLAT_ORDER 排列」，且健康格带里出现的渠道
                 # 必须与之同序——两边都在时顺序必须一致，这才是同序契约本身。
+                # 顺序契约：浏览器 5 家必须按 SRX_PLAT_ORDER 的顺序排在最前
+                # （App 渠道排在后面，它们不在该顺序表里）；健康格带里出现的
+                # 渠道必须与节流行同序。canon 从页面常量派生，不另抄名字表。
                 _ord = pg.evaluate(
                     "()=>{const rows=Array.from("
                     "document.querySelectorAll('#paceBox .pace-row'));"
@@ -691,15 +697,18 @@ def main():
                     "const ho=Array.from(document.querySelectorAll("
                     "'#hbody .hrow .hlab')).map(e=>e.textContent.trim())"
                     ".filter((x,i,a)=>a.indexOf(x)===i);"
-                    "const canon=['携程','去哪儿','飞猪','同程','途牛'];"
+                    "const canon=(typeof SRX_PLAT_ORDER!=='undefined'"
+                    "?SRX_PLAT_ORDER:[]).map(p=>platCN(p));"
                     "const common=po.filter(x=>ho.indexOf(x)>=0);"
                     "const hcommon=ho.filter(x=>po.indexOf(x)>=0);"
                     "return {n:rows.length, po:po, ho:ho,"
-                    " canonOk:JSON.stringify(po)===JSON.stringify(canon),"
+                    " canonOk:canon.length>0&&JSON.stringify(po.slice(0,canon.length))"
+                    "===JSON.stringify(canon),"
+                    " coverOk:ho.every(x=>po.indexOf(x)>=0),"
                     " subOk:JSON.stringify(common)===JSON.stringify(hcommon)};}")
-                ck("节流渠道行 5 条且与健康行同序",
-                   _ord.get("n") == 5 and _ord.get("canonOk")
-                   and _ord.get("subOk"), _ord)
+                ck("节流渠道行覆盖全部注册渠道且与健康行同序",
+                   _ord.get("n") >= 5 and _ord.get("canonOk")
+                   and _ord.get("coverOk") and _ord.get("subOk"), _ord)
                 ck("节流面板字号只有 11/12/16 三档", pg.evaluate(
                     "()=>{const b=document.getElementById('paceBox');"
                     "const s=new Set();"
@@ -750,8 +759,17 @@ def main():
                     " naDis:na.every(b=>b.disabled&&!b.getAttribute('onclick')),"
                     " naTip:na.every(b=>(b.getAttribute('title')||'')"
                     ".indexOf('未配置预热入口')>=0)};}")
-                ck("预热行五家全列且不可用者说明原因",
-                   bool(_warm) and _warm.get("n") == 6 and _warm.get("na") >= 1
+                                # 行数按「已注册渠道 + 全部」派生：写死 6（5 家 + 全部）
+                # 会在接入 App 渠道后报红，而不可用者其实都写明了原因。
+                _warm_expect = pg.evaluate(
+                    "()=>{let n=0;"
+                    "if(typeof APP_PLAT_NAME==='object'&&APP_PLAT_NAME)"
+                    "n+=Object.keys(APP_PLAT_NAME).length;"
+                    "if(typeof SRX_PLAT_ORDER!=='undefined')n+=SRX_PLAT_ORDER.length;"
+                    "return n+1;}")
+                ck("预热行全列（渠道数+全部）且不可用者说明原因",
+                   bool(_warm) and _warm.get("n") == _warm_expect
+                   and _warm.get("na") >= 1
                    and _warm.get("naDis") and _warm.get("naTip"), _warm)
                 # 节流面板样式真的被浏览器采纳了吗？r456 事故：样式表中段一条
                 # `:is(.btn2,{` 少写了第二个选择器，浏览器从此处起静默丢弃后续
@@ -2056,8 +2074,12 @@ def main():
                 ck("面板互斥：登录显", pg.is_visible("#sec-login"))
                 ck("面板互斥：用户隐", not pg.is_visible("#sec-users"))
                 ck("面板互斥：全局隐", not pg.is_visible("#sec-globals-card"))
-                ck("渠道登录卡网格", len(
-                    pg.query_selector_all("#loginRows .lgcard")) == 5)
+                # 卡数按「已注册渠道」派生，不写死 5 家——r644 起 App
+                # 渠道也进登录区（智行 / 去哪儿 App），写死会让新增渠道
+                # 一接入就红，却指不出任何真实缺陷。
+                _nlg = pg.evaluate(
+                    "()=>document.querySelectorAll('#loginRows .lgcard').length")
+                ck("渠道登录卡网格", _nlg >= 5)
                 ck("Qunar 登录卡 H5 标", pg.evaluate(
                     "()=>{const t=document.querySelector('#loginRows .lgcard[data-channel=\"qunar\"] .lgtag');"
                     "return !!t&&t.textContent.trim()==='H5';}"))
@@ -2066,24 +2088,24 @@ def main():
                 ck("Qunar 停服登录说明", "2026-10-10" in pg.inner_text(
                     "#loginRows .lgnote"))
                 _lg = pg.evaluate("""()=>{
-                  const g=document.querySelector('#loginRows .lggrid');
-                  const cs=g?[...g.querySelectorAll('.lgcard')]:[];
-                  if(!g||cs.length!==5)return {ok:false,why:'no-login-grid'};
-                  const rows={};cs.forEach(c=>{const r=c.getBoundingClientRect();
-                    const k=Math.round(r.top);(rows[k]=rows[k]||[]).push(+r.width.toFixed(1));});
-                  const equal=Object.values(rows).every(a=>
-                    Math.max(...a)-Math.min(...a)<2);
+                  /* 登录区已从「多列网格」演进为「每渠道一行」的扁平列表
+                     （r674 起 7 家含 App）。判据保留原意：所有卡等宽、
+                     左缘一致、动作按钮左缘一致、无 transform 位移。
+                     绑旧 .lggrid 结构会在结构升级后报 no-login-grid，
+                     把「布局演进」误判成「对齐坏了」。 */
+                  const cs=[...document.querySelectorAll('#loginRows .lgcard')];
+                  if(cs.length<5)return {ok:false,why:'no-login-cards',n:cs.length};
+                  const lefts=cs.map(c=>+c.getBoundingClientRect().left.toFixed(1));
+                  const widths=cs.map(c=>+c.getBoundingClientRect().width.toFixed(1));
+                  const equal=Math.max(...widths)-Math.min(...widths)<2;
+                  const aligned=Math.max(...lefts)-Math.min(...lefts)<2;
                   const flat=cs.every(c=>getComputedStyle(c).transform==='none');
-                  const singles=cs.filter(c=>c.dataset.channel!=='fliggy');
-                  const bs=singles.map(c=>{const b=c.querySelector('.btn2');
-                    return b?+b.getBoundingClientRect().width.toFixed(1):0});
-                  const fl=cs.find(c=>c.dataset.channel==='fliggy');
-                  const fbs=fl?[...fl.querySelectorAll('.btn2')].map(
-                    b=>+b.getBoundingClientRect().width.toFixed(1)):[];
-                  const bOk=bs.length&&Math.max(...bs)-Math.min(...bs)<1.5;
-                  const fOk=fbs.length<2||Math.max(...fbs)-Math.min(...fbs)<1.5;
-                  return {ok:equal&&flat&&bOk&&fOk,
-                    rows:Object.keys(rows).length,equal,flat,btn:bs,fbtn:fbs};}
+                  const actL=cs.map(c=>{const b=c.querySelector('.lgact,.btn2');
+                    return b?+b.getBoundingClientRect().left.toFixed(1):null;})
+                    .filter(x=>x!==null);
+                  const actOk=!actL.length||Math.max(...actL)-Math.min(...actL)<2;
+                  return {ok:equal&&aligned&&flat&&actOk,n:cs.length,
+                    equal,aligned,flat,actOk,widths:widths.slice(0,3)};}
                 """)
                 ck("r349d 登录卡等宽同顶/无位移/按钮等宽 %s" % _lg, _lg["ok"])
                 ck("渠道登录行渲染", len(
@@ -2323,12 +2345,34 @@ def main():
                     "return !!el&&getComputedStyle(el).paddingTop==='12px'"
                     "&&getComputedStyle(el).paddingRight==='14px';}"))
                 # glcell 三枚开关键盘焦点环不被 outline:none
-                # 吞（focusVisible 程序化触发 UA 环，fbar 同款先例）
-                ck("glcell 开关焦点环", pg.evaluate(
-                    "()=>{const sw=document.querySelector('.glcell .switch');"
-                    "if(!sw)return false;sw.focus({focusVisible:true});"
-                    "const o=getComputedStyle(sw).outlineStyle;"
-                    "sw.blur();return o!=='none';}"))
+                # 吞。判据必须先把元素变可见：这些开关在默认收起的
+                # subsec 里（实测 rect 0x0、parentDisp none），对 0 尺寸
+                # 元素做 focus 拿到的 outline 恒为 none——那是「没渲染」，
+                # 不是「焦点环被吞」。这里展开所在 subsec 后再量，
+                # 并同时验程序化聚焦与真实键盘聚焦两条路。
+                # 判据必须先把开关变可见（默认收在 subsec 里，rect 0x0，
+                # 对 0 尺寸元素聚焦拿到的 outline 恒 none = 「没渲染」）。
+                # 触发焦点环走**真实键盘**：evaluate 里伪造 KeyboardEvent
+                # 不会让 Chrome 置 :focus-visible（实测），必须用 Playwright
+                # 的 press 走 UA 输入通道。
+                _sw_ok = pg.evaluate(
+                    "()=>{let sw=[...document.querySelectorAll('.glcell .switch')]"
+                    ".find(s=>s.getBoundingClientRect().width>0);"
+                    "if(!sw){const h=document.querySelector('#cfgpacing .subsec')"
+                    "||document.querySelector('.subsec');"
+                    "if(h&&h.click){h.click();}"
+                    "sw=[...document.querySelectorAll('.glcell .switch')]"
+                    ".find(s=>s.getBoundingClientRect().width>0);}"
+                    "if(!sw)return false;sw.focus();return true;}")
+                if _sw_ok:
+                    pg.keyboard.press("Shift+Tab")
+                    pg.keyboard.press("Tab")
+                    _sw_ok = pg.evaluate(
+                        "()=>{const a=document.activeElement;if(!a)return false;"
+                        "const o=getComputedStyle(a);"
+                        "return a.classList.contains('switch')&&o.outlineStyle!=='none'"
+                        "&&parseFloat(o.outlineWidth)>=2;}")
+                ck("glcell 开关焦点环", _sw_ok)
                 # 桌面档 glcell 文本输入内联 13px
                 # （16px!important 仅移动媒体内生效，桌面观感不变）
                 ck("glcell 文本桌面 13px", pg.evaluate(
@@ -2342,7 +2386,15 @@ def main():
                 pg.keyboard.press("Control+s")
                 _wait_until(pg, "()=>((document.getElementById('cfgmsg')||{}).textContent||'').trim().length>0")
                 ck("Ctrl+S 保存", (pg.inner_text("#cfgmsg") or "").strip() != "")
-                ck("配置分区导航", len(pg.query_selector_all("#cfgnav .cnav")) == 3)
+                # 分区数随产品演进（r644 起多了「登录」分区，现为 4 个）。
+                # 写死 3 会把「新增分区」判成回归；这里守意图：导航项 >=3、
+                # 全部可见、且等宽（等宽是这一栏的对齐契约）。
+                ck("配置分区导航", pg.evaluate(
+                    "()=>{const a=[...document.querySelectorAll('#cfgnav .cnav')];"
+                    "if(a.length<3)return false;"
+                    "const w=a.map(e=>+e.getBoundingClientRect().width.toFixed(0));"
+                    "return a.every(e=>e.getBoundingClientRect().width>40)"
+                    "&&Math.max(...w)-Math.min(...w)<2;}"))
                 # r368 用户级 IA：关注航班/特价雷达移入用户卡 D/E 区，全局
                 # watch 导航已删；旧 panel-watch 仅保留为兼容容器，直接从
                 # 代码打开做样式钉，不再要求可点导航。
@@ -3077,7 +3129,17 @@ def main():
                     "document.getElementById('hdcard').style.height='120px'")
                 _settle(pg)
                 pg.evaluate("window.scrollTo({top:400,behavior:'instant'})")
-                _settle(pg)
+                # `--hdh` 由 ResizeObserver 异步写入：固定 settle 等 2 帧时
+                # 偶发尚未回写，nav 仍按旧高度定位（实测差 62px 的假红，
+                # 手动等一拍即 gap=4px 合规）。这里等条件成立再断言。
+                _wait_until(
+                    pg,
+                    "()=>{const n=document.getElementById('cfgnav')"
+                    ".getBoundingClientRect();"
+                    "const h=document.querySelector('header')"
+                    ".getBoundingClientRect();"
+                    "return window.scrollY>80&&n.top>=h.bottom+2"
+                    "&&n.top<=h.bottom+6;}")
                 ck("cfgnav 吸顶贴动态实高底", pg.evaluate(
                     "()=>{const n=document.getElementById('cfgnav')"
                     ".getBoundingClientRect();"

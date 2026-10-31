@@ -464,6 +464,15 @@ def _fmt(sec):
 
 
 def main():
+    # 摘要行里会带用例自己写的中文/符号（实测算例断言文本含 ❌ 时
+    # UnicodeEncodeError 在 print 处崩掉，**整轮结果作废**：退出码
+    # 既不是 0 也不是 1，跑测方只看到一段 traceback）。输出只是给人看的，
+    # 容错替换即可，判定逻辑不受影响。
+    try:
+        sys.stdout.reconfigure(errors="replace")
+        sys.stderr.reconfigure(errors="replace")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser(description="全量验证并发编排")
     ap.add_argument("--workers", type=int, default=0,
                     help="pytest worker 数（默认 min(8, CPU)）")

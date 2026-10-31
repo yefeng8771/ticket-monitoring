@@ -2,8 +2,8 @@
 """r339g 用户实报三案钉：
 
 1. open-folder 路径基准 bug——webui.py 在仓库根，端点却按 __file__ 双层
-   dirname 手写基准 → 解析到上级目录（user_data 剥掉后资源管理器直接
-   打开 D:\\idea_project）。收口到 _anchored 单源后，白名单三键必须
+   dirname 手写基准 → 解析到仓库上级目录（剥掉 user_data 后资源管理器直接
+   打开仓库的外层目录）。收口到 _anchored 单源后，白名单三键必须
    全部落仓库根内；
 2. 日期添加器二合一——text 手输框+📅 隐藏 date 控件双通道并存（用户实
    报「同时存在两种，非常丑」），收敛为 native date 单输入（选完即加）；

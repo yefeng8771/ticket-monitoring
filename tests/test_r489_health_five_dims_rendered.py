@@ -126,7 +126,13 @@ def test_health_card_renders_all_five_dimensions(browser):
             return {
               rate: /83%/.test(rt),
               dom: /国内 95%/.test(rt), intl: /国际 70%/.test(rt),
-              pc: /PC 92%/.test(rt), h5: /H5 43%/.test(rt),
+              /* 通路小标格式：`PC 单次 92%（12 次）`。中间允许夹一个口径词
+                 （r636 加的），但仍要求「名称 → 口径词 → 百分比」按序相邻，
+                 不能把 92% 挂到别的通路名下。 */
+              pc: /PC (?:单次 )?92%/.test(rt),
+              h5: /H5 (?:单次 )?43%/.test(rt),
+              pcCaliber: /PC 单次 92%/.test(rt),
+              h5Caliber: /H5 单次 43%/.test(rt),
               retired: /日历 退役/.test(rt),
               slotPc: /PC 已存待验/.test(rt), slotH5: /H5 需重登/.test(rt),
               diag: document.querySelectorAll(
@@ -143,6 +149,13 @@ def test_health_card_renders_all_five_dimensions(browser):
     assert got["rate"], "① 厂商级在用口径未渲染：%r" % got["rowText"]
     assert got["dom"] and got["intl"], "② 分域未分别渲染：%r" % got["rowText"]
     assert got["pc"] and got["h5"], "③ 分通路未分别渲染：%r" % got["rowText"]
+    # ③b 通路小标必须自带口径词（r636）：同一行里徽标/分域是**查询**口径，
+    #     通路节点只有**尝试**口径。实测智行 App 渲染成「100% 国内 100% ·
+    #     国际 100% android 33%」——三个 100% 与 33% 指两个不同分母，读者
+    #     只会认为界面算错（真实库：查询 40/40=100%，尝试 40/121=33%）。
+    assert got["pcCaliber"] and got["h5Caliber"], (
+        "③b 分通路未标注口径（会被读成与徽标同一个分母）：%r"
+        % got["rowText"])
     assert got["retired"], "③ 退役通路未标「退役」：%r" % got["rowText"]
     assert got["slotPc"] and got["slotH5"], \
         "④ 分会话未逐端渲染：%r" % got["rowText"]
@@ -174,3 +187,28 @@ def test_backend_scope_fields_match_what_the_frontend_reads():
     for k in front:
         assert '"%s":' % k in back_src, \
             "后端未下发前端要读的分域字段 %s（分域这一维渲染不出来）" % k
+
+
+def test_badge_fallback_never_mixes_attempt_level_into_query_rate():
+    """徽标兜底（`_liveRate` 不可用时）也必须按**查询**口径加权。
+
+    `qRate` 曾用 `_q.rate × _q.attempts`——那是「尝试级 × 尝试数」，
+    和分域小标（查询级）不是一个分母。`query_*_live` 缺失时同一行又
+    会「13% 国际 73%」打架。现在：有查询字段就按查询加权；缺任一域的
+    查询字段就整段作废（回落到轮次口径并在 title 里如实标注），
+    绝不混着算。
+    """
+    import io
+    import os
+    import re
+
+    src = io.open(os.path.join(ROOT, "webui.py"), encoding="utf-8",
+                  newline="").read()
+    i = src.index("const _qscope=((_qp.scopes)||{});")
+    seg = src[i:i + 1200]
+    assert "query_attempts_live" in seg and "query_rate_live" in seg, (
+        "徽标兜底没有用查询口径字段：%s" % seg[:400])
+    assert "(_q.rate||0)*_q.attempts" not in seg, (
+        "徽标兜底仍在用尝试级 rate 加权（与分域小标不同分母）：%s"
+        % seg[:400])
+    assert "_qmiss" in seg, "缺少「查询字段不全就别算」的标记"

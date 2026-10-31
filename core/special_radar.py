@@ -35,7 +35,10 @@ from crawlers.special import (
 
 _IATA3 = re.compile(r"^[A-Z]{3}$")
 _RADAR_MAX_DAYS = 90
-_CHANNELS = ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu")
+# 发现源渠道。前五家是浏览器渠道；`app_qunar` 是 App 渠道里唯一
+# 有真实低价发现源的一方（App「低价机票」→ 每天一条最低价）。
+_CHANNELS = ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu",
+             "app_qunar")
 
 # 发现层短时缓存/冷却：同一条件重复点「查低价」不重复打源
 _FLIGGY_CACHE = {}
@@ -596,6 +599,52 @@ def _qunar_deals(q: RadarQuery, logger, proxy,
     return rows, st
 
 
+def _app_qunar_deals(q: RadarQuery, logger) -> tuple:
+    """去哪儿 App「低价机票」：每天一条最低价（App 渠道的 low_fare 源）。
+
+    与 H5 lowFlight 的差别：
+      * 走真机（MuMu + adb），不需要 Playwright，也没有页面 JS 签名；
+      * 价格是**当天最低价**。页面本身**没有写口径**（真机 dump 里
+        找不到「含税 / 优惠前 / 到手」任何字样），所以只能标
+        `tax_included=None` + 「口径未标注」——**不能**假设含税：
+        App 卡片上另有 `已减 ¥70` 这类优惠，标含税会让人误以为到手价。
+
+    采不到要区分「被拦/要登录」与「确实没有低价」：前者 error，后者 empty。
+    """
+    from crawlers.app_qunar import AppQunarCrawler
+    days = max(1, min(_RADAR_MAX_DAYS, (q.end - q.start).days + 1))
+    crawler = AppQunarCrawler(
+        {"user_data_dir": "user_data",
+         "android": {"enabled": True}}, logger)
+    rows_d = crawler.low_fare(q.from_code, q.to_code, days=days) or []
+    out = []
+    for r in rows_d:
+        date_s = str(r.get("date") or "")
+        if not _in_range(date_s, q):
+            continue
+        try:
+            price = float(r.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        out.append(SpecialDeal(
+            "app_qunar", q.from_code, q.to_code, date_s, price,
+            link="", to_name=q.to_name, tax_included=None,
+            price_basis="unknown",
+            price_basis_label="口径未标注"))
+    # 采不到要区分「被拦/要登录」与「确实没有低价」：前者照实说，
+    # 后者才是 empty。crawler 的账本里已经写明了卡点。
+    note = ""
+    for pth in getattr(crawler, "paths", []) or []:
+        if pth.get("path") == "low-fare" and pth.get("status") != "ok":
+            note = str(pth.get("detail") or pth.get("status") or "")
+            break
+    st = _status("ok" if out else ("error" if note else "empty"),
+                 note, len(out))
+    return out, st
+
+
 def _entry(links, plat):
     for c in (links or {}).get("specials") or []:
         if c.get("plat") == plat and c.get("surface") == "h5" and c.get("ok"):
@@ -673,6 +722,8 @@ def build_radar(payload: dict, logger, proxy: str = "",
                 rows, st = _tongcheng_deals(q, logger, proxy)
             elif ch == "qunar":
                 rows, st = _qunar_deals(q, logger, proxy, user_data_dir)
+            elif ch == "app_qunar":
+                rows, st = _app_qunar_deals(q, logger)
             else:
                 rows, st = [], _status(
                     "not_connected", "自定义航线低价日历尚未验证接入；可用明细探针")

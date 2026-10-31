@@ -113,7 +113,15 @@ class TestWebuiV1553Pins:
     def test_light_mut_deepened(self):
         src = self._src()
         assert "--mut:#5a6c7d" in src
-        assert "--mut:#7f92a6" in src                       # 暗色不动
+        # r500 把深色 --mut 从 #7f92a6 提亮到 #8497ab：旧值压面板底只有
+        # 4.37~4.47:1，差一点点不过 AA。契约已由
+        # test_r374_unified_ui::test_dark_theme_muted_text_clears_aa 精算接管，
+        # 这里只保留「深色与浅色不是同一个值」这一层，不再钉死具体色阶。
+        # 注意：只查**声明**（`--mut:#7f92a6` 作为 CSS 值），不扫全文——
+        # 注释里提到这个历史色值不该判红（实测注释里就有两处说明）。
+        import re as _re
+        assert not _re.search(r"--mut:#7f92a6\s*;", src), \
+            "深色 --mut 回退成了旧值 #7f92a6"
 
     # ---- I 可达性 ----------
 

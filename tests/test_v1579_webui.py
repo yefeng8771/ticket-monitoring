@@ -27,8 +27,13 @@ def test_health_fail_not_silent():
 def test_trend_empty_state_guarded():
     """②走势空态三态完备：静态=加载中；S 到达且确无数据=教学词面；
     fetch 失败（_markStale）=服务未启动，且不覆盖已绘制图表。"""
-    assert 'id="chartEmpty" style="display:flex">数据加载中…' in PAGE, \
-        "静态初始文案应为中性「数据加载中…」（教学词面在此=假空态）"
+    # 静态初始态必须是中性加载词、且不得含教学词面。2026-10-29 起三图加载态
+    # 统一成「<b>正在读取…</b><span>只画真实采集点…</span>」两段式（此前航线是
+    # 裸文本、关注是两段、雷达什么都没有）；判据改为「有中性加载标题 + 无教学词面」。
+    assert 'id="chartEmpty" style="display:flex"><b>正在读取走势</b>' in PAGE, \
+        "静态初始文案应为中性加载词（教学词面在此=假空态）"
+    _stat = PAGE[PAGE.index('id="chartEmpty"'):PAGE.index('id="chartEmpty"') + 200]
+    assert "暂无走势数据" not in _stat, "静态占位不得直接写教学词面"
     # 教学词面必须挂在 chart() 确无数据分支（S 已到达才承诺）。
     # 2026-10-29 起三图空态统一两段式：标题走 <b>、说明走 <span>，
     # 这里守「同一处 innerHTML 同时写标题与说明」，不再钉死前后相邻。

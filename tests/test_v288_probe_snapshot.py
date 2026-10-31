@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """v1.5.288 探针快照/结果筛选分离与计数口径回归。"""
+import copy
 import threading
 from datetime import date, timedelta
 
 import webui
+from crawlers import REGISTRY as _REGISTRY
 
 
 _D1 = (date.today() + timedelta(days=30)).isoformat()
@@ -215,6 +217,7 @@ def test_cancel_preserves_fetched_rows():
 
 def test_probe_detail_evidence_updates_session_without_empty_inference(tmp_path, monkeypatch):
     import logging
+    import crawlers
     old_cfg = getattr(webui._State, "cfg", None)
     old_logger = getattr(webui._State, "logger", None)
     webui._State.cfg = {"crawler": {"user_data_dir": str(tmp_path)},
@@ -224,6 +227,17 @@ def test_probe_detail_evidence_updates_session_without_empty_inference(tmp_path,
     # 不能让本机日志里恰好存在的途牛明细把断言顶成 available。
     monkeypatch.setattr(webui, "_health_state",
                         lambda *a, **k: {"evidence": {}})
+    # _login_state_view 的状态优先级是 active > rejected > error > pending >
+    # available：本机或前序用例（登录保存成功/失败的用例）在
+    # _State.login_errors / login_sessions / login_pending 里留下的记录
+    # 会盖过本用例喂的探针证据，全量跑时曾把 available 判成 save_error
+    # （单跑必绿、全量必红）。本用例只验证探针证据的推理边界，先把这三份
+    # 全局态清空，退出时还原。
+    _globals = ("login_errors", "login_sessions", "login_pending")
+    _old_globals = {k: copy.deepcopy(getattr(webui._State, k)) for k in _globals}
+    for _k in _globals:
+        setattr(webui._State, _k, {})
+    _old_reg = dict(crawlers.REGISTRY)
     webui._PROBE_AUTH.clear()
     try:
         # empty/calendar-only must never be recorded as session evidence
@@ -240,6 +254,10 @@ def test_probe_detail_evidence_updates_session_without_empty_inference(tmp_path,
     finally:
         webui._State.cfg = old_cfg
         webui._State.logger = old_logger
+        for _k, _v in _old_globals.items():
+            setattr(webui._State, _k, _v)
+        crawlers.REGISTRY.clear()
+        crawlers.REGISTRY.update(_old_reg)
         webui._PROBE_AUTH.clear()
 
 

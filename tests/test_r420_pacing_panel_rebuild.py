@@ -190,13 +190,14 @@ def test_demo_login_state_also_exposes_six_slots():
     seg = src[i:i + 420]
     assert 'class="hlink"' in seg, "参数提示仍是死文字"
     assert "cfgGoThrottle()" in seg
-    # 直达函数要切到 globals 面板并定位到节流分区锚点
+    # 直达函数要切到承载节流控件的面板并聚焦第一个节流控件
+    # （r638 起控件在独立的 pacing 分区，之前是 globals）
     fn = src[src.index("function cfgGoThrottle("):src.index("async function health(")]
-    assert "showCfgPanel('globals')" in fn
-    assert "glThrottle" in fn
-    # 配置页必须有这个锚点，且排在节流分区标题之前
-    assert 'id="glThrottle"' in src
-    assert src.index('id="glThrottle"') < src.index("节流 · 熔断（1–5 区")
+    assert ("showCfgPanel('pacing')" in fn
+            or "showCfgPanel('globals')" in fn), (
+        "直达函数没有切到任何配置分区：%r" % fn[:160])
+    # 落点必须是节流控件本身（r638 起切分区即可直达，锚点已不需要）
+    assert "glbQs" in fn, "没有聚焦到第一个节流控件"
 
 
 def test_demo_rows_do_not_claim_normal_without_samples():
@@ -337,7 +338,12 @@ def test_demo_health_payload_stays_on_the_light_path():
         "演示分支又走重路径（会打开 PriceStorage）"
     # 两条路径共用同一份附加逻辑，避免二次分叉
     assert "def _attach_diag_slots(" in src
-    deco = src[src.index("def _health_decorate("):src.index("def _health_decorate(") + 900]
+    # 按**函数体边界**取，不按固定字数：曾写 `+900`，r538 给 _health_decorate
+    # 补了 7 行演示态说明注释后调用点被推到 900 字以外，门禁表现为「调用消失」，
+    # 而源码里调用一直在。钉「函数体内有调用」，不钉它离函数头多少字。
+    i0 = src.index("def _health_decorate(")
+    i1 = src.index("\ndef ", i0 + 10)
+    deco = src[i0:i1]
     assert "_attach_diag_slots(out)" in deco
 
 
@@ -570,7 +576,8 @@ def test_calendar_path_label_is_not_doubled():
     """
     src = open("webui.py", encoding="utf-8").read()
     assert "'日历'+cal" not in src, "通路名与台数重复拼「日历」"
-    i = src.index("pws.push(pp+' '")
+    # r659 起通路名统一走 pathCN()，锚点跟着改；守的仍是「台数以 ×N 出现」
+    i = src.index("pws.push(pathCN(pp)+' '")
     seg = src[i:i + 120]
     assert "'×'+cal" in seg, "日历通路台数未改成 ×N 形态"
 
@@ -730,7 +737,8 @@ def test_retired_path_is_marked_not_silently_dropped():
     合约：退役通路 push 成「<名> 退役」，且不得再当成在用通路算一次成功率。
     """
     seg = _pacing_seg()
-    assert "dead.forEach(pp=>pws.push(pp+' 退役'))" in seg, \
+    # r659：通路名走 pathCN()，锚点跟着改；守的仍是「退役留在行内并标退役」
+    assert "dead.forEach(pp=>pws.push(pathCN(pp)+' 退役'))" in seg, \
         "退役通路未在速览里标出"
     i = seg.index("Object.keys(pw).forEach(pp=>{")
     block = seg[i:i + 260]
@@ -953,12 +961,19 @@ def test_path_degraded_names_the_worst_path_with_samples():
     """
     seg = _pacing_seg()
     i = seg.index("else if(adv.state==='path_degraded')")
-    block = seg[i:i + 2200]
+    # 按**分支边界**截块，不用固定字符数：r635 在这段里补了口径说明与
+    # 重试分支，2200 字符窗口够不到后面的通路下钻，会误判成「未下钻」。
+    nxt = seg.find("else if(adv.state==='", i + 10)
+    block = seg[i:nxt if nxt > 0 else i + 4000]
     assert "s1.paths" in block, "未下钻到分域内的通路"
     assert "n>=5" in block, "未设样本门槛（3 次也当成劣化）"
     assert "0.6" in block, "未设劣化阈值"
-    assert "'%（'+n+' 次）'" in block or "（'+n+' 次）" in block, "未带样本数"
     assert "'国内':'国际'" in block, "未标明是哪个域"
+    # 样本数不再挂在 e1 上（r640 起 e1 只点名「哪条路」，百分比与次数由
+    # 右半 pws / 行 title 承担），但**行内仍必须能看到次数**。
+    src = _src()
+    assert "（'+n+' 次" in src or "（'+n+' 次）" in src or         "'（'+n+' 次" in src or "+' 次'" in src or "' 次'" in src, (
+        "通路小标/速览里看不到样本数")
 
 def test_intervention_buttons_are_idempotent_and_recover():
     """连点「预热」会串行真打多次首页。
