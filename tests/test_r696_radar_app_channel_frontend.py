@@ -53,14 +53,19 @@ def test_config_chips_not_limited_to_browser_keys():
     assert "SRX_PLAT_KEYS.map" not in block
 
 
-def test_radar_chip_list_only_real_sources():
-    """只有真有低价源的 App 渠道才列出来（智行还没接入，不列空开关）。"""
+def test_radar_chip_list_covers_every_app_source():
+    """可勾选清单必须覆盖**所有已接入发现源**的 App 渠道。
+
+    旧断言把「智行未接入」钉成期望，而 r732 已把智行「特价」接成逐天
+    报价源（SPECIAL_CAPABILITY + 后端分发都在）；白名单没跟上，结果是
+    勾得到、请求被静默丢弃。改为守「有源就必须可勾选」。
+    """
     s = _src()
     i = s.index("var SRX_RADAR_APP_KEYS=")
-    block = s[i:i + 80]
+    block = s[i:i + 120]
     assert "app_qunar" in block, block
-    assert "app_zhixing" not in block, \
-        "智行低价源未接入，不该出现在可勾选清单里"
+    assert "app_zhixing" in block, \
+        "智行已有真实发现源，可勾选清单不能再把它排除"
 
 
 def test_no_bare_srx_plats_lookup_left():

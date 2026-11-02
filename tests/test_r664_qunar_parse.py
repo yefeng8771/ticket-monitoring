@@ -186,3 +186,49 @@ def test_transfer_card_is_marked_not_sold_as_direct():
     assert len(rows) == 2, rows
     assert rows[0]["trans_city"] == "中转", rows[0]
     assert rows[1]["trans_city"] == "", rows[1]
+
+
+def _intl_node(text, x1, y1, x2, y2, desc=""):
+    return ('<node text="%s" content-desc="%s" class="android.widget.TextView"'
+            ' bounds="[%d,%d][%d,%d]" />' % (text, desc, x1, y1, x2, y2))
+
+
+def test_intl_card_price_comes_from_itemprice_desc():
+    """国际列表的票价在 `|ItemPrice` 节点里，与 ¥ 符号**不相邻**。
+
+    2026-11-01 22:43 现场（SHA→LHR 11-16，`nopriced-2026-11-16`）真实节点
+    顺序：`¥ [778,400]` → `下单可减 [729,430]` → `¥35 [811,430]` →
+    `3305 [789,385]`（desc 含 `QunarFlightInterList|ItemPrice`）。按「¥ +
+    紧邻数字」取不到，整份列表 5 行全部 price=None。
+    """
+    p = "flight_search_rn|QunarFlightInterList|ItemPrice"
+    xml = ('<hierarchy>'
+           + _intl_node("02:25", 39, 384, 116, 426,
+                        "flight_search_rn|QunarFlightInterList|ItemDepTime")
+           + _intl_node("07:10", 283, 384, 357, 426,
+                        "flight_search_rn|QunarFlightInterList|ItemArrTime")
+           + _intl_node("中国国航CA847", 63, 463, 183, 486,
+                        "flight_search_rn|QunarFlightInterList|SingleItemAviationName")
+           + _intl_node("¥", 778, 400, 789, 426)
+           + _intl_node("下单可减", 729, 430, 797, 454)
+           + _intl_node("¥35", 811, 430, 841, 454)
+           + _intl_node("3305", 789, 385, 861, 432, p)
+           + '</hierarchy>')
+    rows = parse_flight_rows(xml)
+    assert rows, "一行都没解析出来"
+    assert rows[0]["price"] == 3305, rows
+    assert rows[0]["flight_no"] == "CA847", rows
+
+
+def test_intl_card_without_itemprice_keeps_price_none():
+    """没有 ItemPrice 时仍按「无价」处理，绝不给 0 或拿优惠金额充数。"""
+    xml = ('<hierarchy>'
+           + _intl_node("02:25", 39, 384, 116, 426)
+           + _intl_node("07:10", 283, 384, 357, 426)
+           + _intl_node("中国国航CA847", 63, 463, 183, 486)
+           + _intl_node("¥", 778, 400, 789, 426)
+           + _intl_node("下单可减", 729, 430, 797, 454)
+           + _intl_node("¥35", 811, 430, 841, 454)
+           + '</hierarchy>')
+    rows = parse_flight_rows(xml)
+    assert rows and rows[0]["price"] is None, rows

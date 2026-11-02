@@ -25,10 +25,12 @@ def _src():
 
 def test_header_narrow_band_content_aligns():
     src = _src()
-    # 实效档：≤390 块内 header 水平 padding 与 .wrap 水平 padding 同值 10px，
-    # 配合 margin:0 -10px 内容左缘与卡片左缘同线
-    assert "header{padding:10px 10px}" in src
+    # 实效档：≤390 块内页头水平 padding 与 .wrap 水平 padding 同值 10px，
+    # 配合 margin:0 -10px 内容左缘与卡片左缘同线。
+    # r808 起页头选择器带作用域（裸 `header{}` 会给 8 个组件卡头加白横带），
+    # 本钉跟到 `#hdcard`，守的仍是「内容左缘齐线」这一几何意图。
+    assert "#hdcard{padding:10px 10px}" in src
     # 禁复活：破线形态（水平 12px 使内容比卡片区右缩 2px）——
     # 口径为 webui.py 内零命中；docs/site/index.html 烘焙产物历轮
     # 不随轮重烘，旧形态由下次 demo_build 自然消除，不入钉面
-    assert "header{padding:10px 12px}" not in src
+    assert "#hdcard{padding:10px 12px}" not in src

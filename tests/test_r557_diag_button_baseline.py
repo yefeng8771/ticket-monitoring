@@ -16,7 +16,13 @@ TEXT = SRC.read_text(encoding="utf-8")
 
 
 def _rule(sel):
-    i = TEXT.index(sel)
+    """取**基础规则**的声明块。
+
+    锚点必须带行首前缀：裸 `.hdiag-h{` 会先命中更靠前的窄卡覆盖规则
+    `.hdiag[data-n="5"] .hdiag-h{flex-wrap:wrap…}`，拿它去比基础契约
+    会造出假红（2026-10-31 实测：三条守卫同因失败，基础规则本身完好）。
+    """
+    i = TEXT.index("\n" + sel)
     j = TEXT.index("}", TEXT.index("{", i))
     return re.sub(r"/\*.*?\*/", "", TEXT[i:j + 1], flags=re.S)
 

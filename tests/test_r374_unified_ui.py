@@ -70,7 +70,14 @@ def test_radar_tooltip_is_dark_not_white_patch():
 def test_radar_canvas_is_really_scrollable_or_fits():
     """可滚宽度不能被 CSS 压回容器宽，否则拖动指令形同虚设。"""
     src = _src()
-    assert "const W=Math.max(baseW,Math.min(units*MINPX,baseW*2.4));" in src
+    # r850：上限从 `baseW*2.4` 改成 60000（2.4 倍会把密集采样压在同一像素）。
+    # 这里守的是「按点数放大、不锁成可视宽」这个意图，不是某个系数。
+    # r850：上限从 `baseW*2.4` 改成 60000（2.4 倍会把密集采样压在同一像素）。
+    # 守的是「按点数放大、不锁成可视宽」这个意图，不是某个系数。
+    # 上限当前是 min(点数宽, max(baseW*3, baseW+1200), 60000)——三重封顶；
+    # 守「按点数放大、不锁成可视宽」这个意图，不锁具体表达式的写法。
+    assert re.search(r"const W=Math\.max\(baseW,Math\.min\(units\*MINPX,", src)
+    assert "Math.min(units*MINPX" in src and "60000" in src
     assert "wrap.scrollLeft=wrap.scrollWidth-wrap.clientWidth;" in src
     assert "SPMON.userPan=true" in src, "用户拖动后不得被自动回拉"
     assert "#spMonChart{display:block;width:100%;max-width:100%;height:178px}" not in src
@@ -1285,7 +1292,10 @@ def test_small_status_pills_share_one_side_padding():
     checks = [
         (".monwatch-state{", "0 6px"),
         ("#healthcard .hslot{", "0 6px"),
-        (".hdiag-st{", "1px 6px"),
+        # 行首前缀：裸 `.hdiag-st{` 会先命中更靠前的
+        # `.hdiag[data-n="5"] .hdiag-st{margin-left:0}`（窄卡覆盖档，本身
+        # 不含 padding），拿它当基础规则会报「必须有 padding」假红。
+        ("\n.hdiag-st{", "1px 6px"),
         (".pace-row .glip{display:inline-flex", "0 6px"),
         (".lgtag{", "0 6px"),
         (".chsess{", "0 6px"),

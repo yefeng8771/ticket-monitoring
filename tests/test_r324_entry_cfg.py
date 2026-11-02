@@ -358,27 +358,38 @@ class TestW3Platforms:
         snap = page.evaluate(_SNAP)
         try:
             sel = '#cfgform .pch.p-ctrip'
-            assert page.evaluate("CFG[0].platforms.length") == 5
+            # 初始勾选数别再钉 5：r796 起演示账号默认也勾着两家 App
+            # （app_zhixing / app_qunar），渠道全集来自 REGISTRY。
+            from crawlers import REGISTRY
+            _n0 = page.evaluate("CFG[0].platforms.length")
+            assert _n0 == len(REGISTRY), (
+                "初始勾选 %d 家，注册了 %d 家：%s"
+                % (_n0, len(REGISTRY),
+                   page.evaluate("CFG[0].platforms")))
             _click(page, sel)
             out = page.evaluate("""(() => ({
               n: CFG[0].platforms.length,
               has: CFG[0].platforms.includes('ctrip'),
               on: document.querySelector('#cfgform .pch.p-ctrip')
                    .classList.contains('on'),
+              chips: document.querySelectorAll('#cfgform .pch').length,
               bHead: document.querySelector(
                 '#cfgform .grouplab[data-sec="B"] .gsum').textContent}))()""")
-            assert out["n"] == 4 and not out["has"] and not out["on"], out
-            assert out["bHead"] == "4 / 5 渠道", out
+            assert out["n"] == _n0 - 1 and not out["has"] and not out["on"], out
+            # 分母必须等于 B 分区真正渲染出的 chip 数（r711）：写死 5 时
+            # 勾过 App 的用户会看到「7 / 5」。同时锁住两处调用点同源。
+            assert out["bHead"] == "%d / %d 渠道" % (_n0 - 1, out["chips"]), out
             _click(page, sel)   # 再点回：勾选路径同钉
             out = page.evaluate("""(() => ({
               n: CFG[0].platforms.length,
               has: CFG[0].platforms.includes('ctrip'),
               on: document.querySelector('#cfgform .pch.p-ctrip')
                    .classList.contains('on'),
+              chips: document.querySelectorAll('#cfgform .pch').length,
               bHead: document.querySelector(
                 '#cfgform .grouplab[data-sec="B"] .gsum').textContent}))()""")
-            assert out["n"] == 5 and out["has"] and out["on"], out
-            assert out["bHead"] == "5 / 5 渠道", out
+            assert out["n"] == _n0 and out["has"] and out["on"], out
+            assert out["bHead"] == "%d / %d 渠道" % (_n0, out["chips"]), out
         finally:
             _restore(page, snap)
 

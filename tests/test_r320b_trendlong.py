@@ -66,12 +66,18 @@ def test_daily_series_window_and_sort(tmp_path):
     """days 窗（按今天回看）与日升序；窗外桶不返回。"""
     db = os.path.join(str(tmp_path), "t.db")
     st = PriceStorage(db)
-    for d, t in (("2026-09-01", "2026-09-01 08:00:00"),
-                 ("2026-10-01", "2026-10-01 08:00:00")):
-        st.save_many([_fp("CZ1", 1200.0, fetched=t)])
+    # r1022：窗口是「相对今天回看 N 天」，写死日期的用例会随系统日期推移失效
+    # （2026-11-01 当天实测：10-01 已落在 30 天窗外，断言恒空）。改成相对日期：
+    # 窗外 40 天 与 窗内 20 天各一条，期望只回窗内那天。
+    import datetime as _dt
+    today = _dt.date.today()
+    outside = (today - _dt.timedelta(days=40)).isoformat()
+    inside = (today - _dt.timedelta(days=20)).isoformat()
+    for d in (outside, inside):
+        st.save_many([_fp("CZ1", 1200.0, fetched=d + " 08:00:00")])
         st.refresh_daily("SHA", "URC", "2026-11-01", day=d)
     rows = st.daily_series("SHA", "URC", "2026-11-01", days=30)
-    assert [b["day"] for b in rows] == ["10-01"], rows
+    assert [b["day"] for b in rows] == [inside[5:]], rows
     rows180 = st.daily_series("SHA", "URC", "2026-11-01", days=180)
     assert len(rows180) == 2, rows180
 

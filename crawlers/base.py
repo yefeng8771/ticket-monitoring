@@ -386,6 +386,60 @@ class BaseCrawler:
             if tmp and os.path.exists(tmp):
                 os.unlink(tmp)
 
+    @staticmethod
+    def _cookie_key(c: dict) -> tuple:
+        return (c.get("name"), c.get("domain"), c.get("path", "/"))
+
+    @classmethod
+    def _restore_plan(cls, existing: list, saved: list,
+                      now: float = 0.0) -> list:
+        """选择要写回上下文的快照 Cookie（缺失或比档案更新）。
+
+        旧逻辑只补「档案没有的键」：档案里同名 Cookie 一旦过期/变旧，
+        新快照永远盖不上去，重开浏览器就像掉登录。这里按 expires
+        比较，只让快照替换「已过期」或「到期更早」的同名 Cookie；
+        档案里更新的持久 Cookie 不被旧快照覆盖。
+        """
+        now = now or time.time()
+        have = {}
+        for c in existing or []:
+            if isinstance(c, dict) and c.get("name"):
+                have[cls._cookie_key(c)] = c
+        out = []
+        for c in saved or []:
+            if not isinstance(c, dict) or not c.get("name"):
+                continue
+            cur = have.get(cls._cookie_key(c))
+            if cur is None:
+                out.append(c)
+                continue
+            try:
+                se = float(c.get("expires", -1))
+                ce = float(cur.get("expires", -1))
+            except (TypeError, ValueError):
+                continue
+            if ce > 0 and ce <= now:
+                out.append(c)
+            elif se > 0 and ce > 0 and se > ce:
+                out.append(c)
+        return out
+
+    def _state_has_auth(self, state: dict) -> bool:
+        names = {str(c.get("name") or "")
+                 for c in (state or {}).get("cookies") or []
+                 if isinstance(c, dict)}
+        # 只认渠道声明的登录凭证；RISK_COOKIES 里的统计/风控 Cookie
+        # 未登录也在场，拿它们当判据会把掉登录状态覆盖进快照。
+        want = tuple(getattr(self, "AUTH_COOKIES", ()) or ())
+        return bool(want) and any(n in names for n in want)
+
+    def _should_refresh_snapshot(self, save_session) -> bool:
+        """采集态是否回写快照（沿用 saved_at，不冒充重新登录）。"""
+        return bool(
+            save_session is None
+            and self.session_saved_at > 0
+            and getattr(self, "AUTH_COOKIES", ()))
+
     def load_session_cookies(self, domains=None) -> list:
         """读取最新快照，保留 Cookie 的域、路径和期限，不缓存认证值。"""
         if not os.path.isfile(self.session_state_path) and os.path.isdir(
@@ -529,19 +583,22 @@ class BaseCrawler:
                     pass
             state = None
             try:
-                # Chromium 重开可能丢弃 expires=-1 的会话 Cookie；只补
-                # profile 缺少的键，避免旧快照覆盖站点已更新的持久 Cookie。
+                # Chromium 重开可能丢弃 expires=-1 的会话 Cookie；快照
+                # 只补缺失/更旧的键，不覆盖档案里更新的持久 Cookie。
                 if os.path.isfile(self.session_state_path):
                     saved = self.load_session_cookies()
                     if saved:
-                        key = lambda c: (c["name"], c["domain"], c.get("path", "/"))
-                        existing = {key(c) for c in ctx.cookies()}
-                        missing = [c for c in saved if key(c) not in existing]
-                        if missing:
-                            ctx.add_cookies(missing)
+                        plan = self._restore_plan(ctx.cookies(), saved)
+                        if plan:
+                            ctx.add_cookies(plan)
                 yield ctx
+                # 采集成功后回写一次快照（沿用原 saved_at，不代表重新
+                # 登录）：否则短命会话 Cookie 只停留在登录那一刻，进程
+                # 重启后快照已过期，表现成「过一会又要登录」。
+                _refresh = self._should_refresh_snapshot(save_session)
                 try:
-                    state = ctx.storage_state() if save_session else None
+                    state = (ctx.storage_state()
+                             if (save_session or _refresh) else None)
                 except Exception as e:
                     # 验证窗口关得太快时上下文可能已经关闭；若周期快照
                     # 已成功，可以安全忽略收尾失败。登录窗口没有任何快照
@@ -563,8 +620,14 @@ class BaseCrawler:
                 ctx.close()
             # 保存、关闭、发布必须全部成功，调用方才能报告登录已保存。
             if state is not None:
-                saved_at = time.time() if save_session == "login" else self.session_saved_at
-                self._write_session_state(state, saved_at)
+                if save_session is None and not self._state_has_auth(state):
+                    # 采集回写只在认证 Cookie 仍在场时发生：已掉登录的
+                    # 状态不覆盖上一份可用快照。
+                    state = None
+                if state is not None:
+                    saved_at = (time.time() if save_session == "login"
+                                else self.session_saved_at)
+                    self._write_session_state(state, saved_at)
 
     def new_page(self, ctx: BrowserContext) -> Page:
         page = ctx.new_page()
@@ -599,6 +662,9 @@ class BaseCrawler:
     warmup_done_at: float = 0.0
     # 预热成功的判据（子类声明风控 cookie 名；空=不判，避免误报）
     RISK_COOKIES: tuple = ()
+    # 真正的登录凭证（子类声明；空=不做采集后快照回写）。必须比
+    # RISK_COOKIES 更严：cna/_bfa 等统计风控 Cookie 未登录也在场。
+    AUTH_COOKIES: tuple = ()
     warmup_cookie_ok: bool = True
     warmup_cookies: list = []
     # 本次登录/验证窗口是否已成功落过一次周期快照。有它时，关窗后
@@ -1018,7 +1084,8 @@ class BaseCrawler:
             self.use_mobile = bak
 
     def open_challenge_window(self, url: str, done_evt,
-                              timeout_s: float = 300, idx: int = 0):
+                              timeout_s: float = 300, idx: int = 0,
+                              ready_evt=None):
         """Open the challenged page in a visible desktop window.
 
         The operator solves the challenge; this method only waits for the
@@ -1036,6 +1103,8 @@ class BaseCrawler:
                           window_idx=idx, save_session="login") as ctx:
             page = self.new_page(ctx)
             page.goto(url, wait_until="domcontentloaded", timeout=40000)
+            if ready_evt is not None:
+                ready_evt.set()
             import time as _t
             started_at = _t.time()
             deadline = (started_at + timeout_s) if timeout_s else 0.0

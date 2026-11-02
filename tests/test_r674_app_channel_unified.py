@@ -149,7 +149,7 @@ def test_route_unchanged_skips_setting_cities():
 
     c._ensure_home = lambda dev: "<home/>"
     c.read_route = lambda dev: ("北京", "上海")
-    c._set_city = lambda dev, xml, city, side: set_calls.append(city) or True
+    c._set_city = lambda dev, xml, city, side, **kw: set_calls.append(city) or True
     c._pick_date = lambda dev, xml, target: True
     c._search_and_parse = lambda dev, target, fc="", tc="": ([], "empty")
 
@@ -164,7 +164,7 @@ def test_route_changed_sets_both_cities():
 
     c._ensure_home = lambda dev: "<home/>"
     c.read_route = lambda dev: ("北京", "上海")      # 屏幕上是旧航线
-    c._set_city = lambda dev, xml, city, side, intl=False: set_calls.append((side, city)) or True
+    c._set_city = lambda dev, xml, city, side, **kw: set_calls.append((side, city)) or True
     c._pick_date = lambda dev, xml, target: True
     c._search_and_parse = lambda dev, target, fc="", tc="": ([], "empty")
 
@@ -179,7 +179,7 @@ def test_pick_date_failure_does_not_search():
 
     c._ensure_home = lambda dev: "<home/>"
     c.read_route = lambda dev: ("北京", "上海")
-    c._set_city = lambda dev, xml, city, side, intl=False: True
+    c._set_city = lambda dev, xml, city, side, **kw: True
     c._pick_date = lambda dev, xml, target: False
     c._search_and_parse = lambda dev, target, fc="", tc="": (
         searched.append(target) or ([], "ok"))
@@ -230,10 +230,15 @@ class _Dev:
 
 # ---------- 四、与 PC/H5 对齐：不支持的维度要显式落账 ----------
 def test_round_trip_is_explicit_unsupported():
-    """App 渠道不支持往返时必须显式记 unsupported 并返回空。
+    """**不支持**往返的渠道必须显式记 unsupported 并返回空。
 
     静默忽略 ret_date 会把单程价当成往返总价，推送/走势据此报警——
     浏览器渠道（qunar TRIP）就是显式 unsupported 的口径，App 必须同款。
+
+    2026-10-31：两个 App 渠道都已在真机上跑通往返（智行去/返双列、
+    去哪儿左右两列 + 页脚总额），所以这条断言改用**临时关掉能力**的
+    合成渠道来验闸门本体——否则「两家都支持」会让这条守卫无对象可测
+    （看着全绿，实则是空转）。
     """
     for cls in (AppQunarCrawler, AppZhixingCrawler):
         c = cls.__new__(cls)
@@ -241,6 +246,7 @@ def test_round_trip_is_explicit_unsupported():
         c.paths = []
         c.logger = _Log()
         c.last_error = ""
+        c.supports_round_trip = False          # 合成：这家「还没做往返」
         called = []
         c.fetch = lambda *a, **k: called.append(1) or []
         out = c.safe_fetch("SHA", "CAN", ["2026-11-01"], ret_date="2026-11-05")
@@ -251,10 +257,15 @@ def test_round_trip_is_explicit_unsupported():
 
 
 def test_channel_declares_round_trip_support_flag():
-    """能力是**声明式**的：基类默认 False，将来支持往返的渠道改一处即可。"""
+    """能力是**声明式**的：基类默认 False，支持往返的渠道改一处即可。
+
+    2026-10-31 真机：智行（去/返双列）与去哪儿（左右两列 + 页脚总额）
+    都跑通了往返，两个 App 渠道各自把类属性改成 True；基类仍默认 False，
+    新增 App 渠道不显式声明就不支持。
+    """
     assert AppCrawler.supports_round_trip is False
-    assert AppQunarCrawler.supports_round_trip is False
-    assert AppZhixingCrawler.supports_round_trip is False
+    assert AppQunarCrawler.supports_round_trip is True
+    assert AppZhixingCrawler.supports_round_trip is True
 
 
 def test_supported_round_trip_channel_is_not_blocked():

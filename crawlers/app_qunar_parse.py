@@ -25,7 +25,7 @@ _ATTR_RE = r'%s="([^"]*)"'
 _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 # 不要在字母前用 `\b`：页面文案是「南航CZ8889」「东航MU123」，
 # 中文与字母之间**没有**词边界，`\b[A-Z]{2}\d{3,4}\b` 会一个都匹配不到。
-_FLIGHT_RE = re.compile(r"([A-Z]{2}\d{3,4})(?![0-9])")
+_FLIGHT_RE = re.compile(r"([A-Z0-9]{2}\d{3,4})(?![0-9])")
 _CURRENCY = ("¥", "￥")
 
 
@@ -82,6 +82,27 @@ def parse_flight_rows(xml: str) -> List[dict]:
             if not is_discount:
                 prices.append((int(nxt[0]), n[1], _cy(nxt)))
             break
+    # 国际列表（QunarFlightInterList）的票价数字带**结构化 desc**：
+    # `flight_search_rn|QunarFlightInterList|ItemPrice`，而它与 `¥` 符号
+    # 并不相邻——中间隔着「下单可减 / ¥35」（2026-11-01 22:43 现场真实
+    # 节点顺序：¥ → 下单可减 → ¥35 → 3305）。按「¥ + 紧邻数字」一条都
+    # 取不到，整份国际列表 5 行全 price=None。按 desc 直接取，值域与
+    # 国内同一条规则（纯 2–5 位数字），并与已有价格按「值 + 同一行」去重。
+    for m in _NODE_RE.finditer(xml or ""):
+        seg = m.group(1)
+        if "|ItemPrice" not in seg:
+            continue
+        t = re.search(_ATTR_RE % "text", seg)
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', seg)
+        if not (t and b):
+            continue
+        val = (t.group(1) or "").strip()
+        if not re.fullmatch(r"\d{2,5}", val):
+            continue
+        x1, cy = int(b.group(1)), (int(b.group(2)) + int(b.group(4))) // 2
+        if any(v == int(val) and abs(c - cy) <= 4 for v, _x, c in prices):
+            continue
+        prices.append((int(val), x1, cy))
 
     # 卡片切分：以「左半屏(x1<200)的时刻」为锚，配同排右侧时刻为到达。
     # 实测纵坐标：时刻 y=363/589/746，卡片内航班号在其下 ~73px，

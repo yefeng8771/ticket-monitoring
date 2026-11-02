@@ -304,6 +304,26 @@ def test_probe_channel_scope_selects_domestic_route(tmp_path, monkeypatch):
     assert bad["ok"] is False and "没有国际航线" in bad["err"]
 
 
+def test_probe_channel_without_routes_uses_today_fallback(tmp_path, monkeypatch):
+    """没有配置航线时自检仍要能跑：用今天 SHA→NRT 兜底，不能 NameError。
+
+    2026-11-02 Linux 社区反馈：点「核验」报 `name '_dtm' is not defined`。
+    根因是 `probe_channel` 的兜底分支用了 `_dtm`，但该导入只在
+    `_sweep_inner` 里。这里钉住无航线路径。
+    """
+    import datetime as dt
+    monkeypatch.setattr(M, "REGISTRY", {"qunar": _ProbeCrawler})
+    cfg = {"schedule": {}, "crawler": {}, "output": {}, "web": {},
+           "users": [{"name": "u", "platforms": ["qunar"], "notifier": {},
+                      "schedule": {}, "routes": []}]}
+    rt = {"users": M.build_users(cfg), "alerters": [], "cfg": cfg}
+    M.make_sweep_job(cfg, rt, logging.getLogger("probe-noroute"),
+                     _Store2(str(tmp_path / "nr.db")), lambda *a, **k: {})
+    out = rt["probe_channel"]("qunar")
+    assert out["ok"] is True, out
+    assert out["query"][:2] == ["SHA", "NRT"]
+    assert out["query"][2] == dt.date.today().isoformat()
+
 
 def test_probe_channel_rejects_concurrent(tmp_path, monkeypatch):
     monkeypatch.setattr(M, "REGISTRY", {"qunar": _ProbeCrawler})

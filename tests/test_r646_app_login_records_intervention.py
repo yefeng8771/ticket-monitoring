@@ -99,8 +99,13 @@ def test_app_login_finish_writes_a_relogin_intervention():
         rows = PriceStorage(base["output"]["db_path"]).interventions(
             "app_zhixing", 5)
         acts = [(r.get("action"), r.get("scope")) for r in rows]
-        assert ("relogin", "app") in acts, (
+        # r813d：scope 按渠道记（app_zhixing / app_qunar），不再合并成 app。
+        # 两个 App 的重登成功率必须可区分，否则去哪儿 App 会被标成智行。
+        assert ("relogin", "app_zhixing") in acts, (
             "App 登录成功后没有入干预账（不可溯源、干预成功率算不到）：%s"
+            % acts)
+        assert ("relogin", "app") not in acts, (
+            "App 登录又退回共享 scope=app：两个 App 的干预成功率会被合并：%s"
             % acts)
     finally:
         srv.shutdown()

@@ -28,8 +28,9 @@ REGISTRY = {
     "app_qunar": AppQunarCrawler,
 }
 
-# App 渠道 id 集合：供健康/节流/UI 区分「浏览器渠道」与「设备渠道」
-APP_CHANNELS = ("app_zhixing", "app_qunar")
+# App 渠道 id 集合只认 core/channels.py 这一份：曾在此另写一份，
+# 新增 App 渠道只改 core 时，设备引导（bootstrap 读本模块）会静默跳过。
+from core.channels import APP_CHANNELS  # noqa: E402
 
 __all__ = ["BaseCrawler", "CtripCrawler", "FliggyCrawler", "FliggyH5Login",
            "TongchengCrawler", "QunarCrawler", "TuniuCrawler",

@@ -16,6 +16,7 @@ class FakeDevice:
     def __init__(self):
         self.taps = []
         self.texts = []
+        self.foreground = ""
 
     def screencap(self):
         return b"\x89PNG-1"
@@ -35,7 +36,11 @@ class FakeDevice:
         return True
 
     def app_start(self, pkg):
+        self.foreground = pkg
         return True
+
+    def current_activity(self):
+        return self.foreground + "/.MainActivity" if self.foreground else ""
 
 
 class FakeRuntime:
@@ -106,6 +111,24 @@ def test_create_is_idempotent_for_live_session():
     out, code = login_api.handle_create(
         reg, "app_zhixing", PACKAGES, ctx["runtime_factory"])
     assert code == 200 and out.get("already") is True
+
+
+def test_create_reuses_session_after_foreground_lost():
+    """会话还活着、只是前台被切走（按了 Home）：拉回后必须复用。
+
+    新建会话会撞 registry 的单会话约束报 409，用户第二次点「继续登录」
+    就失败；这里守的是「拉回成功 → 200 + already，且不换会话」。
+    """
+    reg = AppLoginRegistry()
+    ctx, rt = _ctx()
+    login_api.handle_create(reg, "app_zhixing", PACKAGES, ctx["runtime_factory"])
+    first = reg.get("app_zhixing")
+    rt.d.foreground = ""          # 前台跑到桌面/别的 App
+    out, code = login_api.handle_create(
+        reg, "app_zhixing", PACKAGES, ctx["runtime_factory"])
+    assert code == 200 and out.get("already") is True, out
+    assert reg.get("app_zhixing") is first, "拉回前台后又新建了会话"
+    assert out["session"]["plat"] == "app_zhixing"
 
 
 def test_frame_returns_png_then_304():

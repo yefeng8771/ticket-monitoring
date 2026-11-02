@@ -7,10 +7,11 @@ URL templates as the crawlers. No login, cookies, API calls or solving.
 import re
 from urllib.parse import quote
 
+from core.channels import APP_CHANNELS, BROWSER_CHANNELS, plat_cn
 from core.citydata import CODE_NAME
 from core.intl import airport_city_code, city_short_of, is_intl_route
 
-PLATS = ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu")
+PLATS = BROWSER_CHANNELS
 SURFACES = ("pc", "h5")
 SCOPES = ("domestic", "intl")
 PLAT_NAME = {"ctrip": "携程", "qunar": "去哪儿", "fliggy": "飞猪",
@@ -124,8 +125,12 @@ ENTRY = {
         ("h5", "domestic"): ("https://m.ly.com/ft/touch/index",
                              "H5 机票搜索"),
         ("pc", "intl"): ("https://www.ly.com/iflight/", "PC 机票搜索（国际）"),
-        ("h5", "intl"): ("https://m.ly.com/tiflight/book1.html",
-                         "H5 机票搜索（国际·需登录，登录后出明细）"),
+        # 同程 H5 国际不是独立 URL：2026-11-02 实测点「国际」后
+        # location 仍是 ft/touch/index（同页切换，默认国内→上海/北京）。
+        # tiflight/book1.html 是已选好航线的列表/订票壳，直接打开会
+        # 「网络开小差了 / 找不到合适的行程」。入口应落查询页并提示切国际。
+        ("h5", "intl"): ("https://m.ly.com/ft/touch/index",
+                         "H5 机票搜索（与国内同页，页内切国际）"),
     },
     "tuniu": {
         ("pc", "domestic"): ("https://flight.tuniu.com/", "PC 机票搜索"),
@@ -231,8 +236,14 @@ def _route_url(plat, surface, scope, fc, tc, fn, tn, date):
         try:
             from crawlers.tongcheng import TongchengCrawler
             if intl:
-                return TongchengCrawler._intl_h5_url(
-                    fc, tc, date, _name(fc, fn), _name(tc, tn))
+                # 2026-11-02 实测：ft/touch/index 不认 dc/ac/dt 等入参
+                # （四种参数名均落回默认「上海→北京」）；产品页内点
+                # 「国际」再查询会 302 到 tiflight/book1.html（带 dcp/acp/
+                # 机场码/channelId 等完整参数），匿名再跳 passport。
+                # 手拼 book1 深链缺这些参数，用户点开只见「网络开小差了/
+                # 找不到合适的行程」。入口回落到已验证的查询页，让用户
+                # 页内切国际再搜；采集端 INTL_H5_BOOK 不受影响。
+                return None
             return TongchengCrawler.URL_TPL.format(
                 date=date, from_name=quote(_name(fc, fn)),
                 to_name=quote(_name(tc, tn)),
@@ -306,9 +317,19 @@ def channel_links(fc="", tc="", date="", fn="", tn=""):
             "to": tc if route_ok else "", "date": date if route_ok else "",
             "from_name": _name(fc, fn) if route_ok else "",
             "to_name": _name(tc, tn) if route_ok else "",
-            "channels": [{"plat": p, "name": PLAT_NAME[p],
-                          "session": SESSION_REQUIREMENT[p][0],
-                          "session_label": SESSION_REQUIREMENT[p][1],
-                          "login_note": LOGIN_NOTE.get(p, "")}
-                         for p in PLATS],
+            # channels 供「按渠道渲染」的界面取名字/会话要求（r710）：
+            # 必须包含 App 渠道，否则渠道入口板与特价雷达里的 App 行
+            # 拿不到 meta（名字/会话），只能显示裸 id 或空白。
+            # cells/specials 仍只给浏览器渠道：App 没有 PC/H5/国内/国际
+            # 的网页入口，它们的入口是「真机内嵌画面」，由前端按 plat 判断。
+            "channels": ([{"plat": p, "name": PLAT_NAME[p],
+                           "session": SESSION_REQUIREMENT[p][0],
+                           "session_label": SESSION_REQUIREMENT[p][1],
+                           "login_note": LOGIN_NOTE.get(p, "")}
+                          for p in PLATS]
+                         + [{"plat": p, "name": plat_cn(p),
+                             "session": "required",
+                             "session_label": "必须登录（真机）",
+                             "login_note": "App 内登录，走真机内嵌画面"}
+                            for p in APP_CHANNELS]),
             "cells": cells, "specials": specials}

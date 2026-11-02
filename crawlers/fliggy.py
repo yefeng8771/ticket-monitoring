@@ -54,6 +54,7 @@ class FliggyCrawler(BaseCrawler):
     # 预热入口（L3）：PC 首页让 baxia 风控下发 cookie；H5 通道走自己的槽位
     warmup_url = "https://www.fliggy.com/"
     RISK_COOKIES = ("cna", "_m_h5_tk", "cookie2")
+    AUTH_COOKIES = ("cookie2",)
 
     URL_TPL = ("https://sjipiao.fliggy.com/flight_search_result.htm"
                "?tripType=0&depCity={fc}&arrCity={tc}&depDate={d}"
@@ -209,6 +210,19 @@ class FliggyCrawler(BaseCrawler):
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
         self.path_reset()
+        # 国内往返诚实（r736）：飞猪的往返总价只在**国际**低价日历
+        # （`cheapestCalendar` 的 tripType=1 + backDate）里有；国内的列表页
+        # 只有单程。此前 fetch 主循环根本没收 ret_date，传了返程日照样跑
+        # 单程列表，把单程价当往返总价返回（r736 实测 ¥497 上海→北京，
+        # extra 里无任何返程字段）。宁可 unsupported，也不给错口径。
+        if ret_date and not is_intl_route(from_city, to_city):
+            self.logger.warning(
+                "[fliggy] 国内往返暂不支持（返程 %s），未发起单程查询",
+                ret_date)
+            self.path_note("TRIP", "unsupported",
+                           detail="国内往返暂不支持（列表页只有单程），"
+                                  "未发起单程查询")
+            return []
         # 国际分流（r325）：core.intl 自动判定
         if is_intl_route(from_city, to_city):
             return self._fetch_intl(from_city, to_city, dates,

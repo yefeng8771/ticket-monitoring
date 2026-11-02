@@ -457,9 +457,27 @@ class TuniuCrawler(BaseCrawler):
             code, plane = m.group(1), m.group(2).strip()
             dep = str(it.get("dep") or "").strip()
             arr = str(it.get("arr") or "").strip()
-            if not (re.match(r"^\d{2}:\d{2}$", dep)
-                    and re.match(r"^\d{2}:\d{2}$", arr)):
+            if not re.match(r"^\d{2}:\d{2}$", dep):
                 continue
+            # r763：到达时刻真实值带跨天后缀（同一份快照里 `12:20+0`，
+            # 次日到达是 `+1`）。旧代码要求 `^\d{2}:\d{2}$` 同时命中它，
+            # 于是 5 份真实快照 181/174/27/26/26 行**全部**被 continue 掉，
+            # PC 通路一次都没出过数（路径账本 30 条记录全是 H5/API 即其
+            # 证据）。去程没有跨天语义，仍然严格；到达放开后缀，`+N` 落
+            # 成 crossDayDesc。
+            am = re.match(r"^(\d{2}:\d{2})(?:\+(\d))?$", arr)
+            if not am:
+                continue
+            arr = am.group(1)
+            try:
+                _dep_h, _dep_m = dep.split(":")
+                _arr_h, _arr_m = arr.split(":")
+                if not (int(_dep_h) < 24 and int(_dep_m) < 60
+                        and int(_arr_h) < 24 and int(_arr_m) < 60):
+                    continue
+            except ValueError:
+                continue
+            _arr_plus = am.group(2)
             pm = re.search(r"[￥¥]\s*([0-9]+(?:\.[0-9]+)?)",
                            str(it.get("price") or ""))
             if not pm:
@@ -478,7 +496,11 @@ class TuniuCrawler(BaseCrawler):
                 rate = int(rm.group(1))
             cross = ""
             ct = str(it.get("cross") or "")
-            if "+1" in ct or "+2" in ct:
+            if _arr_plus and _arr_plus != "0":
+                # 到达时刻自己带了跨天后缀（+1/+2），比 textarea 里的
+                # 拼接串更直接——那份 cross 在去掉后缀后就看不出来了。
+                cross = "+%s天" % _arr_plus
+            elif "+1" in ct or "+2" in ct:
                 cross = "+" + ct.split("+", 1)[1][:1] + "天"
             elif it.get("arrTip"):
                 try:
@@ -521,8 +543,25 @@ class TuniuCrawler(BaseCrawler):
                     url = self.PC_URL_TPL.format(fc=fc, tc=tc, date=date)
                     t0 = time.time()
                     try:
-                        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                        page.wait_for_selector(".J-flightlist", state="attached", timeout=18000)
+                        # r764：PC 列表页会间歇性整页空白（实测同一 URL
+                        # 连续 5 次里 3 次正常、2 次 body 为空；换一个
+                        # context 又能出数）。等不到 `.J-flightlist` 就重载
+                        # 一次——否则一次抽风就判本轮失败，把「站点偶发空页」
+                        # 记成 error，账本上看不出这是间歇问题。
+                        for _attempt in range(2):
+                            page.goto(url, wait_until="domcontentloaded",
+                                      timeout=45000)
+                            try:
+                                page.wait_for_selector(
+                                    ".J-flightlist", state="attached",
+                                    timeout=18000)
+                                break
+                            except Exception:
+                                if _attempt == 1:
+                                    raise
+                                self.logger.info(
+                                    "[tuniu] %s PC 列表空页，重载重试", date)
+                                page.wait_for_timeout(2000)
                         page.wait_for_timeout(1200)
                         items = page.evaluate(self.PC_ITEMS_JS) or []
                         out[date] = self._parse_pc_items(items, date)
@@ -563,7 +602,8 @@ class TuniuCrawler(BaseCrawler):
             self.use_mobile = bak
         return out
 
-    def _one_attempt(self, depart_code, arrive_code, depart_date, polls=None):
+    def _one_attempt(self, depart_code, arrive_code, depart_date, polls=None,
+                     back_date=""):
         page_token = self._saved_page_token(depart_code, arrive_code, depart_date)
         client = _net.new_client(self.config.get("tls_impersonate", "chrome"),
             headers={
@@ -605,6 +645,21 @@ class TuniuCrawler(BaseCrawler):
                 "rph": 0, "hackersFlightNos": None,
                 "tokenKey": page_token or mtoken,
             }
+            if back_date:
+                # r769：国内往返是**接口原生**的——第二段带真实返程日时，
+                # 服务端返回的每条 fare 价就是「去程+返程」总价。同一进程
+                # 交替对照实测定谳：209 个航班里 202 个精确满足
+                # B = A + 返程日反向单程最低价（B-A 中位数恰好 400，
+                # 正是当日反向最低价），没有一个满足 B ≈ A。所以这不是
+                # 「两次单程相加」的估算，而是渠道自算的口径。
+                d_tmpl["segmentList"] = [
+                    {"dCityIataCode": depart_code,
+                     "aCityIataCode": arrive_code,
+                     "departDate": depart_date},
+                    {"dCityIataCode": arrive_code,
+                     "aCityIataCode": depart_code,
+                     "departDate": back_date},
+                ]
             api_hdrs = {"Origin": "https://m.tuniu.com",
                         "Referer": "https://m.tuniu.com/",
                         "Accept": "application/json"}
@@ -657,7 +712,7 @@ class TuniuCrawler(BaseCrawler):
         finally:
             client.close()
 
-    def _hoop(self, fc, tc, date) -> Optional[dict]:
+    def _hoop(self, fc, tc, date, back_date="") -> Optional[dict]:
         eff_a, eff_p = _ladder(self._fail_streak, self.max_attempts,
                                self.max_poll)
         if (self._fail_streak == _LADDER_STRIKE
@@ -674,7 +729,8 @@ class TuniuCrawler(BaseCrawler):
             attempt += 1
             if self.rate_limit:
                 self._rate_acquire()
-            ok, raw, blocked = self._one_attempt(fc, tc, date, polls=eff_p)
+            ok, raw, blocked = self._one_attempt(fc, tc, date, polls=eff_p,
+                                                 back_date=back_date)
             if ok:
                 type(self).login_suspect = False
                 if self._fail_streak >= _LADDER_STRIKE:
@@ -1142,6 +1198,28 @@ class TuniuCrawler(BaseCrawler):
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
         self.path_reset()
+        # 往返：**国内已接**（r769 实测），国际仍未接。
+        #
+        # r769 决定性实测（同一进程内交替对照，勿再重查）：
+        # `listFlight` 的 `segmentList` 放两段（去程 + 反向回程日）时，
+        # 服务端返回的每条 fare 价就是**往返总价**——
+        #   * 209 个航班里 202 个精确满足 B = A + L_ret，其中 A 是同航班
+        #     单程价、L_ret 是返程日反向航线的最低价（当日 400）；
+        #   * B - A 的中位数**恰好等于 400**，没有一个航班满足 B ≈ A；
+        #   * 响应里没有任何字段回显返程日，所以不能靠字段认口径，
+        #     只能靠这个价差不变式。
+        # 这与「两段单程相加的估算」不同：加法是我做的，这里是渠道算的。
+        #
+        # 国际分支（`_fetch_intl`）仍是 unsupported：它的 productList 是
+        # 单段结构，没有对应的两段语义，未做实测。
+        if ret_date and is_intl_route(from_city, to_city):
+            self.logger.warning(
+                "[tuniu] 国际往返暂不支持（返程 %s），未发起单程查询",
+                ret_date)
+            self.path_note(
+                "TRIP", "unsupported",
+                detail="国际往返暂不支持，未发起单程查询")
+            return []
         if is_intl_route(from_city, to_city):
             return self._fetch_intl(from_city, to_city, dates,
                                     ret_date=ret_date)
@@ -1151,12 +1229,13 @@ class TuniuCrawler(BaseCrawler):
         fc, tc = airport_city_code(from_city.upper()), airport_city_code(to_city.upper())
         pc_map = {}
         h5_token = ""
+        # r760：PC 列表**始终先跑**。此前是「拿得到页面 tokenKey 就跳过 PC」，
+        # 而国内 listFlight 从 2026-10 起对**任何**请求（含 m 站页面自己发的
+        # 那条）都回 710114「请登录」——r742 在真浏览器里抓到了站点自身的
+        # 请求，同一个 710114。于是「拿得到 token」反而把唯一能出数的 PC
+        # 列表绕过去了，最终把一次成功的采集记成 login（用户登录也救不回
+        # 来）。token 仍然拿，但只在 PC 没有明细时给接口用。
         if not ret_date:
-            try:
-                h5_token = self._saved_page_token(fc, tc, dates[0])
-            except Exception:
-                h5_token = ""
-        if not ret_date and not h5_token:
             try:
                 pc_map = self._fetch_pc_dom(fc, tc, dates)
             except Exception as e:
@@ -1176,6 +1255,20 @@ class TuniuCrawler(BaseCrawler):
                             pc_map[d] = headed[d]
                 except Exception as e:
                     self.logger.warning("[tuniu] PC 可见窗口重试失败: %s", e)
+            missing = [d for d in dates if not (pc_map.get(d) or [])]
+            if missing:
+                try:
+                    h5_token = self._saved_page_token(fc, tc, missing[0])
+                except Exception:
+                    h5_token = ""
+        elif ret_date:
+            # 往返走接口（不跑 PC 页）：PC 的 `RT_` 路由给的是两步流程
+            # 的第一步（只有去程一列），而接口两段请求返回的就是总价。
+            # token 按去程日取，与下面 `_hoop(..., back_date=ret_date)` 配套。
+            try:
+                h5_token = self._saved_page_token(fc, tc, dates[0])
+            except Exception:
+                h5_token = ""
         for date in dates:
             pc_rows = pc_map.get(date) or []
             if pc_rows:
@@ -1196,7 +1289,7 @@ class TuniuCrawler(BaseCrawler):
                 continue
             t_h5 = time.time()
             self._last_challenge = None
-            raw = self._hoop(fc, tc, date)
+            raw = self._hoop(fc, tc, date, back_date=ret_date)
             self._dump_raw(raw, f"tuniu_raw_{date}")
             if raw is None:
                 self.logger.warning("[tuniu] %s 未拿到真实价格", date)
@@ -1218,8 +1311,18 @@ class TuniuCrawler(BaseCrawler):
             if best is not None and best.get("price"):
                 self.path_note("H5/API", "ok", rows=len(flights), date=date,
                                url=LIST_API,
-                               detail="m.tuniu.com 列表接口",
+                               detail=("m.tuniu.com 列表接口（往返总价）"
+                                       if ret_date else "m.tuniu.com 列表接口"),
                                ms=int((time.time() - t_h5) * 1000))
+                if ret_date:
+                    # 往返行的 price 是**渠道自算的往返总价**，不是去程价。
+                    # 行级标记写进 extra，让明细/对比/推送都能看出口径
+                    # （r769 判据：B = A + 返程日反向单程最低价，209 个
+                    # 航班里 202 个精确成立，B-A 中位数恰为该最低价）。
+                    flights = [dict(f, tripType="RT", backDate=ret_date)
+                               for f in flights]
+                    self.path_note("TRIP", "ok", rows=len(flights), date=date,
+                                   detail="两段 segment 请求，价=往返总价")
                 results.append(FlightPrice(
                     platform=self.name,
                     from_city=from_city, to_city=to_city,

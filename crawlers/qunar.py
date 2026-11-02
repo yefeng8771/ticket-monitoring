@@ -189,6 +189,13 @@ class QunarCrawler(BaseCrawler):
         "&goDate={date}&from=touch_index_search"
         "&child=0&baby=0&cabinType=0"
     )
+    # 往返 H5（r815j）：去程每张卡直接给「往返总价 ¥N 起」（产品自算
+    # 组合总价）；返程卡的价格文案是「补 ¥N」增量，不是总价，不收。
+    RT_URL_TPL = (
+        "https://touch.qunar.com/ncs/page/flightDoubleList"
+        "?depCity={from_name}&arrCity={to_name}"
+        "&goDate={date}&backDate={ret_date}&from=touch_index_search"
+    )
     # PC 版单程列表（2026-10-10 起已停服，仅保留显式复活探测）：
     # H5 接口 touchInnerList 曾风控升级，PC 页 + wbdflightlist 曾为主
     # 路径；停服后由 _fetch_one 的 PC_PROBE_ON_MISS 开关控制，默认不走。
@@ -267,6 +274,7 @@ class QunarCrawler(BaseCrawler):
     warmup_url = H5_HOME
     # 预热成效判据：这几个风控 cookie 落下来才算"真的被当成正常会话"
     RISK_COOKIES = ("QN1", "QunarGlobal", "QN205", "QN277")
+    AUTH_COOKIES = ("QN1",)
 
     def login_url(self) -> str:
         return self.LOGIN_URL
@@ -425,16 +433,19 @@ class QunarCrawler(BaseCrawler):
         self._query_challenge = None
         self._last_no_result = False
         self._last_failure_status = ""
-        # 往返诚实（§5/§10）：qunar 未实现回程查询，忽略 ret_date 返回
-        # 单程价会被告警/走势当成往返总价。不发单程查询，unsupported 落账。
+        # 往返（r815j）：国内 touch 往返页去程卡直接给产品「往返总价」，
+        # 只采这个价（返程卡的「补 ¥N」是增量，不当总价）。国际往返
+        # 仍走 interlist 单程面，未验证组合总价，显式拒绝。
         if ret_date:
-            self.logger.warning(
-                "[qunar] 往返明细暂不支持（返程 %s），未发起单程查询",
-                ret_date)
-            self.path_note(
-                "TRIP", "unsupported",
-                detail="往返明细暂不支持，未发起单程查询")
-            return []
+            if is_intl_route(from_city, to_city):
+                self.logger.warning(
+                    "[qunar] 国际往返暂不支持（返程 %s），未发起单程查询",
+                    ret_date)
+                self.path_note(
+                    "TRIP", "unsupported",
+                    detail="国际往返暂不支持，未发起单程查询")
+                return []
+            return self._fetch_rt(from_city, to_city, dates, ret_date)
         for attempt in range(len(self._BACKOFF_S) + 1):
             wait = max(QunarCrawler._cooldown_until - _t.time(),
                        self._MIN_GAP_S - (_t.time() - QunarCrawler._last_done_ts))
@@ -531,6 +542,181 @@ class QunarCrawler(BaseCrawler):
             QunarCrawler.login_suspect = True
             QunarCrawler._cooldown_until = _t.time() + back
         return []
+
+    # 往返页去程卡：起飞时刻 / 起飞机场 / 时长 / 到达时刻 / 到达机场 /
+    # 「航司+航班号」/「往返总价」/「¥N 起」。返程卡也写「往返总价」，
+    # 但价格是「补 ¥N」（在已选去程上加价），不是总价——锚点只认
+    # `¥N 起`，返程卡天然不入池。
+    _RE_RT_PRICE = re.compile(r"^¥\s*([0-9][0-9,]*)\s*起$")
+    _RE_RT_HAS_PRICE = re.compile(r"¥\s*[0-9][0-9,]*\s*起")
+    _RE_RT_TIME = re.compile(r"^\d{2}:\d{2}$")
+    _RE_RT_FLIGHT = re.compile(r"^(.*?)([A-Z0-9]{2}\d{1,4})\s*$")
+
+    @staticmethod
+    def _next_nonempty(lines: list, idx: int) -> str:
+        # 真实 innerText 每行之间有空行；机场在时刻的下一非空行。
+        for k in range(idx + 1, len(lines)):
+            if lines[k]:
+                return lines[k]
+        return ""
+
+    @classmethod
+    def _parse_rt_body(cls, body: str, date: str, ret_date: str) -> list:
+        """touch 往返页去程卡 → 统一行（价格=产品「往返总价」）。
+
+        只收紧邻「往返总价」的 `¥N 起`；返程卡的「补 ¥N」是增量，
+        不当作往返总价，避免把加价当总价落库。
+        """
+        lines = [x.strip() for x in (body or "").splitlines()]
+        rows, seen = [], set()
+        for i, ln in enumerate(lines):
+            m = cls._RE_RT_PRICE.match(ln)
+            if not m:
+                continue
+            j = i - 1
+            while j >= 0 and not lines[j]:
+                j -= 1
+            if j < 0 or lines[j] != "往返总价":
+                continue
+            price = float(m.group(1).replace(",", ""))
+            window = lines[max(0, j - 14):j]
+            times = [(k, t) for k, t in enumerate(window)
+                     if cls._RE_RT_TIME.match(t)]
+            if len(times) < 2:
+                continue
+            (di, dep), (ai, arr) = times[-2], times[-1]
+            flight, airline = "", ""
+            for txt in window[ai + 1:]:
+                fm = cls._RE_RT_FLIGHT.match(txt)
+                if fm:
+                    airline, flight = fm.group(1).strip(), fm.group(2)
+                    break
+            row = {
+                "airline": airline, "flight": flight,
+                "dep": dep, "arr": arr,
+                "depAirport": cls._next_nonempty(window, di),
+                "arrAirport": cls._next_nonempty(window, ai),
+                "price": price, "priceLabel": "往返总价",
+                "basis": "product_round_trip_total", "tripType": "RT",
+                "depDate": date, "backDate": ret_date,
+            }
+            key = (flight, dep, arr, price)
+            if key not in seen:
+                seen.add(key)
+                rows.append(row)
+        return rows
+
+    def _fetch_rt(self, from_city: str, to_city: str,
+                  dates: List[str], ret_date: str) -> List[FlightPrice]:
+        """touch 往返页：只落产品自己给出的「往返总价」（r815j）。
+
+        去程卡直接带组合总价；返程卡的「补 ¥N」是加价，不落。页面
+        数据是异步渲染，等「往返总价 + ¥N 起」出现（最多 25s，中途
+        滚一屏触发加载），不拿骨架页判空。
+        """
+        fc, tc = from_city.upper(), to_city.upper()
+        from_name = urllib.parse.quote(self.CITY_NAME.get(fc, from_city))
+        to_name = urllib.parse.quote(self.CITY_NAME.get(tc, to_city))
+        results: List[FlightPrice] = []
+        with self.browser() as ctx:
+            page = self.new_page(ctx)
+            try:
+                for date in dates:
+                    url = self.RT_URL_TPL.format(
+                        from_name=from_name, to_name=to_name,
+                        date=date, ret_date=ret_date)
+                    self.logger.info("[qunar][rt] GET %s", url)
+                    t_rt = time.time()
+                    try:
+                        page.goto(url, wait_until="domcontentloaded",
+                                  timeout=45000)
+                        body = ""
+                        for attempt in range(25):
+                            page.wait_for_timeout(1000)
+                            try:
+                                body = page.inner_text("body", timeout=3000)
+                            except Exception:
+                                body = ""
+                            if ("往返总价" in body
+                                    and self._RE_RT_HAS_PRICE.search(body)):
+                                break
+                            if attempt == 5:
+                                try:
+                                    page.mouse.wheel(0, 1200)
+                                except Exception:
+                                    pass
+                        flights = self._parse_rt_body(
+                            body, date, ret_date)
+                        flights = [f for f in flights
+                                   if price_band_ok(f["price"])]
+                        if flights:
+                            QunarCrawler.login_suspect = False
+                            best = min(flights, key=lambda f: f["price"])
+                            results.append(FlightPrice(
+                                platform=self.name,
+                                from_city=from_city, to_city=to_city,
+                                depart_date=date, price=best["price"],
+                                flight_no=best.get("flight", ""),
+                                depart_time=best.get("dep", ""),
+                                arrive_time=best.get("arr", ""),
+                                extra=json.dumps(flights, ensure_ascii=False),
+                            ))
+                            self.path_note(
+                                "往返", "ok", rows=len(flights), date=date,
+                                url=str(getattr(page, "url", "") or ""),
+                                detail="touch.qunar.com 往返列表"
+                                       "（往返总价）",
+                                ms=int((time.time() - t_rt) * 1000))
+                            self.logger.info(
+                                "[qunar][rt] %s→%s 返 %s 最低往返总价 ¥%.0f"
+                                "（明细 %d 条）", date, ret_date,
+                                best["price"], len(flights))
+                        else:
+                            _sig = classify_text(body[:2000],
+                                                 str(page.url))
+                            _blocked = bool(re.search(
+                                r"验证码|安全验证|访问验证|滑块|captcha",
+                                body)) or bool(
+                                    _sig and _sig.status == "blocked")
+                            _login = bool(_sig and _sig.status == "login")
+                            if _blocked:
+                                _detail = "风控验证页"
+                            elif _login:
+                                QunarCrawler.login_suspect = True
+                                _detail = "往返列表需去哪儿登录"
+                            elif re.search(r"没有符合|暂无.{0,8}(航班|机票)|"
+                                           r"未找到.{0,8}航班", body):
+                                _detail = "站点明确无可售往返"
+                            else:
+                                _detail = "往返列表未解析到往返总价"
+                            self.path_note(
+                                "往返", "blocked" if _blocked
+                                else ("login" if _login
+                                      else ("empty" if _detail.startswith(
+                                          "站点明确") else "error")),
+                                date=date, detail=_detail,
+                                ms=int((time.time() - t_rt) * 1000))
+                            self.logger.warning(
+                                "[qunar][rt] %s→%s 未解析到往返总价（%s）",
+                                date, ret_date, _detail)
+                            try:
+                                self._debug_snapshot(
+                                    page, "rt_nopx_%s" % date)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        self.logger.exception(
+                            "[qunar][rt] %s 抓取异常: %s", date, e)
+                        self.path_note("往返", "error", date=date,
+                                       detail=str(e)[:120],
+                                       ms=int((time.time() - t_rt) * 1000))
+                    time.sleep(3)
+            finally:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+        return results
 
     def _fetch_inner(self, from_city: str, to_city: str, dates: List[str]) -> List[FlightPrice]:
         # 国际分流（r325）：core.intl 自动判定，错峰/退避外壳与国内共用

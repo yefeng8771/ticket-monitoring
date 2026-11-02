@@ -58,24 +58,30 @@ def test_payload_answers_alignment_question():
         assert c["name"] and not c["name"].startswith("a"), \
             "界面会露出裸 id：%s" % c["name"]
 
-    # App 渠道必须点名对齐基准，且缺口可枚举
+    # App 渠道仍要点名「同源浏览器渠道」（产地/账号体系，界面展示用）
     assert by["app_zhixing"]["peer"] == "ctrip"
     assert by["app_qunar"]["peer"] == "qunar"
-    assert by["app_qunar"]["gaps"] == [], \
-        by["app_qunar"]["gaps"]
-    # 智行同理：ctrip 基准本身没有 low_fare，基准没有的维度不算缺口
-    # （App 比基准多出来的能力也不算缺口）。
-    assert by["app_zhixing"]["gaps"] == [], \
-        by["app_zhixing"]["gaps"]
+    # 缺口基准是**浏览器端整体能力**（用户原话：PC/H5 有的能力 App 都要有），
+    # 不再按单家同源友商判——携程自己 round_trip=n 会把往返缺口自证掉。
+    # 截至 2026-11-02 晚：去哪儿 App 往返已真机跑通；登录后「低价机票」
+    # 落原生 RN 页（QReactNativeActivity1），14 天逐日价 41.2s 真出；
+    # 日历整月也带价。两处旧缺口已补齐。
+    assert by["app_qunar"]["gaps"] == [], by["app_qunar"]["gaps"]
+    assert by["app_zhixing"]["gaps"] == [], by["app_zhixing"]["gaps"]
 
     # 浏览器渠道没有基准，不该冒出「缺口」
     for p in ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu"):
         assert by[p]["gaps"] == [], by[p]["gaps"]
 
 
-def test_gaps_only_count_peer_supported_dims():
-    """App 多出来的能力不算缺口——用户明确说过 App 信息更全。"""
-    from core.channels import app_alignment_gaps
-    # ctrip 的 round_trip = n；智行也 n。基准不支持就不该算缺口。
-    assert "round_trip" not in app_alignment_gaps("app_zhixing")
+def test_gaps_only_count_browser_supported_dims():
+    """缺口只来自「浏览器端有而 App 没有」；App 更全不算缺口。"""
+    from core.channels import app_alignment_gaps, browser_supported
+    # multi_city：五家浏览器渠道全是 n → 谁都没有，不算缺口。
     assert "multi_city" not in app_alignment_gaps("app_qunar")
+    assert "multi_city" not in app_alignment_gaps("app_zhixing")
+    # round_trip：飞猪/同程为 y（携程自己 n）→ 浏览器端有；两家 App 都已
+    # 真机跑通（2026-10-31），故不是缺口。
+    assert browser_supported("round_trip")
+    assert "round_trip" not in app_alignment_gaps("app_qunar")
+    assert "round_trip" not in app_alignment_gaps("app_zhixing")

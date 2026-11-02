@@ -106,17 +106,32 @@ def test_srow_ios_zoom_guard_computed(srv):
 # ---------- P3-1: demo_pulse 渠道族与 _PLATS 单源一致 ----------
 
 def test_demo_pulse_channel_family_matches_health():
-    from core.demo import _PLATS, demo_health, demo_pulse
+    """同一演示页的健康时间线与脉冲图必须是**同一组渠道**。
+
+    预期不再钉 `_PLATS`：那个列表只是价格种子（下标参与价格偏移，
+    扩它会改演示价），而「哪些渠道在跑」是另一件事——真实账本每轮
+    7 家全在（app_qunar/app_zhixing 各 58/59 条）。2026-11-01 实测
+    演示健康卡只画 5 家、两个 App 缺席，访客会以为它们不参与采集。
+    单一事实源改成 DEMO_SCAN_PLATS，本钉守的是「两处一致」这个意图。
+    """
+    from core.demo import DEMO_SCAN_PLATS, demo_health, demo_pulse
     pulse = demo_pulse()
     pulse_plats = set(pulse["rounds"][0]["chans"].keys())
     health_plats = set(demo_health()["stats"].keys())
-    expected = set(_PLATS)
+    expected = set(DEMO_SCAN_PLATS)
     assert pulse_plats == expected, (
-        "demo_pulse 渠道族 %s 与 _PLATS %s 不一致（概览脉冲图例渠道"
-        "缺漏=同页两处渠道宇宙分裂）" % (sorted(pulse_plats), sorted(expected)))
+        "demo_pulse 渠道族 %s 与 DEMO_SCAN_PLATS %s 不一致（概览脉冲图例"
+        "渠道缺漏=同页两处渠道宇宙分裂）" % (sorted(pulse_plats), sorted(expected)))
     assert health_plats == expected, (
-        "demo_health 渠道族 %s 与 _PLATS %s 不一致" % (
+        "demo_health 渠道族 %s 与 DEMO_SCAN_PLATS %s 不一致" % (
             sorted(health_plats), sorted(expected)))
+    # 两个 App 必须在演示的采集渠道宇宙里
+    assert "app_zhixing" in expected and "app_qunar" in expected, (
+        "演示采集渠道缺 App，健康卡/脉冲图会漏画它们")
+    # 价格种子不应该被顺手扩掉（扩它会改演示价）
+    from core.demo import _PLATS
+    assert set(_PLATS) == {"qunar", "ctrip", "fliggy", "tongcheng", "tuniu"}, (
+        "_PLATS 是价格种子，不该被扩成采集渠道列表")
 
 
 def test_demo_pulse_dur_is_channel_mean():

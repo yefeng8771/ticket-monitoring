@@ -102,12 +102,36 @@ def _texts(xml: str):
 
 
 def _close_button(texts):
-    """在文案里找"关闭/跳过"类按钮，返回坐标。"""
+    """在文案里找"关闭/跳过"类按钮，返回坐标。
+
+    除了文字按钮，还认**图标字形**关闭钮：智行的活动层右上角是一个
+    `\\ue706` 之类的私用区字形（text 长度 1，不可读），`clickable=false`
+    但坐标点击有效（实测点完活动层消失、列表页露出 8 行带价航班）。
+    判据：单字符 + 落在页面右侧 2/3，避免误点正文里的装饰字符。
+    """
     for want in ("跳过广告", "跳过", "关闭", "我知道了", "以后再说",
                  "暂不开启", "残忍拒绝"):
         for t, x, y in texts:
             if t == want:
                 return (x, y)
+    if not texts:
+        return None
+    max_x = max(x for _, x, _ in texts) or 0
+    for t, x, y in texts:
+        ch = (t or "").strip()
+        if len(ch) != 1:
+            continue
+        code = ord(ch)
+        # 私用区（U+E000–U+F8FF）就是图标字体；也接受 ✓/✕ 这类符号
+        is_glyph = 0xE000 <= code <= 0xF8FF or ch in "✕✖╳×✗"
+        if not is_glyph:
+            continue
+        # 只按**横向**判右侧，不限纵向：智行活动层的 ✕ 在 y=1092，
+        # 而「一键报名」在 y=1527，按页高一半卡会把 ✕ 排除掉
+        # （实测：限定上半部后本函数返回 None，活动层关不掉）。
+        if max_x and x < max_x * 0.66:
+            continue
+        return (x, y)
     return None
 
 
@@ -164,14 +188,29 @@ def detect_block(xml: str) -> Block:
     # 广告：营销词 + **页面不像正常功能页**才算拦路物。
     # 只看营销词会把机票首页判成广告（首页自带「返里程」「领券」入口，
     # 去哪儿实测整轮作废）；只看有没有关闭按钮则会把「关不掉的弹层」
-    # 漏成无拦路（既有契约要求如实上报）。区分用页面规模：
+    # 漏成无拦路（既有契约要求如实上报）。区分用「有没有可采数据」+
+    # 文案规模：
     # 真弹层只有寥寥几行文案，功能页有几十个控件。
+    #
+    # r725：文案阈值从 12 放宽到 20。智行「全网招募：智行机票体验官」
+    # 活动层是**独立全屏 Activity**（CRNBaseActivityV2），dump 只拿得到
+    # 它自己，共 14 行文案、0 个航班/价格；阈值 12 时判不成广告、又不算
+    # 登录墙，`_one_date_detail` 就一直等 `detect_state=='ok'` 等到超时，
+    # 最后记「明细页没解析出带价航班」——而截图上列表页就压在这层下面
+    # （点右上角 ✕ 后立刻露出 8 行带价航班）。
     has_ad_word = any(w in joined for w in _AD_MARKS)
     if has_ad_word and not has_payload(xml) and len(texts) <= _AD_MAX_TEXTS:
         close_xy = _close_button(texts)
         if close_xy:
             return Block(BLOCK_AD, "可关闭的营销弹层", close_xy)
         return Block(BLOCK_AD, "营销弹层（未找到关闭按钮）", None)
+
+    # r725：文案更多的**营销活动全屏页**（没有航班/价格，但带明显活动语）
+    # 同样按广告处理，前提仍然是「无数据」——有数据的列表页不动。
+    if has_ad_word and not has_payload(xml):
+        close_xy = _close_button(texts)
+        if close_xy:
+            return Block(BLOCK_AD, "可关闭的营销活动页", close_xy)
 
     return Block("")
 

@@ -41,7 +41,7 @@ def test_fail_streak_enters_lite_and_success_resets():
     c = _crawler()
     polls_seen = []
 
-    def fail_probe(fc, tc, date, polls=None):
+    def fail_probe(fc, tc, date, polls=None, back_date=""):
         polls_seen.append(polls)
         return False, None, False
 
@@ -57,7 +57,7 @@ def test_fail_streak_enters_lite_and_success_resets():
     assert polls_seen[n:] == [3]
     assert c._fail_streak == _t._LADDER_STRIKE + 1
     # 任一成功复位全预算（零延迟自愈）
-    c._one_attempt = lambda fc, tc, date, polls=None: (
+    c._one_attempt = lambda fc, tc, date, polls=None, back_date="": (
         True, {"fareList": []}, False)
     assert c._hoop("SHA", "HAK", "2026-10-22") is not None
     assert c._fail_streak == 0
@@ -72,7 +72,7 @@ def test_lite_zero_delay_recovery_within_round():
     # 仍覆盖恢复轮 fareList 完整形态——健康轮首响即收语义不变）
     c = _crawler()
     c._fail_streak = _t._LADDER_STRIKE
-    c._one_attempt = lambda fc, tc, date, polls=None: (
+    c._one_attempt = lambda fc, tc, date, polls=None, back_date="": (
         True, {"fareList": [{"a": 1}]}, False)
     assert c._hoop("SHA", "HAK", "2026-10-24") == {"fareList": [{"a": 1}]}
     assert c._fail_streak == 0

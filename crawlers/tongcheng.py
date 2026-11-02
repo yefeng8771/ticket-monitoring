@@ -62,7 +62,18 @@ class TongchengCrawler(BaseCrawler):
     XHR_KEYS = [
         "flightbffv2/book1/flights",
         "connection/flights",
+        # 国内 **PC** 列表（r805 实测）：r258 曾判「PC 无实现」，证据是
+        # 「无头下列表卡片不渲染」——那说的是**页面**，接口一直有数据
+        # （debug/tc_pc_list.json 14 条）。2026-10-31 真浏览器实测：
+        # www.ly.com/flights/itinerary/oneway/SHA-BJS 页面 200、
+        # 站点自己发 getflightlist、返回 64 条航班、页面渲染 296 个
+        # 候选块；`productPrices` 与页面可见「¥650 起」**逐条相等**
+        # （515/515、650/650，cot=40 不进价）——同口径，可直接采。
+        "getflightlist",
     ]
+    # 国内 PC 列表页（r805）：slug 用 IATA 对，日期走 ?date=
+    URL_TPL_PC = ("https://www.ly.com/flights/itinerary/oneway/"
+                  "{from_city}-{to_city}?date={date}")
 
     CITY_NAME = {
         "SZX": "深圳", "KMG": "昆明", "PEK": "北京", "BJS": "北京",
@@ -627,7 +638,8 @@ class TongchengCrawler(BaseCrawler):
         往返价（页内日历门拒、窗历只有单程）。不推断"站点自身也只发
         单程"（那需要看站点自己的 RT 请求，本仓库看不到）。"""
         self.path_note("往返", "unsupported",
-                       detail="同程国际本通路取不到往返价（窗历仅单程）")
+                       detail="往返明细暂不支持（本通路取不到往返价，"
+                              "窗历仅单程）")
         self.logger.warning(
             "[tongcheng][intl] %s 本通路取不到往返价（页内日历门拒、"
             "窗历仅单程），不拿单程价冒充往返",
@@ -919,6 +931,113 @@ class TongchengCrawler(BaseCrawler):
                     return ""
         return ""
 
+    @staticmethod
+    def _parse_rt_fps(fps, lp, ddate: str, rdate: str) -> List[dict]:
+        """同程往返接口 fps → 行。只认接口 atp（= lp + atpd），不加总。"""
+        out = []
+        for f in fps or []:
+            try:
+                atp = int(f.get("atp"))
+                atpd = int(f.get("atpd"))
+            except (TypeError, ValueError):
+                continue
+            if atp <= 0:
+                continue
+            out.append({
+                "depart_date": ddate,
+                "back_date": rdate,
+                "trip_type": "RT",
+                "price": float(atp),
+                "return_price": float(atpd),
+                "outbound_lowest": (float(lp) if lp is not None else None),
+                # 2026-11-02 真报文复核：fps[] 是**去程**航班（dt/ddate 同值），
+                # atpd 才是配对返程段价；atp=lp+atpd 是总价。
+                "flight": str(f.get("fn") or ""),
+                "dep": str(f.get("dt") or ""),
+                "arr": str(f.get("at") or ""),
+                "airline": str(f.get("asn") or ""),
+                "basis": "product_atp",
+            })
+        out.sort(key=lambda r: (r["price"], r["flight"]))
+        return out
+
+    def _fetch_dom_rt(self, from_city: str, to_city: str,
+                      dates: List[str], ret_date: str) -> List[FlightPrice]:
+        """国内往返：同程 frbook1 页自身的 book1/roundtrips 接口。
+
+        2026-11-02 真报文：210/210 条 `atp == lp + atpd`；atp 是
+        接口算出的组合总价，本方法只搬运 atp，绝不把两段单程相加。
+        裸 httpx 200（无需 user-dun/页面签名），失败按 error/timeout
+        留痕，不拿单程价冒充往返。
+        """
+        import httpx
+        fc, tc = from_city.upper(), to_city.upper()
+        try:
+            ua = str((self.fingerprint() or {}).get("ua") or "")
+        except Exception:
+            ua = ""
+        headers = {"Content-Type": "application/json",
+                   "Accept": "application/json, text/plain, */*",
+                   "Referer": "https://m.ly.com/",
+                   "tcplat": "518"}
+        if ua:
+            headers["User-Agent"] = ua
+        out: List[FlightPrice] = []
+        for i, date in enumerate(dates):
+            if i:
+                self._sleep()
+            body = {"dcc": fc, "acc": tc, "ddate": date, "pt": 0,
+                    "rdate": ret_date, "dfn": "", "nil": False, "fs": [],
+                    "departLowestAdultTicketPrice": 0,
+                    "passengerDetailInfos": []}
+            t0 = time.time()
+            try:
+                r = httpx.post(
+                    "https://wx.17u.cn/flightbffv2/book1/roundtrips",
+                    json=body, headers=headers, timeout=25)
+                if r.status_code != 200:
+                    self.path_note("往返", "error", date=date,
+                                   detail="HTTP %s" % r.status_code,
+                                   ms=int((time.time() - t0) * 1000))
+                    continue
+                payload = r.json()
+            except Exception as e:
+                self.path_note("往返", "error", date=date,
+                               detail=str(e)[:140],
+                               ms=int((time.time() - t0) * 1000))
+                continue
+            data = payload.get("data") or {}
+            parsed = self._parse_rt_fps(data.get("fps"), data.get("lp"),
+                                        date, ret_date)
+            if not parsed:
+                self.path_note("往返", "empty", date=date,
+                               detail="往返接口无返程价",
+                               ms=int((time.time() - t0) * 1000))
+                continue
+            best = parsed[0]
+            self.path_note(
+                "往返", "ok", rows=len(parsed), date=date,
+                detail="同程往返总价（接口 atp）¥%s = 去程最低 ¥%s + 返程 ¥%s"
+                       % (best["price"], best["outbound_lowest"],
+                          best["return_price"]),
+                ms=int((time.time() - t0) * 1000))
+            out.append(FlightPrice(
+                platform=self.name, from_city=from_city, to_city=to_city,
+                depart_date=date, price=float(best["price"]),
+                airline=best["airline"][:20], flight_no=best["flight"],
+                depart_time=best["dep"][11:16], arrive_time=best["arr"][11:16],
+                extra=json.dumps({
+                    "tripType": "RT", "backDate": ret_date,
+                    "outboundLowest": best["outbound_lowest"],
+                    "returnPrice": best["return_price"],
+                    "flight": best["flight"],
+                    "dep": best["dep"],
+                    "arr": best["arr"],
+                    "airline": best["airline"],
+                    "options": parsed[:50],
+                }, ensure_ascii=False)))
+        return out
+
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
         self.path_reset()
@@ -926,7 +1045,41 @@ class TongchengCrawler(BaseCrawler):
         if is_intl_route(from_city, to_city):
             return self._fetch_intl(from_city, to_city, dates,
                                     ret_date=ret_date)
+        # 国内往返（r815h）：book1/flights 单程列表页没有返程总价，
+        # 但同程自己的 frbook1 页会调 book1/roundtrips，接口直接给
+        # atp=组合总价（atp == lp + atpd，2026-11-02 真报文 210/210）。
+        # 裸 httpx 即 200，不需要页面签名——只采接口自己的 atp，
+        # 绝不把两段单程相加冒充往返。
+        if ret_date:
+            return self._fetch_dom_rt(from_city, to_city, dates, ret_date)
         results: List[FlightPrice] = []
+        # 国内 PC 先跑（r805）：PC 的 getflightlist 一次给全量航班（实测
+        # 64 条），比 H5 虚拟列表更完整；它能出数的日期就别再让 H5 跑一遍
+        # （省一次浏览器导航，也避免两条通路对同一天给出不同最低价）。
+        # PC 挂掉不影响整轮——缺的日期继续走 H5。
+        pc_map: dict = {}
+        try:
+            pc_map = self._fetch_pc_dom(from_city, to_city, dates)
+        except Exception as e:
+            self.logger.warning("[tongcheng][pc] 回退 H5: %s", e)
+            pc_map = {}
+        for date, rows in pc_map.items():
+            if not rows:
+                continue
+            best = min(rows, key=lambda f: f["price"])
+            self.last_path = "PC"
+            results.append(FlightPrice(
+                platform=self.name,
+                from_city=from_city, to_city=to_city,
+                depart_date=date, price=float(best["price"]),
+                airline=str(best.get("name") or "")[:20],
+                flight_no=str(best.get("code") or ""),
+                depart_time=str(best.get("depTime") or ""),
+                arrive_time=str(best.get("arrTime") or ""),
+                extra=json.dumps(rows, ensure_ascii=False)))
+        dates = [d for d in dates if not (pc_map.get(d) or [])]
+        if not dates:
+            return results
         with self.browser() as ctx:
             page = self.new_page(ctx)
             for date in dates:
@@ -1048,6 +1201,94 @@ class TongchengCrawler(BaseCrawler):
                 self._sleep()
         return results
 
+    def _fetch_pc_dom(self, from_city: str, to_city: str,
+                      dates: List[str]) -> dict:
+        """国内 PC 列表（r805 新增）：逐日开列表页，抓站点自己发的
+        `getflightlist`，按日返回 `{date: [row, ...]}`。
+
+        为什么以前判"没有 PC"：`docs/LESSONS.md` 记的是「无头下列表
+        **卡片**不渲染」——那是渲染层的问题（页面用虚拟列表，headless
+        下滚动收敛慢）。但**接口**一直是好的，站点自己在打开页面时就发
+        `getflightlist`。所以这里不去解析 DOM 卡片，只收 XHR，既绕开
+        虚拟列表，也拿到比页面更全的一批（实测 64 条 vs 页面 25 卡）。
+
+        失败一律返回空 dict，由调用方回落 H5——PC 是**增强通路**，
+        不是唯一通路，不能因为 PC 挂了就让整轮没数。
+
+        **必须切桌面身份**：`use_mobile=True` 时上下文带手机 UA，
+        打 PC 版 www.ly.com 会被站点按移动端渲染，于是不发
+        `getflightlist`（实测：同一 URL 桌面 UA 有 64 条，手机 UA
+        9 秒一条没有）。与 `_intl_browser_fallback` 同一套临时切档律。
+        """
+        out: dict = {}
+        fc, tc = from_city.upper(), to_city.upper()
+        bak = self.use_mobile
+        self.use_mobile = False
+        try:
+            with self.browser() as ctx:
+                page = self.new_page(ctx)
+                # 首页养会话：直接深链到列表页时风控会软拒（与 H5 同策）
+                try:
+                    page.goto("https://www.ly.com/",
+                              wait_until="domcontentloaded", timeout=30000)
+                    page.wait_for_timeout(2500)
+                except Exception as e:
+                    self.logger.warning("[tongcheng][pc] 预热失败: %s", e)
+                for date in dates:
+                    url = self.URL_TPL_PC.format(
+                        from_city=fc, to_city=tc, date=date)
+                    captured = self.attach_xhr_collector(
+                        page, ["getflightlist"])
+                    t0 = time.time()
+                    try:
+                        page.goto(url, wait_until="domcontentloaded",
+                                  referer="https://www.ly.com/")
+                        page.wait_for_timeout(9000)
+                    except Exception as e:
+                        self.logger.warning("[tongcheng][pc] %s 导航异常: %s",
+                                            date, e)
+                    rows: list = []
+                    for item in captured:
+                        rows.extend(self._parse_pc_flights(
+                            item.get("text", "")))
+                    if rows:
+                        # 只留本日航班（列表接口偶尔带回邻日，宁可丢也不串）
+                        same = [r for r in rows
+                                if str(r.get("depDate") or "") == date]
+                        out[date] = same or rows
+                        # 记账放在**切档期间**：path_note 的 mobile 标志
+                        # 读当时身份，回到手机档后再记会把桌面通路标成
+                        # 手机通路（实测落过 mobile:true）。
+                        self.path_note(
+                            "PC", "ok", rows=len(out[date]), date=date,
+                            detail="www.ly.com 列表接口", url=url,
+                            ms=int((time.time() - t0) * 1000))
+                        self.logger.info(
+                            "[tongcheng][pc] %s 明细 %d 条 · 最低 ￥%.0f",
+                            date, len(out[date]),
+                            min(r["price"] for r in out[date]))
+                    else:
+                        # 「没拿到 getflightlist」是**我们没取到响应**，
+                        # 不是「原站这一天没有航班」。记成 empty 会让账本
+                        # 把抓取失败算成真实无票（r403/r411 的空态措辞门禁
+                        # 就是抓这个），也让健康度把失败当成功。
+                        self.path_note(
+                            "PC", "error", date=date, url=url,
+                            detail="未拿到 getflightlist 响应",
+                            ms=int((time.time() - t0) * 1000))
+                        self.logger.warning(
+                            "[tongcheng][pc] %s 未拿到 getflightlist（%.1fs）",
+                            date, time.time() - t0)
+                    # 日期之间必须留间隔（与 H5 主循环同律）：新通路绕开
+                    # `_sleep()` 就是绕开全项目的请求节流，连打多日最容易被
+                    # 风控盯上。H5 每条日期后都 sleep，这里不能例外。
+                    self._sleep()
+        except Exception as e:
+            self.logger.warning("[tongcheng][pc] 列表异常: %s", e)
+        finally:
+            self.use_mobile = bak
+        return out
+
     def _pick_lowest(self, captured: list, page) -> float | None:
         prices: list = []
         for item in captured:
@@ -1148,6 +1389,68 @@ class TongchengCrawler(BaseCrawler):
                 if isinstance(fi, dict) and fi.get("fd") == "免费托运行李":
                     return str(fi.get("fc") or "").strip()
         return ""
+
+    @staticmethod
+    def _parse_pc_flights(body: str) -> list:
+        """国内 PC `getflightlist` → 与 H5 同一 schema 的行列表。
+
+        报文（2026-10-31 r805 实测，161 KB / 64 条）：
+            {"resCode":0,"body":{"FlightInfoSimpleList":[
+              {"flightNo":"HU7602","airCompanyName":"…",
+               "flyOffTime":"2026-11-27 08:30","arrivalTime":"2026-11-27 10:55",
+               "productPrices":{"0":650},"cot":40, …}], "paging":{…}}}
+
+        价格口径（**已实测对齐，勿再重复验证**）：`productPrices` 的
+        最小值与页面可见「¥650 起」逐条相等（515/515、650/650，diff=0）；
+        `cot`（机建燃油 40）**不进价**——它不在展示价里，加上去反而比
+        用户看到的高 40。这与 book1 的 `atp`（含税总价）同口径，两条
+        通路因此可以共用价格池。
+
+        时刻：报文给完整 "YYYY-MM-DD HH:MM"，H5 行只要 "HH:MM" + 日期
+        分量；这里按同一 schema 切分（跨天到达时 arrDate 自然落在次日，
+        与 H5 的推算结果一致，而不是另造一套）。
+        """
+        try:
+            obj = json.loads(body or "")
+        except Exception:
+            return []
+        body_obj = obj.get("body") if isinstance(obj, dict) else None
+        if not isinstance(body_obj, dict):
+            return []
+        rows = []
+        for f in body_obj.get("FlightInfoSimpleList") or []:
+            if not isinstance(f, dict):
+                continue
+            code = str(f.get("flightNo") or "").strip().upper()
+            dep = str(f.get("flyOffTime") or "").strip()
+            arr = str(f.get("arrivalTime") or "").strip()
+            if not code or len(dep) < 16:
+                continue
+            pp = f.get("productPrices") or {}
+            vals = [float(v) for v in pp.values()
+                    if isinstance(v, (int, float)) and v > 0] \
+                if isinstance(pp, dict) else []
+            if not vals:
+                continue
+            price = min(vals)
+            if not (PRICE_MIN <= price <= PRICE_MAX):
+                continue
+            air = str(f.get("airCompanyName") or "").strip()
+            plane = str(f.get("equipmentName") or "").strip()
+            row = {
+                "price": price,
+                "code": code,
+                "name": f"{air}{code}",
+                "depTime": dep[11:16],
+                "arrTime": arr[11:16] if len(arr) >= 16 else "",
+                "depDate": dep[:10],
+                "arrDate": arr[:10] if len(arr) >= 10 else "",
+            }
+            # 有值才落键（同 H5 侧「属性不适用即落空串」卫生律）
+            if plane:
+                row["plane"] = plane
+            rows.append(row)
+        return rows
 
     @classmethod
     def _extract_flights(cls, text: str) -> list:

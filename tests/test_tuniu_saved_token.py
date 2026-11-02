@@ -30,8 +30,19 @@ def test_crawler_uses_saved_h5_surface_profile(tmp_path):
     assert c.user_data_dir.endswith(os.path.join("surfaces", "pc"))
 
 
-def test_fetch_skips_pc_when_h5_token_exists():
+def test_pc_runs_before_token_and_token_is_only_for_fallback():
+    """r760：PC 列表先跑，token 只在 PC 没明细时用来打接口。
+
+    旧契约（`if not ret_date and not h5_token:` 才跑 PC）已被推翻：国内
+    listFlight 对**站点自己发的请求**也回 710114，拿得到 token 反而把唯一
+    能出数的 PC 列表绕过去，把成功采集记成 login。
+    """
     src = open(TuniuCrawler.__module__.replace(".", "/") + ".py",
                encoding="utf-8").read()
-    assert "if not ret_date and not h5_token:" in src
+    assert "if not ret_date and not h5_token:" not in src, (
+        "PC 仍被 token 挡住——会把有数据的通路跳过")
+    # PC 在 token 之前：`_fetch_pc_dom` 的调用行要先于 `_saved_page_token`
+    i_pc = src.index("pc_map = self._fetch_pc_dom(fc, tc, dates)")
+    i_tok = src.index("h5_token = self._saved_page_token(fc, tc, missing[0])")
+    assert i_pc < i_tok, "取 token 的代码跑在 PC 之前，PC 又会被跳过"
 

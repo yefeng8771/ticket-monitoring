@@ -86,6 +86,82 @@ def test_truly_no_low_fare_is_empty(monkeypatch):
     assert rows == [] and st["status"] == "empty", st
 
 
+def test_future_range_requests_strip_from_today(monkeypatch):
+    """日期带从今天起算：未来 11-10..11-12 必须请求 11 天，不能只请求 3 天。
+
+    负控：改回 `(end-start).days+1` 时 fake 只拿到 3 天，返回 11-02..11-04，
+    过滤后为空——这正是 r815 线上 176s/empty 的形态。
+    """
+    import datetime as dt
+    today = dt.date.today()
+    seen = {}
+
+    class Fake:
+        paths = [{"path": "low-fare", "status": "ok", "detail": "ok"}]
+
+        def low_fare(self, fc, tc, days=14):
+            seen["days"] = days
+            return [{"date": (today + dt.timedelta(days=i)).isoformat(),
+                     "price": 300 + i} for i in range(days)]
+
+    import crawlers.app_qunar as mod
+    monkeypatch.setattr(mod, "AppQunarCrawler", lambda *a, **k: Fake())
+    q = sr.RadarQuery("t", "BJS", "北京", "CAN", "广州",
+                      today + dt.timedelta(days=8),
+                      today + dt.timedelta(days=10), ["app_qunar"])
+    rows, st = sr._app_qunar_deals(q, None)
+    assert seen["days"] == 11, seen
+    assert len(rows) == 3 and st["status"] == "ok", st
+    assert {r.date for r in rows} == {
+        (today + dt.timedelta(days=i)).isoformat() for i in (8, 9, 10)}
+
+
+def test_range_beyond_strip_has_reason_not_bare_empty(monkeypatch):
+    """超出 14 天日期带要明确说原因，不能只回一个无理由的 empty。"""
+    import datetime as dt
+    today = dt.date.today()
+    called = {"n": 0}
+
+    class Fake:
+        paths = [{"path": "low-fare", "status": "ok", "detail": "ok"}]
+
+        def low_fare(self, fc, tc, days=14):
+            called["n"] += 1
+            return []
+
+    import crawlers.app_qunar as mod
+    monkeypatch.setattr(mod, "AppQunarCrawler", lambda *a, **k: Fake())
+    q = sr.RadarQuery("t", "BJS", "北京", "CAN", "广州",
+                      today + dt.timedelta(days=20),
+                      today + dt.timedelta(days=22), ["app_qunar"])
+    rows, st = sr._app_qunar_deals(q, None)
+    assert rows == [] and st["status"] == "empty", st
+    assert "14 天" in st["reason"], st
+    assert called["n"] == 0, "已知超出日期带仍去开真机（会白等）"
+
+
+def test_returned_strip_missing_request_range_has_reason(monkeypatch):
+    """App 只回今天附近而请求在更远日期：必须报「未覆盖」，不能裸 empty。"""
+    import datetime as dt
+    today = dt.date.today()
+
+    class Fake:
+        paths = [{"path": "low-fare", "status": "ok", "detail": "ok"}]
+
+        def low_fare(self, fc, tc, days=14):
+            return [{"date": (today + dt.timedelta(days=i)).isoformat(),
+                     "price": 300} for i in range(3)]
+
+    import crawlers.app_qunar as mod
+    monkeypatch.setattr(mod, "AppQunarCrawler", lambda *a, **k: Fake())
+    q = sr.RadarQuery("t", "BJS", "北京", "CAN", "广州",
+                      today + dt.timedelta(days=8),
+                      today + dt.timedelta(days=10), ["app_qunar"])
+    rows, st = sr._app_qunar_deals(q, None)
+    assert rows == [] and st["status"] == "empty", st
+    assert "未覆盖" in st["reason"], st
+
+
 def test_build_radar_routes_app_qunar(monkeypatch):
     """分发必须真的走到 _app_qunar_deals，不能落到 not_connected。"""
     called = {}

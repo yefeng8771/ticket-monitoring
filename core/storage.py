@@ -1119,6 +1119,13 @@ class PriceStorage:
 
         只取有起飞/到达时刻的行：日历价不是航班明细，拿它当基线会让
         重启后的首轮误以为"明细已经采过"。
+
+        **往返行不算单程明细**（r805w）：`flight_prices` 没有 tripType
+        列，往返契约只落在 `extra[].tripType='RT'` 上。此前这里不分口径，
+        同一天既有单程 ¥500 又有往返 ¥1200 时，本函数会选中**较新的
+        往返价**当作单程明细基线（受控实验复现过），重启后就以为单程
+        已经采过了。这里按 extra 里的 tripType 排除往返行——往返有自己的
+        查询键（带返程日），不该顶替单程的 TTL。
         """
         hours = max(1, min(24 * 90, int(hours or 24 * 7)))
         with self._conn() as c:
@@ -1130,6 +1137,10 @@ class PriceStorage:
                 "WHERE fetched_at >= datetime('now','localtime', ?) "
                 "AND price > 0 AND COALESCE(depart_time,'') <> '' "
                 "AND COALESCE(arrive_time,'') <> '' "
+                "AND NOT (json_valid(extra) AND json_type(extra)='array' "
+                "         AND EXISTS (SELECT 1 FROM json_each(extra) je "
+                "                     WHERE json_extract(je.value, "
+                "                                       '$.tripType') = 'RT')) "
                 "GROUP BY platform, from_city, to_city, depart_date) x "
                 "ON p.id = x.mid ORDER BY p.id DESC",
                 ("-%d hours" % hours,)).fetchall()
@@ -1245,6 +1256,10 @@ class PriceStorage:
                                     AND json_type(fp.extra)='array'
                                THEN json_extract(je.value,'$.transCity')
                                ELSE NULL END AS tcity,
+                          CASE WHEN json_valid(fp.extra)
+                                    AND json_type(fp.extra)='array'
+                               THEN json_extract(je.value,'$.tripType')
+                               ELSE NULL END AS trip,
                           fp.fetched_at
                     FROM flight_prices fp
                     LEFT JOIN json_each(
@@ -1256,8 +1271,15 @@ class PriceStorage:
                     ORDER BY fp.fetched_at, fp.id, je.key""",
                 (from_city, to_city, depart_date,
                  f"{day} 00:00:00", f"{day} 23:59:59")).fetchall()
+            # 口径互斥（r805y）：同一 (航线,日期,聚合日) 里**单程与往返
+            # 绝不混桶**——混了 hi/close 会被抬到往返价（受控实验：单程
+            # 500 + 往返 1200 → close 1200）。但也不能一律排除往返：
+            # 只配置了往返的航线会整片空盘（同日实测两表皆 0 行）。
+            # 取法：有单程元素就只用单程；一条单程都没有时用往返。
+            if any(not trip for _, _, trip, _ in rows):
+                rows = [r for r in rows if not r[2]]
             buckets = {}
-            for raw_price, trans_city, ts in rows:
+            for raw_price, trans_city, _trip, ts in rows:
                 try:
                     price = float(raw_price)
                 except (TypeError, ValueError):
@@ -1306,6 +1328,23 @@ class PriceStorage:
                  day + " 00:00:00", nxt + " 00:00:00")).fetchall()
             if not rows:
                 return
+            # 口径互斥（r805y，与 refresh_daily 同律）：按航班身份分桶时，
+            # 同一班机的单程价与往返总价会撞进同一个 key（受控实验：
+            # close 从 500 被抬到 1200）。但一律排除往返会让只配往返的
+            # 航线整片空（实测 0 行）。取法：有单程行就只用单程行；
+            # 一条单程都没有时才用往返行。
+            def _is_rt(_ex):
+                try:
+                    _o = json.loads(_ex or "[]")
+                except ValueError:
+                    return False
+                _it = _o if isinstance(_o, list) else (
+                    [_o] if isinstance(_o, dict) else [])
+                return any(isinstance(x, dict)
+                           and str(x.get("tripType") or "") == "RT"
+                           for x in _it)
+            if any(not _is_rt(r["extra"]) for r in rows):
+                rows = [r for r in rows if not _is_rt(r["extra"])]
             for r in rows:
                 try:
                     obj = json.loads(r["extra"] or "[]")

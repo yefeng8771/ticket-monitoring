@@ -17,7 +17,7 @@ def test_search_meta_text_has_an_11px_floor_and_darker_ink():
         "#searchview .srx-fl .sub{font-size:11px;color:var(--tx2)",
         "#searchview .srx-thead{font-size:11px;color:var(--tx2)",
         "#searchview .srx-b{font-size:11px;height:19px",
-        "#searchview .srx-mtools button{font-size:11px}",
+        "#searchview .srx-mtools button{font-size:12px}",  # 2026-11-01 与同轨 .srx-mtab 同档（原 11px）
         "#searchview .srx-times .xday{font-size:11px",
     ):
         assert needle in STYLE, needle

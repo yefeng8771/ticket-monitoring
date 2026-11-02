@@ -29,9 +29,11 @@ def test_radar_canvas_can_exceed_viewport():
     但 scrollWidth==clientWidth，拖了完全不动 —— 用户读作「滑动卡顿」。
     画布宽必须是「可视宽」与「点数 × 最小间距」取大（带上限）。"""
     src = _src()
-    i = src.index("const baseW=Math.max(320,wrap.clientWidth||600);")
-    seg = src[i:i + 700]
-    assert "const W=Math.max(baseW,Math.min(units*MINPX,baseW*2.4));" in seg, seg
+    # r850：注释变长后 700 字符窗口会漏掉公式，改为直接全文定位公式。
+    seg = src
+    # r850：上限系数不再钉死（原 baseW*2.4 会压缩密集采样），
+    # 只守「取大(可视宽, 点数×间距, 上限)」的结构。
+    assert "const W=Math.max(baseW,Math.min(units*MINPX," in seg, seg
     assert "c.style.width=W+'px';" in seg, seg
     # 溢出时必须真的能横滚
     assert ".spmon-chartwrap{overflow-x:auto;overflow-y:hidden" in src

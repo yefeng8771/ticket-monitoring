@@ -65,6 +65,18 @@ def _isolate_render_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_scene_dir(tmp_path, monkeypatch):
+    """失败现场快照重定向（r805ay，与 TM_RENDER_DIR 同构）。
+
+    `crawlers.app_qunar._save_fail_scene` 按 CWD 写 `debug/scene/`；
+    补了「失败即落现场」之后，替身设备的失败用例会把合成现场
+    （坐标 60,320,300,380 的「北京」）写进生产调试目录——实测
+    2026-11-01 17:36 落了一份假现场，差点当成真机证据。
+    """
+    monkeypatch.setenv("TICKET_SCENE_DIR", str(tmp_path / "scene"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_sentinel_state(tmp_path, monkeypatch):
     import main as _m
     # r320 写入面生产资格门同轮双锚：环境变量（helper 首选支）与
@@ -104,6 +116,12 @@ def _isolate_webui_probe_auth(monkeypatch):
     import webui as _w
     monkeypatch.setattr(_w, "_PROBE_AUTH", {}, raising=False)
     monkeypatch.setattr(_w, "_IN_HEALTH_DECORATE", False, raising=False)
+    # r805cf：登录状态现在也读 `fetch_paths` 的滑块/登录门。测试默认不读
+    # 生产账本——否则生产里今天真有一条 tuniu PC blocked，所有用旧 saved_at
+    # 的用例都会被推成 challenge。要验账本行为的用例显式覆写该函数。
+    monkeypatch.setattr(_w, "_recent_path_rows", lambda hours=24: {},
+                        raising=False)
+    monkeypatch.setattr(_w, "_SLOT_VERIFY", {}, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -123,3 +141,22 @@ def _neutralize_host_proxy_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,::1")
     monkeypatch.setenv("no_proxy", "localhost,127.0.0.1,::1")
+
+
+@pytest.fixture(autouse=True)
+def _pretend_graphical(monkeypatch):
+    """登录窗口类用例与「跑测机有没有 X」解耦（r675 收口到 conftest）。
+
+    `_start_login` 在 `_no_graphical_env()` 为真时短路回 `kind=no_gui`，
+    这是真机（Docker/无 X 的 Linux）需要的保护；但它会让 CI 上所有
+    「窗口能不能真的开」的用例一条都测不到——本地 Windows 恒有桌面，
+    这类红只在 CI 出现（test_channel_status 三条、r620 四条）。
+    默认按「有图形环境」跑，窗口逻辑本身由用例的 _login_window 替身
+    校验；要专门验 no_gui 分支的用例在自身内部 setattr 回 True 即可
+    （monkeypatch LIFO，后设者胜）。
+    """
+    import sys as _sys
+    if "webui" not in _sys.modules:
+        return
+    import webui as _w
+    monkeypatch.setattr(_w, "_no_graphical_env", lambda: False, raising=False)

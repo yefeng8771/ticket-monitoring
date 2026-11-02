@@ -14,6 +14,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -39,7 +40,10 @@ def test_object_extra_does_not_break_daily_bucket():
         _fp(349, '{"calendar": false, "source": "app-list"}'),
         _fp(380, '{"calendar": false, "source": "app-list"}'),
     ])
-    day = "2026-10-30"
+    # day 必须是**写入当天**：refresh_daily 按 fetched_at 落在 [day 00:00,
+    # day 23:59] 过滤，写死某一天则第二天起窗口永远落空 —— 断言会以
+    # 「对象型 extra 没进日桶」的形式误报，看似功能坏了，其实是测试过期。
+    day = datetime.now().strftime("%Y-%m-%d")
     st.refresh_daily("SHA", "CAN", "2026-12-04", day)   # 不该抛
     con = sqlite3.connect(st.db_path)
     rows = con.execute(
@@ -56,7 +60,8 @@ def test_array_extra_still_expands_per_element():
     st = _storage()
     st.save_many([_fp(300, '[{"price": 310, "transCity": ""},'
                             '{"price": 450, "transCity": "WUH"}]')])
-    st.refresh_daily("SHA", "CAN", "2026-12-04", "2026-10-30")
+    st.refresh_daily("SHA", "CAN", "2026-12-04",
+                     datetime.now().strftime("%Y-%m-%d"))
     con = sqlite3.connect(st.db_path)
     rows = dict((k, (n, lo, hi)) for k, n, lo, hi in con.execute(
         "SELECT kind, n, lo, hi FROM price_daily").fetchall())
@@ -74,7 +79,8 @@ def test_mixed_shapes_in_one_bucket():
         _fp(300, '[{"price": 300, "transCity": ""}]'),
         _fp(360, '{"calendar": false}'),
     ])
-    st.refresh_daily("SHA", "CAN", "2026-12-04", "2026-10-30")
+    st.refresh_daily("SHA", "CAN", "2026-12-04",
+                     datetime.now().strftime("%Y-%m-%d"))
     con = sqlite3.connect(st.db_path)
     n = con.execute("SELECT n FROM price_daily WHERE kind='d'").fetchone()
     con.close()

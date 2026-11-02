@@ -81,11 +81,18 @@ def test_clears_residual_text_before_typing():
 
 
 def test_intl_does_not_switch_city_tab():
-    """国际航线不该点「国内」tab：那会把列表换成国内热门，反而选不到。"""
+    """国际城市不该被切到「国内」tab：那会把列表换成国内热门，反而选不到。
+
+    r805br 之后更进一步：**档位按钮完全不点**——真机实测点它会把整页换掉
+    （22:06 回首页、22:08 落到特价页），而搜索框在任何档位都能选中城市
+    （22:22 探针：占位行 → 输入 → 城市行 → 回首页，43s）。这里守两件事：
+    ① 代码里不再有「切到国内档」的分支；② 国际城市仍有搜索兜底。
+    """
     import inspect
     from crawlers.app_qunar import AppQunarCrawler
     src = inspect.getsource(AppQunarCrawler._set_city)
-    assert "if not intl:" in src, "国际档也切档了，国际城市会选不到"
+    assert "want_tab" not in src, "又在城市页切档了"
+    assert "_search_result_row(page, city)" in src, "国际城市没有搜索兜底"
 
 
 def test_pick_date_waits_for_dialog_activity():

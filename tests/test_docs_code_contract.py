@@ -49,10 +49,14 @@ def test_pchart_api_documented_matches_code():
 
 
 def test_canvas_width_rule_matches_code():
-    """画布宽度必须是「取大(可视宽, min(点数×间距, 2.4×))」，不得写回锁宽。"""
+    """画布宽度必须是「取大(可视宽, min(点数×间距, 安全上限))」，不得写回锁宽。"""
     assert "不随点数放大" not in SPEC, "规范退回到已被否决的锁宽描述"
-    assert "baseW*2.4" in WEBUI or "baseW * 2.4" in WEBUI, "代码中未找到 2.4× 上限"
-    assert "2.4" in SPEC and "可视宽" in SPEC, "规范未说明画布宽度的取大规则"
+    # r850：2.4 倍上限已撤销（会把密集采样压在同一像素）。
+    # 契约改为：代码有「取大(可视宽, 点数×间距, 上限)」结构，规格同步说明。
+    # r861：上限改为按点数给（最多约 3 个视口宽），另留 60000px 极端安全帽。
+    assert "const W=Math.max(baseW,Math.min(units*MINPX,_capW,60000));" in WEBUI
+    assert "_capW=Math.max(baseW*3" in WEBUI, "代码中未找到按视口宽计算的上限"
+    assert "60000" in SPEC and "可视宽" in SPEC, "规范未说明画布宽度的取大规则"
 
 
 def test_readme_quoted_label_emoji_prefix():
@@ -155,8 +159,17 @@ def test_spec_line_refs_still_point_at_claim():
     # (文档锚点特征, 源文件, 行号, 该行必须包含的串)
     CHECKS = [
         ("PEP 604", "core/radar_alerts.py", 25, "float | None"),
-        ("PEP 604", "crawlers/ctrip.py", 1010, "float | None"),
-        ("PEP 604", "crawlers/tongcheng.py", 1051, "float | None"),
+    ]
+    # 同程那条改成**符号锚点**（文档里已不再写行号）：只要该函数签名
+    # 仍带 PEP 604 注解就算过。此前用行号，r805 加 PC 通路后它从
+    # 1065→1183→1187 连漂两次——每加几行代码就要改文档，是判据选错了
+    # 形态（应该钉符号，不该钉行号）。
+    SYMBOL_CHECKS = [
+        ("PEP 604", "crawlers/tongcheng.py", "def _pick_lowest(",
+         "float | None"),
+        # 加往返通路后 ctrip.py 连续增长，行号会不断漂；钉函数签名。
+        ("PEP 604", "crawlers/ctrip.py", "def _pick_lowest(",
+         "float | None"),
     ]
     # 文档里实际出现的行号引用必须都在 CHECKS 里登记过——
     # 否则新增一处引用而门禁不知道，它照样是绿的（CONTRIBUTING 就曾被漏掉）。
@@ -193,6 +206,25 @@ def test_spec_line_refs_still_point_at_claim():
                              % (rel, lineno, needle, lines[lineno - 1].strip()[:60]))
     assert not offenders, (
         "SPEC 的行号引用已漂移（改用符号锚点，或同步行号）：\n" + "\n".join(offenders))
+
+    # 符号锚点：找「def 名(」那一行的**签名块**里是否还有该注记
+    sym_offenders = []
+    for label, rel, anchor, needle in SYMBOL_CHECKS:
+        p = ROOT / rel
+        if not p.exists():
+            sym_offenders.append("%s: 文件不存在" % rel)
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if anchor not in text:
+            sym_offenders.append("%s: 找不到锚点「%s」" % (rel, anchor))
+            continue
+        i = text.index(anchor)
+        # 函数签名可能跨行：取锚点之后 400 字符内的全部内容
+        if needle not in text[i:i + 400]:
+            sym_offenders.append("%s: 锚点「%s」附近 400 字内已无「%s」"
+                                 % (rel, anchor, needle))
+    assert not sym_offenders, (
+        "符号锚点判据失效：\n" + "\n".join(sym_offenders))
 
     # §6.3 已改符号锚点：不得再写 webui.py 的行号区间
     assert not re.search(r"webui\.py:\d{4,5}", SPEC), (
@@ -594,11 +626,16 @@ def test_no_ghost_tokens_in_spec():
     css = re.search(r"<style>(.*?)</style>", WEBUI, re.S).group(1)
     all_style = "".join(re.findall(r"<style[^>]*>(.*?)</style>", WEBUI, re.S))
     defined = set(re.findall(r"--([a-z0-9-]+)\s*:", all_style))
+    # 还有一类令牌由 JS 在运行时写到根元素上（页头/标签条/保存条实测高度：
+    # `--hdh` `--tabsh` `--sbh` `--mtabsh`）——它们没有 CSS 声明，
+    # 却是真实的、被 CSS `var()` 消费的令牌，不能判成幽灵。
+    defined |= set(re.findall(
+        r"setProperty\(\s*['\"]--([a-z0-9-]+)['\"]", WEBUI))
 
     # 排除命令行参数（如 `--local`），它们不是 CSS 令牌
     CLI_FLAGS = {"local", "help", "version", "demo", "login", "setup-login",
                  "profile-ui", "ui-shards", "workers", "serial", "no-ui",
-                 "no-pin", "bootstrap-deps", "pytest-args"}
+                 "no-pin", "bootstrap-deps", "pytest-args", "app-status"}
     ghosts = []
     tokens = sorted(set(re.findall(r"`--([a-z0-9-]+)`", SPEC)))
     # 下限：SPEC 里确有 24 个 `--token` 引用（实测）。0 命中说明反引号写法变了。
@@ -1312,7 +1349,16 @@ def test_spec_historical_run_notes_are_time_bound():
     spec = (ROOT / "docs" / "EXECUTION_SPEC_LATEST.md").read_text(encoding="utf-8")
     lines = spec.splitlines()
 
-    TIME_MARK = re.compile(r"20\d\d-\d\d-\d\d|\d{1,2}:\d{2}|第[一二三四五六七八九十]+次|当时|那轮")
+    # 轮次限定既可能写成「第十次」也可能写成「第 10 次」——只认中文数字会
+    # 把后者误判成「没有限定」（实测误报 1 条：5624 passed 那行写着第 10 次）。
+    # 轮次限定在本仓最常见的写法是 **rNNN**（每条记录都以「• r805xx …」开头），
+    # 原判据只认日期与「第 N 次」，把 r812 那类「（7 passed）」误判成没限定
+    # （实测 2026-11-01：r812 折叠门禁记录 8 行后才出现轮次号）。轮次号与
+    # 日期一样是「这段说的是那一轮，不是现状」的限定，一并认。
+    # 轮次号常嵌在门禁文件名里（`test_r812_fold_…`），所以不加词边界。
+    TIME_MARK = re.compile(
+        r"20\d\d-\d\d-\d\d|\d{1,2}:\d{2}|第\s*[一二三四五六七八九十\d]+\s*次|"
+        r"r\d{3,}|当时|那轮")
     # 「0 failed」是**验收标准**（全绿的定义），不是某次运行的快照——豁免。
     # 只有带具体数字的「N passed」「N 项全过」才是运行记录。
     offenders = []
@@ -1473,7 +1519,7 @@ def test_readme_feature_parity():
 
     # CN 能力名 → EN 侧可接受的词族（任命中即算覆盖）
     FAMILY = {
-        "五渠道明细": ["five-channel"],
+        "浏览器五渠道明细": ["five-channel"],
         "多日期监控": ["multi-date"],
         "往返多返程日": ["round-trip"],
         "航线启停": ["pause"],
@@ -1523,6 +1569,7 @@ def test_readme_feature_parity():
     # 反向：EN 有能力行、CN 完全没有对应词面时，中文读者同样会漏读。
     CN_FAMILY = {
         "five-channel": ["五渠道"], "multi-date": ["多日期"], "round-trip": ["往返"],
+        "browser five-channel detail": ["五渠道"],
         "qualification": ["达标判定", "出发时段", "中转衔接"],
         "multi-user": ["多租户"], "special-fare": ["特价机票"],
         "international": ["国际航班"], "aggregated push": ["聚合推送"],
@@ -1757,13 +1804,15 @@ def test_channel_session_statuses_documented():
     missing = sorted(k for k in keys if ("| %s |" % k) not in doc)
     assert not missing, "CHANNEL_SESSION 状态表缺少: %s" % missing
 
-    # 文档还声称「前 8 个由后端产出；后 3 个前端派生」。这个划分也得对得上：
-    # 若后端新增/删除状态而文档仍写 8/3，读者会按错的来源去查代码。
-    prod = WEBUI.find('status = "saving" if saving else "active"')
-    assert prod > 0, "未找到 /api/login-state 的 status 产生处，本门禁失去锚点"
-    prod_seg = WEBUI[prod:prod + 700]
-    backend = set(re.findall(r'status = "([a-z_]+)"', prod_seg))
-    backend |= set(re.findall(r'\? "([a-z_]+)"', prod_seg))
+    # 文档还声称「前 N 个由后端产出；后 M 个前端派生」。这个划分也得对得上：
+    # 若后端新增/删除状态而文档仍写旧数，读者会按错的来源去查代码。
+    # 锚整个 _login_state_view 函数而不是固定字符窗：窗宽会随新增分支漂移，
+    # 漏掉靠后的状态（r805cf 加 challenge 时实测窗只覆盖到第 8 个）。
+    start = WEBUI.find("def _login_state_view(")
+    assert start > 0, "未找到 /api/login-state 的 status 产生处，本门禁失去锚点"
+    end = WEBUI.find("\ndef _start_login(", start)
+    prod_seg = WEBUI[start:(end if end > start else start + 8000)]
+    backend = set(re.findall(r'status = \(?"([a-z_]+)"', prod_seg))
     backend |= set(re.findall(r'else "([a-z_]+)"', prod_seg))
     assert len(backend) >= 6, "后端 status 只解析出 %d 个，疑似结构变更" % len(backend)
     derived = keys - backend
@@ -1915,7 +1964,11 @@ def test_intl_design_core_contract_matches_code():
         # 就会天天报一条与代码无关的红，掩盖真正的形态变化。
         if tuniu_intl == 0:
             pytest.skip("库里没有途牛国际行，形态判据无检查对象")
-        assert rows, "库里有途牛国际行但按航线聚合为空，本门禁失去检查对象"
+        # 形态判据要的是「每条航线都有足够多的轮次」。库里只有个位数样本
+        # （例如本轮只跑了一两条航线，或刚清库）时聚合为空是**样本不足**，
+        # 不是形态变了——把它判红等于让门禁随采集进度忽红忽绿。
+        if not rows:
+            pytest.skip("途牛国际样本不足（%d 行，尚无航线累计 ≥20 行）" % tuniu_intl)
         # 实测四条航线**精确相等**（285/285、274/274、249/249、204/204）。
         # 容差只给 20%：>1.2× 就说明出现了"一轮落多行"（负控时注入 60 行同 fetched_at，
         # 204→264 = 1.29×，阈值若设 1.5 会漏掉，故收紧）。
@@ -1996,9 +2049,15 @@ def test_asset_ledger_counts_match_code():
         return WEBUI[i:j if j > 0 else i + 2_000_000]
 
     # 渠道品牌图标
-    brands = set(re.findall(r'"([a-z]+)"\s*:\s*"data:image', _block("const SRX_BRAND_IMG={")))
-    assert len(brands) == 5, "品牌图标数已变：%d" % len(brands)
-    assert "渠道图标（5/5）" in doc, "ASSET_LEDGER 未写「渠道图标（5/5）」"
+    brands = set(re.findall(r'"([a-z_]+)"\s*:\s*"data:image', _block("const SRX_BRAND_IMG={")))
+    # App 渠道（app_zhixing / app_qunar）也要有官方图标：只有 5 家浏览器
+    # 渠道时，配置页/检索行上的「智行 App」「去哪儿 App」会静默丢图标
+    # （srxPlatIcon 找不到就返回空串）。
+    from core.channels import APP_CHANNELS, BROWSER_CHANNELS
+    need = set(BROWSER_CHANNELS) | set(APP_CHANNELS)
+    missing = need - brands
+    assert not missing, "渠道缺官方图标：%s" % sorted(missing)
+    assert "%d/%d）" % (len(brands), len(need)) in doc,         "ASSET_LEDGER 未写「渠道图标（%d/%d）」" % (len(brands), len(need))
 
     # 航司图标
     airlines = set(re.findall(r'"([A-Z0-9]{2})"\s*:\s*"data:image', _block("SRX_AIR_IMG={")))

@@ -455,8 +455,15 @@ def main():
                 # ---- 渠道健康子视图 + 日志弹层 ----
                 pg.click('.mtab[data-t="health"]'); pg.wait_for_timeout(400)
                 # 作用域钉 #hbody：推送通道区(#pushhl)同用 .hrow 类，
-                # 全页计数被通道行撑爆（5 渠道+2 通道恒 7）
-                ck("健康 5 渠道", len(pg.query_selector_all("#hbody .hrow")) == 5)
+                # 全页计数被通道行撑爆（渠道行+2 通道恒多 2）。
+                # r796 起健康区也覆盖两家 App 渠道，渠道数不再恒为 5——
+                # 按注册渠道数算，别写死。注意 SRX_PLATS 本身已含两家 App
+                # （APP_PLAT_NAME 是它的子集），两者相加会重复计数。
+                _nhr = pg.evaluate("""()=>{
+                  const r=[...document.querySelectorAll('#hbody .hrow')];
+                  const reg=Object.keys(SRX_PLATS||{}).length;
+                  return {n:r.length,reg};}""")
+                ck("健康区每家注册渠道一行", _nhr["n"] == _nhr["reg"], str(_nhr))
                 # r358 来源接入板：PC 停服 → H5 → 登录门；demo 不伪造登录态
                 ck("来源接入板可见", pg.is_visible("#srccap"))
                 ck("来源接入三节点", len(
@@ -2110,12 +2117,28 @@ def main():
                 ck("r349d 登录卡等宽同顶/无位移/按钮等宽 %s" % _lg, _lg["ok"])
                 ck("渠道登录行渲染", len(
                     pg.query_selector_all("#loginRows .btn2")) >= 5)
-                cnode0 = pg.evaluate(
-                    "document.querySelectorAll('#cfgview *').length")
+                def _stable_cfg_nodes():
+                    # 异步懒加载（登录态/能力矩阵/App 卡）会在切面板前后
+                    # 继续插入节点；直接取瞬时值会在并发门禁里假红。
+                    # 等节点数连续两次采样不变再比较，原意仍是「切换不得增删」。
+                    last, same = -1, 0
+                    for _ in range(20):
+                        n = pg.evaluate(
+                            "document.querySelectorAll('#cfgview *').length")
+                        if n == last:
+                            same += 1
+                            if same >= 2:
+                                return n
+                        else:
+                            same, last = 0, n
+                        pg.wait_for_timeout(150)
+                    return last
+                cnode0 = _stable_cfg_nodes()
                 pg.click('#cfgnav .cnav[data-p="users"]')
                 _wait_until(pg, "()=>{const e=document.getElementById('sec-users');return !!e&&e.getBoundingClientRect().width>0}")
-                ck("面板切换零插拔", cnode0 == pg.evaluate(
-                    "document.querySelectorAll('#cfgview *').length"))
+                cnode1 = _stable_cfg_nodes()
+                ck("面板切换零插拔", cnode0 == cnode1,
+                   "%s -> %s" % (cnode0, cnode1))
                 ck("面板切换：用户显", pg.is_visible("#sec-users"))
                 ck("面板切换：登录隐", not pg.is_visible("#sec-login"))
                 ck("配置表单", len(pg.query_selector_all("#cfgform input")) > 0)
@@ -6124,8 +6147,11 @@ def main():
                 _pr = pg.evaluate("""()=>({
                   f:!!document.getElementById('srxFrom'),t:!!document.getElementById('srxTo'),
                   d:!!document.getElementById('srxDate'),go:!!document.getElementById('srxGo'),
-                  chips:document.querySelectorAll('#srxPlatPick input').length})""")
-                ck("r340c 主动探针表单完整", _pr["f"] and _pr["t"] and _pr["d"] and _pr["go"] and _pr["chips"] == 5)
+                  chips:document.querySelectorAll('#srxPlatPick input').length,
+                  expect:(typeof SRX_PLATS!=='undefined')?Object.keys(SRX_PLATS).length:0})""")
+                ck("r340c 主动探针表单完整",
+                   _pr["f"] and _pr["t"] and _pr["d"] and _pr["go"]
+                   and _pr["expect"] >= 5 and _pr["chips"] == _pr["expect"], str(_pr))
                 _srx = pg.evaluate("""()=>({
                   view:getComputedStyle(document.getElementById('searchview')).display,
                   rows:document.querySelectorAll('#srxRows .srx-row').length,
@@ -6134,7 +6160,7 @@ def main():
                   nav:document.getElementById('navSearch').classList.contains('on')})""")
                 ck("r340b 解析列表+五渠道原页镜像",
                    _srx["view"] == "block" and _srx["rows"] > 0
-                   and _srx["mch"] == 5 and _srx["mrows"] > 0 and _srx["nav"])
+                   and _srx["mch"] >= 5 and _srx["mrows"] > 0 and _srx["nav"])
                 # r353 官方品牌图标层：渠道方形 App 图标 / 航司圆形图标；
                 # 到达 +1 徽标不得改变文本基线。
                 _bic = pg.evaluate("""()=>{
@@ -6158,9 +6184,11 @@ def main():
                     xdays:document.querySelectorAll('#srxRows .xday').length,
                     xinside:xd?!!xd.closest('.arr'):false,
                     maxOff:offs.length?Math.max(...offs):0};}""")
+                # 镜像 tab = 每个渠道一个（浏览器五家 + App 两家，r644 起）；
+                # 断言「不少于浏览器渠道数」而不是写死 5，避免接入新渠道就红。
                 ck("r353 渠道方形/航司圆形官方图标",
                    _bic["chan"] > 0 and _bic["air"] > 0
-                   and _bic["bad"] == 0 and _bic["mtab"] == 5)
+                   and _bic["bad"] == 0 and _bic["mtab"] >= 5)
                 ck("r353 起降时刻基线零漂移",
                    _bic["maxOff"] <= 0.6
                    and (_bic["xdays"] == 0 or not _bic["xinside"]))
@@ -6219,12 +6247,28 @@ def main():
                    pg.evaluate("document.querySelectorAll('#srxRawBox .hit').length") == 1)
                 pg.evaluate("document.querySelector('#srxDetail [data-srxclose]').click()")
                 pg.wait_for_timeout(200)
-                pg.click('.srx-hero-act button:has-text("五平台校准册")'); pg.wait_for_timeout(400)
+                # 入口按钮文案改过（「五平台校准册」→「页面校准册」），
+                # 按 onclick 定位而不是按文案 has-text，否则改名就让整片
+                # 自检超时中断、后面 9 个分区根本没跑到（644/668）。
+                _galbtn = pg.evaluate("""()=>{const b=document.querySelector(
+                  '.srx-hero-act button[onclick="srxOpenGallery()"]');
+                  if(!b)return null;
+                  return {t:(b.textContent||'').trim(),
+                          vis:b.offsetParent!==null,
+                          w:b.getBoundingClientRect().width};}""")
+                ck("r340b 校准册入口在页头动作区可见",
+                   bool(_galbtn) and "校准册" in _galbtn["t"]
+                   and _galbtn["vis"] and _galbtn["w"] > 40)
+                pg.click('.srx-hero-act button[onclick="srxOpenGallery()"]')
+                pg.wait_for_timeout(400)
                 _srxg = pg.evaluate("""()=>({
                   open:document.getElementById('srxGallery').classList.contains('open'),
                   rails:document.querySelectorAll('#srxGallery [data-galch]').length,
                   views:document.querySelectorAll('#srxGallery [data-galview]').length})""")
-                ck("r340b 五平台校准册四视图", _srxg["open"] and _srxg["rails"] == 5 and _srxg["views"] == 4)
+                # 校准册按渠道出图：浏览器五家必齐，App 渠道接入后会多出
+                # 对应的原页镜像，断言改为「不少于五条」。
+                ck("r340b 页面校准册四视图",
+                   _srxg["open"] and _srxg["rails"] >= 5 and _srxg["views"] == 4)
                 pg.evaluate("srxCloseGallery()"); pg.wait_for_timeout(200)
                 pg.evaluate("""()=>{const d=document.querySelectorAll(
                   '#srxDates [data-date]');if(d.length>1)d[1].click();}""")
@@ -6501,17 +6545,23 @@ def main():
                   const v=document.getElementById('searchview');
                   if(!v.classList.contains('srx-ov-collapsed'))srxToggleOverview();
                   const oc=document.getElementById('srxOvHero');
+                  const tool=document.getElementById('srxOvTool');
                   const head=document.querySelector('#srxBand .srx-band-h');
                   const days=document.getElementById('srxBandBody');
                   const brief=document.getElementById('srxBrief');
                   if(!oc||!head||!days||!brief)return {missing:true};
                   const show=e=>e&&getComputedStyle(e).display!=='none'&&e.getBoundingClientRect().height>0;
-                  const r=oc.getBoundingClientRect(), rh=head.getBoundingClientRect();
+                  /* r795：收起态整条价带 display:none，标题行那颗触发器随之
+                     不可见；工具区开关此时是**唯一**入口，必须可见、可点、
+                     文案说的是动作（「展开概览」）。量的是这个入口。 */
+                  const tr=tool.getBoundingClientRect();
                   return {collapsed:v.classList.contains('srx-ov-collapsed'),
                     inHead:head.contains(oc), headText:head.textContent.trim().slice(0,24),
-                    closedX:Math.round(r.x), closedY:Math.round(r.y),
+                    heroVis:show(oc), toolVis:show(tool),
+                    toolX:Math.round(tr.x), toolY:Math.round(tr.y),
+                    toolW:Math.round(tr.width), toolTxt:(tool.textContent||'').trim(),
                     daysClosed:show(days), briefClosed:show(brief),
-                    headH:Math.round(rh.height)};}""")
+                    headH:Math.round(head.getBoundingClientRect().height)};}""")
                 pg.evaluate("srxToggleOverview()")
                 pg.wait_for_timeout(700)
                 _m304o = pg.evaluate("""()=>{
@@ -6529,18 +6579,47 @@ def main():
                     headH:Math.round(rh.height),
                     heroText:oc.textContent.trim(),
                     heroToggle:oc.getAttribute('aria-expanded')};}""")
-                # r383：开合钮就在价带头（常驻标题行）内；收起只收天数条与正文，
-                # 因此不存在「只放按钮的独立行」，按钮在行内位置两态一致。
-                ck("v383 概览：开合钮并入价带头行、两态不跳位、收起只收正文",
+                # r383：开合钮在**展开态**位于价带头（常驻标题行）内；收起只收
+                # 天数条与正文，因此不存在「只放按钮的独立行」，按钮在行内位置
+                # 两态一致。r832 起展开态的标题行是 **grid 两行**（第一行标题+
+                # 触发器，其余控件下移）——那是用户点名的「展开的中间还有元素」
+                # 的修法，两态行高本就不同（34 vs 107）。守的是「按钮两态不跳位」
+                # （X/Y ≤1px）与「收起只收正文」，不再要求两态等高。
+                # r795：收起态整条价带 display:none，价带头里那颗按钮随之不可见，
+                # 「两态同坐标」在新设计里无从谈起。改守用户真正会遇到的死路：
+                # 收起后**必须**还有一个看得见、文案说的是「展开概览」的入口，
+                # 否则用户再也打不开概览（实测三档可见入口数曾为 0）。
+                ck("v383 概览：收起态仍有可见入口、文案说动作、收起只收正文",
                    _m304c["inHead"] and _m304o["inHead"]
                    and _m304c["collapsed"] and not _m304o["collapsed"]
                    and not _m304c["daysClosed"] and not _m304c["briefClosed"]
                    and _m304o["daysOpen"] and _m304o["briefOpen"]
-                   and _m304c["headH"] == _m304o["headH"]
-                   and abs(_m304o["openX"] - _m304c["closedX"]) <= 1
-                   and abs(_m304o["openY"] - _m304c["closedY"]) <= 1
+                   and _m304c["heroVis"] is False
+                   and _m304c["toolVis"] is True and _m304c["toolW"] >= 40
+                   and _m304c["toolTxt"] == "展开概览"
+                   and _m304c["toolX"] >= 0 and _m304c["toolY"] >= 0
                    and _m304o["heroToggle"] == "true"
                    and _m304o["heroText"] == "收起概览", str([_m304c, _m304o]))
+                # 负控：入口必须真的能把概览放回来——点它一次，收起态翻成展开，
+                # 且天数条重新可见。只查 aria/文案的话，按钮画得像却接错函数也会绿。
+                _m304r = pg.evaluate("""()=>{
+                  const v=document.getElementById('searchview');
+                  const tool=document.getElementById('srxOvTool');
+                  if(!v.classList.contains('srx-ov-collapsed'))srxToggleOverview();
+                  tool.click();
+                  const days=document.getElementById('srxBandBody');
+                  const show=e=>e&&getComputedStyle(e).display!=='none'
+                    &&e.getBoundingClientRect().height>0;
+                  return {collapsed:v.classList.contains('srx-ov-collapsed'),
+                    days:show(days),txt:(tool.textContent||'').trim()};}""")
+                ck("v383b 工具区入口真能展开概览（负控）",
+                   _m304r["collapsed"] is False and _m304r["days"] is True
+                   and _m304r["txt"] == "收起概览", str(_m304r))
+                # 后续小节依赖「概览已收起」这个初始态（上面原本就是以收起态
+                # 进入 v304 的），负控展开后必须还原，否则后面的坐标全漂。
+                pg.evaluate("""()=>{const v=document.getElementById('searchview');
+                  if(!v.classList.contains('srx-ov-collapsed'))srxToggleOverview();}""")
+                pg.wait_for_timeout(300)
                 pg.evaluate("srxToggleOverview()")
                 pg.wait_for_timeout(250)
                 pg.evaluate("""()=>{SRX.restore={pair:'URC|SHA'};srxRenderRestore();srxRenderCtx();}""")
@@ -6946,7 +7025,13 @@ def main():
                    and _h358["acts"]["r"] <= _h358["d"]["r"] - 10,
                    str(_h358))
                 _p358.evaluate("srxCloseDetail();showMonTab('health')")
-                _p358.wait_for_timeout(800)
+                # 健康数据异步到达：固定 800ms 在并行门禁负载下会让
+                # 「预览」空壳抢在格子前（r815e 首跑/本轮均复现）；
+                # 等到真有 data-ts 格子再读，仍为空则照常判红。
+                _wait_until(
+                    _p358,
+                    "() => !!document.querySelector('#hbody .hc[data-ts]')",
+                    cap_ms=6000)
                 _hc358 = _p358.evaluate("""()=>{
                   const c=[...document.querySelectorAll('#hbody .hc')]
                     .find(x=>x.hasAttribute('data-ts'));
@@ -6997,16 +7082,22 @@ def main():
                     (e.querySelector('.srx-src-big')||{}).textContent||'0',10)||0);
                   const mirc=[...document.querySelectorAll(
                     '#srxMirror .srx-mtab .n')].map(e=>parseInt(e.textContent,10)||0);
+                  // App 渠道（r644 起）也会进镜像，计数为 0 的 tab 不参与
+                  // 「可用渠道优先」排序断言——它们是没数据的渠道，不是乱序。
                   const desc=a=>a.every((v,i)=>i===0||v<=a[i-1]);
                   return {small:small,count:srcs.length,tops:tops,
                     maxH:hs.length?Math.max(...hs):null,
                     icon:ic?+ic.getBoundingClientRect().width.toFixed(1):0,
                     counts:counts,sorted:desc(counts),mirc:mirc,msorted:desc(mirc)}}""")
+                # 五源条：浏览器五家必须齐（App 渠道接入后总数会更多），
+                # 「可用渠道优先」只对**有数据**的渠道判降序。
+                _mz = [v for v in _l360["mirc"] if v > 0]
                 ck("r360 检索页微字/五源条/可用渠道优先",
-                   _l360["small"] == 0 and _l360["count"] == 5
+                   _l360["small"] == 0 and _l360["count"] >= 5
                    and len(_l360["tops"]) == 1 and _l360["maxH"] <= 60
                    and _l360["icon"] >= 20 and _l360["sorted"]
-                   and _l360["msorted"], str(_l360))
+                   and all(_mz[i] <= _mz[i-1] for i in range(1, len(_mz))),
+                   str(_l360))
                 # ===== r361 图标/文案不相交 + 时刻列/探针控件按内容定宽 =====
                 # 1280 是历史重叠真实宽度（+1 曾压到「仅观察」），不只在 1512 验。
                 _p359.set_viewport_size({"width": 1280, "height": 982})
@@ -7100,11 +7191,15 @@ def main():
                     gap:(b&&c)?+(c.left-b.right).toFixed(1):null,
                     legendFits:!!(s&&l)&&l.bottom<=s.bottom-1,
                     over:document.documentElement.scrollWidth>innerWidth+1}}""")
+                # r796 起关注卡图例也覆盖两家 App（演示数据 7 家），
+                # 不再恒为 5。判的是「图例项与注册渠道同数」，不是 5 这个字。
+                _nch361 = pg.evaluate("Object.keys(SRX_PLATS||{}).length")
                 ck("r361 关注卡渠道图标/图例不重叠",
                    not _mw361.get("none")
-                   and _mw361["n"] == 5 and _mw361["icon"] >= 17
+                   and _mw361["n"] == _nch361 and _mw361["icon"] >= 17
                    and _mw361["gap"] >= 4 and _mw361["legendFits"]
-                   and not _mw361["over"], str(_mw361))
+                   and not _mw361["over"],
+                   str(dict(_mw361, channels=_nch361)))
                 _p359.evaluate("switchView('search')")
                 _p359.wait_for_timeout(700)
                 # 中性首屏不再自动锁定日期；价带门禁显式选择一个有数据日期
@@ -7297,10 +7392,17 @@ def main():
                 ck("goal 探针提交与输入同基线", abs(_pr["go"]["b"] - _pr["date"]["b"]) <= 1 and _pr["pick"]["h"] <= 32, str(_pr))
                 pg.evaluate("()=>{const p=document.querySelector('#srxProbe');if(p&&p.classList.contains('open'))srxToggleProbe()}")
                 pg.wait_for_timeout(300)
-                _tc = pg.evaluate("""()=>{const t=document.querySelector('#srxProbeToggle');const r=t.getBoundingClientRect();
+                # 2026-11-01 起探针卡默认不占位，卡内「收起/展开探针」只存在于展开态；
+                # 收起态的入口是工具行里的「主动探针」#srxProbeTool（两态都可见）。
+                pg.evaluate("()=>document.getElementById('srxProbeTool').click()")
+                pg.wait_for_timeout(350)
+                _tc = pg.evaluate("""()=>{const t=document.getElementById('srxProbeTool');
                   return {open:document.querySelector('#srxProbe').classList.contains('open'),
-                   visible:r.width>0&&r.height>0,text:t.textContent.trim()}}""")
-                ck("goal 探针收起后仍可展开", (not _tc["open"]) and _tc["visible"] and _tc["text"] == "展开探针", str(_tc))
+                   text:(t.innerText||'').trim(),aria:t.getAttribute('aria-expanded')}}""")
+                ck("goal 探针收起后仍可展开",
+                   _tc["open"] is True and _tc["aria"] == "true" and "主动探针" in _tc["text"], str(_tc))
+                pg.evaluate("()=>{const p=document.querySelector('#srxProbe');if(p&&p.classList.contains('open'))srxToggleProbe()}")
+                pg.wait_for_timeout(250)
                 pg.evaluate("document.querySelector('#srxProbeToggle').click()")
                 pg.wait_for_timeout(300)
                 _to = pg.evaluate("()=>({open:document.querySelector('#srxProbe').classList.contains('open'),form:document.querySelector('.srx-probeform').getBoundingClientRect().height})")
@@ -7310,7 +7412,14 @@ def main():
                     pg.evaluate("p=>{SRX.pair=p;SRX.date='';SRX._init=true;renderSearch()}", _pair)
                     pg.wait_for_timeout(800)
                 _cb = pg.evaluate("""()=>{const e=document.querySelector('#srxCapbar');if(!e||e.hidden)return null;const r=e.getBoundingClientRect();return{h:+r.height.toFixed(1),chips:e.querySelectorAll('.capchip').length,text:e.innerText.slice(0,120),scroll:e.scrollWidth>e.clientWidth}}""")
-                ck("goal 渠道/会话单行不换行", bool(_cb) and _cb["h"] <= 40 and _cb["chips"] == 5 and "会话" not in _cb["text"], str(_cb))
+                # r796 起能力条也覆盖两家 App（演示 7 家）；判的是
+                # 「单行不换行 + 没有会话文案混入」，chip 数按注册渠道算。
+                _nch7383 = pg.evaluate("Object.keys(SRX_PLATS||{}).length")
+                ck("goal 渠道/会话单行不换行",
+                   bool(_cb) and _cb["h"] <= 40
+                   and _cb["chips"] == _nch7383
+                   and "会话" not in _cb["text"],
+                   str(dict(_cb or {}, channels=_nch7383)))
 
                 # v294 特价监控：演示快照 3 次，日历/走势/低价日真实航班不空
                 pg.evaluate("switchView('mon');showMonTab('specials')")
@@ -7329,19 +7438,22 @@ def main():
                 pg.wait_for_timeout(1200)
                 _dg = pg.evaluate("""()=>{const c=[...document.querySelectorAll(
                   '#healthDiagBody .hdiag-card')];return{n:c.length,
+                   expect:(typeof SRX_PLATS!=='undefined')?Object.keys(SRX_PLATS).length:0,
                    labels:c.map(x=>(x.querySelector('.hdiag-st')||{}).textContent||''),
                    acts:c.filter(x=>(x.querySelector('.hdiag-a')||{}).textContent).length}}""")
-                ck("v294 渠道诊断五渠道分型",
-                   _dg["n"] == 5 and len(set(_dg["labels"])) >= 1
-                   and _dg["acts"] == 5, str(_dg))
+                ck("v294 渠道诊断逐渠道分型",
+                   _dg["n"] == _dg["expect"] and _dg["n"] >= 5
+                   and len(set(_dg["labels"])) >= 1
+                   and _dg["acts"] == _dg["expect"], str(_dg))
                 _dgl = pg.evaluate("""()=>{const s=[...document.querySelectorAll(
                   '#healthDiagBody .hdiag-l span')],
                   c=[...document.querySelectorAll('#healthDiagBody .hdiag-card')];
-                  return{n:s.length,
+                  return{n:s.length,cards:c.length,
                    multi:s.filter(x=>x.getBoundingClientRect().height>18).length,
                    over:c.filter(x=>x.scrollWidth>x.clientWidth+1).length}}""")
                 ck("v297 诊断证据标签不拆词",
-                   _dgl["n"] == 15 and _dgl["multi"] == 0 and _dgl["over"] == 0,
+                   _dgl["n"] == _dgl["cards"] * 3
+                   and _dgl["multi"] == 0 and _dgl["over"] == 0,
                    str(_dgl))
                 # v294 检索首屏大块均可折叠（说明/价带/五源）
                 pg.evaluate("switchView('search')")
@@ -7531,12 +7643,17 @@ def main():
                 _ch297 = pg.evaluate("""()=>{const bands=[...document.querySelectorAll('#panel-login .chband')],
                   links=[...document.querySelectorAll('#panel-login .chlink')],
                   slot=document.querySelector('#loginRows .lgslot');
+                  /* 渠道数会随接入增长（r715 起 7 家），断言「每条带都有链接、
+                     且链接数不少于带数」而不是钉死 5/30——钉死数量会在每次接入
+                     新渠道时造成与渲染无关的假红。 */
                   return{bands:bands.length,links:links.length,
+                   emptyBands:bands.filter(b=>!b.querySelector('.chlink')).length,
                    border:links[0]?getComputedStyle(links[0]).borderTopWidth:'',
                    slotBg:slot?getComputedStyle(slot).backgroundColor:'',
                    overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth+1}}""")
-                ck("v297 渠道入口扁平 30 链接",
-                   _ch297["bands"] == 5 and _ch297["links"] == 30
+                ck("v297 渠道入口扁平（每条带都有链接）",
+                   _ch297["bands"] >= 5 and _ch297["links"] >= _ch297["bands"]
+                   and _ch297["emptyBands"] == 0
                    and _ch297["border"] == "0px"
                    and _ch297["slotBg"] in ("rgba(0, 0, 0, 0)", "transparent")
                    and not _ch297["overflow"], str(_ch297))

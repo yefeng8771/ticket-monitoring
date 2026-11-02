@@ -53,4 +53,30 @@ def cjk_font_path() -> str:
 
 
 def has_cjk_font() -> bool:
-    return bool(cjk_font_path())
+    """是否真的有**中文字形**可用于度量。
+
+    不能只看「能不能打开一把字体」：Linux CI 上没有任何 CJK 字体时
+    `cjk_font_path()` 会回退到 Pillow 自带的 `DejaVuSans.ttf`——它没有
+    汉字，渲染汉字会落到 .notdef（等宽方块）。依赖中文字宽的烟测
+    （行高拆行、表格高度、字号阈值）在那种环境下必然给出与真实中文
+    排版不同的结果，曾让 CI 稳定红而本地恒绿。这里直接问字体有没有
+    中文字形，没有就让调用方 skip。
+    """
+    path = cjk_font_path()
+    if not path:
+        return False
+    if "cjk" in _CACHE:
+        return _CACHE["cjk"]
+    ok = False
+    try:
+        from PIL import ImageFont
+        f = ImageFont.truetype(path, 12)
+        try:
+            mask = f.getmask("中")
+            ok = bool(mask.getbbox())
+        except Exception:
+            ok = False
+    except Exception:
+        ok = False
+    _CACHE["cjk"] = ok
+    return ok

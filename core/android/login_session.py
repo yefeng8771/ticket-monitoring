@@ -43,6 +43,7 @@ class AppLoginSession:
         self._last_png = b""
         self.frames = 0        # 统计：供健康/调试观察
         self.taps = 0
+        self.swipes = 0
 
     # ---------- 生命周期 ----------
     def expired(self, now: Optional[float] = None) -> bool:
@@ -108,6 +109,39 @@ class AppLoginSession:
                 self.taps += 1
             return bool(ok)
 
+    def swipe(self, x1: int, y1: int, x2: int, y2: int,
+              dur: int = 300) -> bool:
+        """在画面里滑动（滚动城市列表/翻日历）。
+
+        内嵌画面原来只有「点一下」——而这两个 App 的主路径大量依赖滚动
+        （城市热门列表、低价日历、结果列表），只有点击等于只能点当前屏第一页，
+        这就是「可操作性比较有限」的直接来源。
+        坐标同样是**原始画面像素**（与 tap 一致），越界直接拒绝。
+        """
+        with self._lock:
+            if self.status != ST_PENDING:
+                return False
+            try:
+                a, b = int(x1), int(y1)
+                c, d = int(x2), int(y2)
+                dur = int(dur)
+            except (TypeError, ValueError):
+                return False
+            if min(a, b, c, d) < 0:
+                return False
+            dev = self.runtime.device() if self.runtime else None
+            if dev is None:
+                return False
+            w, h = dev.window_size()
+            if w and h and (max(a, c) >= w or max(b, d) >= h):
+                self.detail = f"滑动超出屏幕 {w}x{h}"
+                return False
+            dur = max(80, min(2000, dur))
+            ok = dev.swipe(a, b, c, d, dur)
+            if ok:
+                self.swipes += 1
+            return bool(ok)
+
     def input_text(self, text: str) -> bool:
         with self._lock:
             if self.status != ST_PENDING:
@@ -132,8 +166,10 @@ class AppLoginSession:
             "detail": self.detail,
             "frames": self.frames,
             "taps": self.taps,
+            "swipes": self.swipes,
             "age_s": int(time.time() - self.created_at),
             "can_interact": self.status == ST_PENDING and not self.expired(),
+            "active": self.status == ST_PENDING and not self.expired(),
         }
 
 

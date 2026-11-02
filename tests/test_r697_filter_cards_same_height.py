@@ -34,17 +34,33 @@ def test_time_card_no_longer_pins_to_start():
 
 
 def test_time_card_distributes_its_extra_space():
-    assert re.search(r"\.srf-time\{[^}]*justify-content:space-between", SRC), (
-        "拉高后的余量会全堆在卡底（实测 114px 死白），内容需要均布")
+    """拉高后的余量不能变成卡内孤立空洞（实测 114px 死白）。
+
+    r876：原用 `justify-content:space-between` 把余量摊到每段之间——右侧
+    「起降时段」的两组时段因此被推得离标题很远，右栏第 1 行与左栏第 1 行
+    差 13.6px（292 vs 278.4），读作「上下不对齐」。
+    现改成内容整体贴顶：两栏首行同线，余量落在卡底（与左卡内容贴顶一致）。
+    判据由 test_r836_filter_card_voids 实测卡内无 >34px 的孤立空洞来守；
+    这里只守「不得回到把余量摊进组间的写法」。
+    """
+    assert re.search(r"\.srf-time\{[^}]*justify-content:flex-start", SRC), (
+        "起降时段卡又用 space-between——组间间距会随卡高漂移，两栏首行错位")
 
 
 def test_second_row_cards_distribute_their_extra_space():
-    """第二排同排等高后，价格带/检索特有也被拉高——内容贴顶会让卡底空
-    100+ 而左卡只空 12px（实测 110.6 / 104.5 vs 12）。同样要均布。"""
-    # 同名选择器有多条规则（grid-column / border-top / 本条的 justify），
-    # 只取第一条会命中 grid-column 那条，断言永远为假。
-    bodies = re.findall(
-        r"\.srf-price,#searchview \.srf-evidence\{([^}]*)\}", SRC)
-    assert bodies, "找不到 .srf-price/.srf-evidence 合并规则"
-    assert any("justify-content:space-between" in b for b in bodies), (
-        "第二排的余量会全堆在卡底（实测 110.6/104.5px），需与左卡同律均布")
+    """r836 起第二排改为「加工与历史 | 价格带+检索特有竖向堆叠」。
+
+    原判据要求 `.srf-price`/`.srf-evidence` 用 space-between 均分余量；
+    实测那样会在两张稀疏卡里各留 57.3 / 100.5px 的大洞（用户报「衔接空格
+    很大很空」）。现改为两张卡按内容收缩堆叠，卡内最大空档回到 8px。
+    这里同时守住「不被拉回等高」与「两卡仍在」，避免有人只删掉 CSS 就算。
+    """
+    assert "srf-stack" in SRC, "第二排的堆叠容器不见了"
+    m = re.search(r"#searchview \.srf-stack\{[^}]*\}", SRC)
+    assert m, "找不到 .srf-stack 规则"
+    assert "flex-direction:column" in m.group(0), (
+        "价格带/检索特有又变回平铺——卡内会重新出现 57/100px 的洞")
+    # 两张卡不得再声明 grid-area（它们是 stack 的 flex 子项，不是网格项）
+    for cls in ("srf-price", "srf-evidence"):
+        assert not re.search(r"#searchview \.%s\{[^}]*grid-area:(price|evidence)" % cls, SRC), (
+            "%s 仍钉在旧网格区域上，会被拉回等高" % cls)

@@ -24,10 +24,11 @@ from collections import deque
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
-PLATFORMS = ("ctrip", "fliggy", "qunar", "tongcheng", "tuniu")
-# App 渠道（可选）：需要独立节奏 key，但**不属于**内置浏览器渠道集合。
-# 清单来自零依赖的 core/channels.py（曾在此本地另写一份，加渠道必然漏改）。
-from core.channels import APP_CHANNELS, path_cn  # noqa: E402
+# 浏览器渠道与 App 渠道都来自零依赖的 core/channels.py（曾在此另写一份，
+# 加渠道必然漏改；r813 起直接用别名，不再手抄）。
+from core.channels import APP_CHANNELS, BROWSER_CHANNELS, path_cn  # noqa: E402
+
+PLATFORMS = BROWSER_CHANNELS
 
 _HHMM = re.compile(r"^(\d{1,2}):(\d{2})$")
 

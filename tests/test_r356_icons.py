@@ -54,8 +54,17 @@ DATA_CODES = set(
 )
 
 
-def test_five_ota_marks_are_full_bleed_complete_official_pngs():
-    assert set(BRAND) == {"qunar", "ctrip", "tuniu", "fliggy", "tongcheng"}
+def test_every_ota_mark_is_full_bleed_complete_official_png():
+    """**每个**渠道（含两个 App 渠道）都要是满版官方标记。
+
+    判据对全部渠道一视同仁：256×256、四角非白、PNG 内嵌。
+    智行用 APK 里的 launcher 图标（`r/y/ark_icon.png`，官方 288×288，
+    圆角外透明 → 填品牌蓝后满版）；去哪儿 App 与浏览器 qunar 同一品牌
+    标记，直接复用。
+    """
+    from core.channels import APP_CHANNELS, BROWSER_CHANNELS
+    need = set(BROWSER_CHANNELS) | set(APP_CHANNELS)
+    assert need <= set(BRAND), "缺图标：%s" % sorted(need - set(BRAND))
     for key, uri in BRAND.items():
         im, _ = _png(uri)
         assert im.size == (256, 256), (key, im.size)

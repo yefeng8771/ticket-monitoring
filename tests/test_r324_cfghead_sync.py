@@ -222,10 +222,12 @@ def test_c4_plat_toggle_updates_bhead(page):
           chip.click();
           const bHead = document.querySelector(
             '#cfgform .grouplab[data-sec="B"] .gsum').textContent;
-          return {before, after: CFG[0].platforms.length, bHead};
+          return {before, after: CFG[0].platforms.length, bHead,
+                  chips: document.querySelectorAll('#cfgform .pch').length};
         })()""")
         assert out["after"] == out["before"] - 1, out
-        assert out["bHead"] == str(out["after"]) + " / 5 渠道", out
+        # 分母 = 真正渲染出的 chip 数（r711）：5 家浏览器渠道 + 2 家 App
+        assert out["bHead"] == "%d / %d 渠道" % (out["after"], out["chips"]), out
     finally:
         _restore(page, snap)
 

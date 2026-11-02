@@ -45,10 +45,18 @@ def _server():
     cfg = os.path.join(tmp, "c.yaml")
     # 用一份**临时**配置，绝不动仓库里的 config.example.yaml
     shutil.copyfile(os.path.join(ROOT, "config.example.yaml"), cfg)
+    # 强制绑回环：测试进程只该监听本机。这个替换**必须**在夹具退出时还原——
+    # 直接赋值会永久改掉模块属性，后续 test_r675 的「TM_WEB_HOST 生效」断言
+    # 会读到这个替身而恒得 127.0.0.1（实测全量到该文件必红 4 条）。
+    old_bind = webui._bind_host
     webui._bind_host = lambda c: "127.0.0.1"
-    webui.start_web(cfg={"web": {"port": port, "host": "127.0.0.1"}},
-                    job=None, report_push=None, config_path=cfg)
-    return port, tmp
+    try:
+        webui.start_web(cfg={"web": {"port": port, "host": "127.0.0.1"}},
+                        job=None, report_push=None, config_path=cfg)
+    except Exception:
+        webui._bind_host = old_bind
+        raise
+    return port, tmp, old_bind
 
 
 def _post(base, path, headers, body=b"{}"):
@@ -66,7 +74,7 @@ def _post(base, path, headers, body=b"{}"):
 
 @pytest.fixture(scope="module")
 def live():
-    port, tmp = _server()
+    port, tmp, old_bind = _server()
     base = "http://127.0.0.1:%d" % port
     host = "127.0.0.1:%d" % port
     op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -82,6 +90,9 @@ def live():
         shutil.rmtree(tmp, ignore_errors=True)
         pytest.skip("控制台未在期限内起来")
     yield base, host
+    global_webui = sys.modules.get("webui")
+    if global_webui is not None:
+        global_webui._bind_host = old_bind
     shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -157,3 +168,45 @@ def test_guard_covers_every_write_endpoint_structurally():
     j_cfg = seg.index('if self.path == "/api/config":')
     assert j_demo < j_guard < j_cfg, (
         "跨站闸门必须在演示短路之后、所有写分支之前")
+
+
+def test_bodyless_post_is_never_rejected_by_content_type():
+    """r672b：无 body 的 POST 不得因 Content-Type 被判 415（结构级兜底）。
+
+    真实缺陷：`/api/app-login*`（5 个）、`/api/challenge/*`（3 个）、
+    `/api/login`、`/api/login-finish`、`/api/login-verify`、
+    `/api/channel/{probe,verify,warmup}`、`/api/pacing/reset`、
+    `/api/special-radar`、`/api/srx/watch`、`/api/probe/start` 共 13 个
+    端点各自重复写了一模一样的一段「不是 application/json 就 415」。
+    `fetch(path,{method:'POST'})` 不带 body 时浏览器自动补
+    `text/plain`——这些按钮全部被打哑，而 r672 的端点普查此前被
+    `/api/restart` 的 `os._exit` 杀掉，一直没跑到（表是绿的）。
+
+    判据：除统一 helper 外，正文里不得再出现逐分支的
+    「Content-Type 必须为 application/json」+415 组合；且所有 415 出口
+    都必须先看 Content-Length > 0。负控=把 helper 改回无条件 415 即红
+    （r672 运行时普查同时红）。
+    """
+    import io
+    src = io.open(os.path.join(ROOT, "webui.py"), encoding="utf-8",
+                  newline="").read()
+    # 只允许两处：_json_body_ok 单源，以及 _post_json 里为了让「鸭子类型
+    # 替身」能独立单测而内联的同一判据。逐分支再抄一份（13 个端点那种）
+    # 就是缺陷回潮。
+    occ = src.count('"Content-Type 必须为 application/json"')
+    assert occ == 2, (
+        "JSON Content-Type 判据应只有 _json_body_ok 与 _post_json 两处"
+        "（现 %d 处）——逐分支重复写会把「无 body 同源请求」打成 415" % occ)
+    i = src.index("def _json_body_ok(self):")
+    seg = src[i:src.index("def _post_json(", i)]
+    # helper 必须「先看有没有 body」：Content-Length 的**读取**要出现在
+    # 返回 415 的自绘调用之前（注释里也提到 Content-Length，故锚定代码本身）
+    j_len = seg.index('get("Content-Length"')
+    j_415 = seg.index("self._json(")
+    assert j_len < j_415, "helper 必须先判 Content-Length 再谈 415"
+    assert "application/json" in seg
+    # _post_json 里的内联份同样必须先读 Content-Length
+    j = src.index("def _post_json(self")
+    seg2 = src[j:src.index("def _json_response", j)
+              if "def _json_response" in src[j:] else j + 3000]
+    assert seg2.index('get("Content-Length"') < seg2.index("415")

@@ -94,7 +94,11 @@ def test_search_overview_summary_bar_is_desktop_only_and_collapsible():
         # 更关键的是同函数里还调 srxRenderCtx()，开合概览会连带重算下方
         # 筛选区的折叠态——保留这条断言守的是「互不越权」而不是持久化。
         "const on=v.classList.contains('srx-ov-collapsed')",
-        # r383：开合只收「价带天数条 + 其后正文」，标题行常驻
+        # 2026-10-31：价带改为可选——收起整条（不再保留 46px 标题行），
+        # 入口移到工具区 #srxOvTool，与价带内触发器共用 srxToggleOverview。
+        "#searchview.srx-ov-collapsed #srxOverview{display:none!important}",
+        'id="srxOvTool"',
+        # 内层四条作为双保险仍在（防止只改了外层、内层漏出正文）
         "#searchview.srx-ov-collapsed #srxBandBody,",
         "hb.textContent=on?'收起概览':'展开概览'",
         "#searchview #srxOvSum{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis",

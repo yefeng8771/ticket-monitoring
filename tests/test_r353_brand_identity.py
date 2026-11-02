@@ -28,8 +28,15 @@ def _png_ok(uri):
     return len(raw)
 
 
-def test_five_channels_are_embedded_official_marks():
-    assert set(BRAND) == {"qunar", "ctrip", "tuniu", "fliggy", "tongcheng"}
+def test_every_channel_is_embedded_official_mark():
+    """每个渠道（含两个 App 渠道）都必须有内嵌官方图标。
+
+    只断言 5 家浏览器渠道时，新增的 app_zhixing/app_qunar 会静默没有
+    图标（`srxPlatIcon` 取不到就返回空串、行里直接少一块）。
+    """
+    from core.channels import APP_CHANNELS, BROWSER_CHANNELS
+    need = set(BROWSER_CHANNELS) | set(APP_CHANNELS)
+    assert need <= set(BRAND), "缺图标：%s" % sorted(need - set(BRAND))
     for key, uri in BRAND.items():
         assert _png_ok(uri) > 1500, key
         assert not re.search(r"https?://", uri), key
@@ -65,8 +72,14 @@ def test_search_mirror_watch_and_config_use_brand_icons():
     assert "srxAirIcon(w.code)" in SRC
     assert "srxFillStaticChips" in SRC
     assert "srxPlatIcon(srxPlatKey(f.platKey||f.plat))" in SRC
-    assert "srxPlatIcon(PK[p]||'')" in SRC
-    assert "srxPlatIcon(PKEY[m[0]]||'')" in SRC
+    # 渠道筛选 chip 的图标必须经 srxPlatKey 解析：本轮之前的写法是
+    # `srxPlatIcon(PK[p]||'')`，而 `PK` 是只列 5 家浏览器渠道的写死表，
+    # 两个 App 渠道查不到 → chip 没有官方图标。判据守「走单一解析入口」，
+    # 不守那张表的字面写法。
+    assert "srxPlatIcon(srxPlatKey(p))" in SRC, (
+        "渠道筛选 chip 没有走 srxPlatKey（App 渠道会丢官方图标）")
+    assert "srxPlatIcon(srxPlatKey(m[0]))" in SRC, (
+        "「全线最低」渠道胶囊没有走 srxPlatKey（App 渠道会丢官方图标）")
     assert "srxPlatIcon(p)}${CN[p]||p}" in SRC
     assert "srxPlatIcon(p)}${PLATS[p]}" in SRC
     assert 'id="monWatchCard"' in SRC and 'id="monWatchList"' in SRC

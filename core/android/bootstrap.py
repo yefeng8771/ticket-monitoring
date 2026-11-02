@@ -18,12 +18,28 @@ from .mumu import MuMuManager
 # MuMu 官方下载入口（与本项目实测一致的渠道）
 MUMU_DOWNLOAD_HINT = "https://mumu.163.com/"
 
+def _apk_step_label() -> str:
+    """「安装 App」这一步的文案按**已注册的 App 渠道**拼，不写死智行。
+
+    原先写死「安装智行 App」，接入去哪儿 App 后这一步仍只报智行——
+    用户看到「五步已完成」却不知道去哪儿 App 是否也装上了（实际安装
+    检查早已遍历 APP_CHANNELS）。名字从 `core.channels` 派生（单一源）。
+    """
+    try:
+        from core.channels import APP_CHANNELS, plat_cn
+        names = [plat_cn(p) for p in APP_CHANNELS]
+    except Exception:
+        names = []
+    return ("安装 App 渠道（%s）" % " / ".join(names)
+            if names else "安装 App 渠道")
+
+
 # 首次引导的阶段（与 UI 进度态一一对应）
 STEPS = (
     ("check", "检测 Android 运行时"),
     ("install", "安装 MuMu 模拟器"),
     ("boot", "启动并等待实例就绪"),
-    ("apk", "安装智行 App"),
+    ("apk", _apk_step_label()),
     ("verify", "验证可采集"),
 )
 
@@ -81,20 +97,28 @@ def status(cfg: dict, evidence=None) -> dict:
     # 「安装智行 App / 验证可采集」永远不勾——用户照引导走完却发现
     # 清单还是未完成，而实际 App 早就装好且在采数（真机实测如此）。
     # 包名从渠道注册表派生，不在这里另写一份（同项目「名字单一源」约定）。
+    plats = []
     try:
         from crawlers import APP_CHANNELS, REGISTRY
-        packages = [getattr(REGISTRY.get(p), "package", "")
-                    for p in APP_CHANNELS]
-        packages = [p for p in packages if p]
+        from core.channels import plat_cn
+        plats = [(p, getattr(REGISTRY.get(p), "package", "") or "")
+                 for p in APP_CHANNELS]
+        plats = [(p, pkg) for p, pkg in plats if pkg]
     except Exception:
-        packages = []
+        plats = []
+        plat_cn = lambda p: p  # noqa: E731
+    missing, installed = [], False
     try:
         from .device import AdbDevice
         dev = AdbDevice(mgr.adb_path, mgr.adb_serial(),
                         timeout=ac.action_timeout_s)
-        installed = any(dev.app_installed(pkg) for pkg in packages) \
-            if packages else False
+        # **两个 App 渠道都要装上**才算这一步完成：文案点了两个名字、
+        # 实际只装一个却打勾，用户会以为去哪儿 App 也装好了。
+        missing = [(p, pkg) for p, pkg in plats
+                   if not dev.app_installed(pkg)]
+        installed = bool(plats) and not missing
     except Exception:
+        missing = []
         installed = False
     done = {"check", "install", "boot"}
     if installed:
@@ -102,9 +126,15 @@ def status(cfg: dict, evidence=None) -> dict:
     state["steps"] = [{"key": k, "label": v, "done": k in done}
                       for k, v in STEPS]
     if not installed:
-        state["next"] = (f"实例已就绪，但未检测到智行 App"
-                         f"（{', '.join(packages)}）："
-                         f"在模拟器里装一次即可")
+        if missing:
+            names = "、".join("%s（%s）" % (plat_cn(p), pkg)
+                             for p, pkg in missing)
+            state["next"] = ("实例已就绪，还缺 App：%s——"
+                             "在模拟器里装一次即可" % names)
+        elif plats:
+            state["next"] = "实例已就绪，但读不到 App 安装状态（adb 查询失败）"
+        else:
+            state["next"] = "实例已就绪，但没有注册任何 App 渠道"
         return state
     # 「验证可采集」只认**真的采到过数**：光装着 App 不等于能采
     # （登录墙、风控都会让采集失败）。evidence 回调由调用方注入，
@@ -120,8 +150,10 @@ def status(cfg: dict, evidence=None) -> dict:
                           for k, v in STEPS]
         state["next"] = "五步已完成：App 渠道已可用"
     else:
-        state["next"] = ("已就绪：在 配置 · 渠道登录 里登录智行 App；"
-                         "登录后跑一轮采集即会点亮「验证可采集」")
+        _names = (" / ".join(plat_cn(p) for p, _ in plats)
+                  if plats else "App 渠道")
+        state["next"] = ("已就绪：在 配置 · 渠道登录 里登录 %s；"
+                         "登录后跑一轮采集即会点亮「验证可采集」" % _names)
     return state
 
 

@@ -11,8 +11,9 @@ def test_source_access_is_compact_strip_not_three_tall_cards():
     assert ("#srccap .scnode{display:inline-flex;flex-direction:row;"
             "align-items:center") in SRC
     assert "#srccap .scnode em{display:none}" in SRC
-    # r423：说明已挪出路径条，成为诊断卡的直接子元素（卡头之后）
-    assert "#healthDiag>#scNote{display:none" in SRC
+    # r873：说明已从「诊断卡直接子元素」再收进来源条 #srccap 内
+    # （绝对定位、宽随卡），与触发器同宽同左缘——守「说明默认收起」这一意图。
+    assert "#srccap .scnote{display:none" in SRC
     assert 'id="scNoteBtn"' in SRC and 'id="scNote"' in SRC
     assert "function srxToggleScNote(btn){" in SRC
     assert 'title="PC 网页已于 2026-10-10 停服"' in SRC

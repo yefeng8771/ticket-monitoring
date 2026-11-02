@@ -193,4 +193,41 @@ def test_status_does_not_crash_without_packages(monkeypatch):
     monkeypatch.setattr(devmod, "AdbDevice", Dev)
     st = bs.status({"android": {"enabled": True}})
     assert st["state"] == "ready"
-    assert "未检测到智行 App" in (st.get("next") or "")
+    # 读不到安装状态 ≠ 没装：旧文案写死「未检测到智行 App」，把 adb 故障
+    # 说成「没装」，用户会去重装。现在如实说读不到。
+    assert "读不到 App 安装状态" in (st.get("next") or ""), st.get("next")
+    assert {x["key"]: x["done"] for x in st["steps"]}["apk"] is False
+
+
+def test_status_requires_every_app_package(monkeypatch):
+    """两个 App 渠道**都装上**才算这一步完成，并在提示里点名缺的那一个。"""
+    from core.android import bootstrap as bs
+
+    class Mgr:
+        def available(self):
+            return True
+
+        def info(self):
+            return {"is_android_started": True, "adb_port": 16384}
+
+        adb_path = "adb"
+
+        def adb_serial(self):
+            return "x"
+
+    class Dev:
+        def __init__(self, *a, **k):
+            pass
+
+        def app_installed(self, pkg):
+            return pkg != "com.Qunar"          # 只差去哪儿 App
+
+    monkeypatch.setattr(bs, "resolve_install_dir", lambda ac: "C:/MuMu")
+    monkeypatch.setattr(bs, "MuMuManager", lambda **k: Mgr())
+    import core.android.device as devmod
+    monkeypatch.setattr(devmod, "AdbDevice", Dev)
+    st = bs.status({"android": {"enabled": True}})
+    done = {x["key"]: x["done"] for x in st["steps"]}
+    assert done["apk"] is False, "只装了一个 App 就打勾了：%s" % done
+    nxt = st.get("next") or ""
+    assert "去哪儿 App" in nxt and "还缺" in nxt, nxt

@@ -30,8 +30,10 @@ def test_flat_layer_is_last_and_covers_former_white_surfaces():
         "#searchview .srx-listhead{background:transparent!important}",
         "#searchview .srx-mmore{background:transparent!important}",
         ".stat{background:transparent!important;border-top:1px solid var(--r-hair)!important}",
-        "#searchview .srx-axis button.on{background:transparent!important;color:var(--r-blue)!important;",
-        "#searchview .srx-mtab.on{background:transparent!important;color:var(--r-blue)!important;",
+        # r1034：并排选项类控件（axis/mtab）的选中态已统一为「软蓝底 + 品牌蓝」，
+        # 见 tests/test_flat_design_contract.py 的新契约；旧的「透明底」写法退役。
+        "#searchview .srx-axis button.on{background:var(--r-blue-soft)!important;color:var(--r-blue)!important;",
+        "#searchview .srx-mtab.on{background:var(--r-blue-soft)!important;color:var(--r-blue)!important;",
         "#cfgnav .cnav.on{background:transparent!important;color:var(--r-blue)!important;",
         "#cfgnav .cnav:hover{background:transparent!important;color:var(--r-blue)!important}",
         "#cfgview .cfgdeck{background:transparent!important;border:0!important;",
@@ -72,7 +74,10 @@ def test_login_rows_are_single_column_table_rows_at_all_widths():
     """
     for s in (
         "#loginRows .lggrid{display:grid;grid-template-columns:1fr!important;gap:0!important}",
-        "#loginRows .lgcard{display:grid;grid-template-columns:170px minmax(0,1fr) 96px!important;",
+        # 名字列必须是**内容宽**（max-content），不能定宽：r708 用户实测
+        # 「智行 App」在 170px 定宽下被 ellipsis 截成「智行 A…」。判据守
+        # 的是三列结构与操作列定宽，不是那个具体像素值。
+        "#loginRows .lgcard{display:grid;grid-template-columns:max-content minmax(0,1fr) 96px!important;",
         'grid-template-areas:"name info act"!important;',
         "#loginRows .lgcard>.lgname{grid-area:name}",
         "#loginRows .lgcard>.lgsection{grid-area:info;",
@@ -91,8 +96,8 @@ def test_controls_keep_boundaries_without_card_shadows():
         "button{box-shadow:none!important}",
         "button.warn{background:transparent!important;color:var(--r-ink-2)!important;",
         "#opscard .opsbtns>button:first-child{background:var(--r-blue)!important;",
-        ".btn2{background:transparent!important;color:var(--r-ink-2)!important;",
-        ".ws-btn{background:transparent!important;border:1px solid var(--r-hair)!important;",
+        ".btn2{background:var(--r-surface-2)!important;color:var(--r-ink-2)!important;",
+        ".ws-btn{background:var(--r-surface-2)!important;border:0!important;",
         "html[data-theme=\"dark\"] .btn2.primary,",
         "html[data-theme=\"dark\"] .ws-btn.primary,",
         "html[data-theme=\"dark\"] #opscard .opsbtns>button:first-child{color:#0b1220!important}",

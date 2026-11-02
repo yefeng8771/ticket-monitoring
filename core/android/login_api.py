@@ -26,13 +26,21 @@ def _err(msg: str, code: int = 400):
 
 def handle_create(registry, plat: str, packages: dict, runtime_factory,
                   logger=None) -> Tuple[dict, int]:
-    """POST /api/app-login  {plat} -> 起 App、登记会话。"""
+    """POST /api/app-login  {plat} -> 起 App、登记会话。
+
+    **同一台设备是串行资源**：只能有一个 App 在前台。所以切渠道时不能看
+    「本 plat 有没有会话」就决定复用——屏幕上是**别的 App** 时，复用等于
+    把一个 App 的画面贴上另一个渠道的标题（用户报的就是这个：弹窗写
+    「智行 App 登录」，画面是去哪儿的航班列表）。
+
+    规则：
+      1. 复用前先确认目标 App 真在前台；不在就重新拉起；
+      2. 切换渠道时把**其它 plat 的在途会话作废**，它们的帧接口随即失效，
+         避免前端两个窗口同时轮询同一块屏幕、各自拍到一个 App。
+    """
     pkg = (packages or {}).get(plat)
     if not pkg:
         return _err(f"未知渠道 {plat!r}")
-    existing = registry.get(plat)
-    if existing is not None and existing.alive():
-        return {"ok": True, "already": True, "session": existing.view()}, 200
 
     rt = runtime_factory()
     if rt is None:
@@ -40,10 +48,34 @@ def handle_create(registry, plat: str, packages: dict, runtime_factory,
     ok, why = rt.ensure_ready()
     if not ok:
         return _err(f"Android 运行时未就绪：{why}", 409)
-
     dev = rt.device()
-    if dev is None or not dev.app_start(pkg):
-        return _err("App 启动失败", 502)
+    if dev is None:
+        return _err("Android 设备不可用", 409)
+
+    # 已经被顶掉的其它渠道会话：立刻失效，别再让它们拍到当前这块屏幕
+    for other in registry.plats():
+        if other == plat:
+            continue
+        sess_other = registry.get(other)
+        if sess_other is not None and sess_other.alive():
+            sess_other.finish(False, "已切换到其它渠道，本次登录会话结束")
+            registry.drop(other)
+
+    existing = registry.get(plat)
+    if existing is not None and existing.alive():
+        if _foreground_is(dev, pkg):
+            return {"ok": True, "already": True,
+                    "session": existing.view()}, 200
+        # 会话在，但前台不是它——必须重新拉到前台，不能沿用旧画面。
+        # 拉回成功后仍复用原会话：此刻它依然 alive，新建会撞 registry 的
+        # 单会话约束（409），用户按 Home 后再点「继续登录」就会失败。
+        if not dev.app_start(pkg):
+            return _err("App 切到前台失败", 502)
+        return {"ok": True, "already": True,
+                "session": existing.view()}, 200
+    else:
+        if not dev.app_start(pkg):
+            return _err("App 启动失败", 502)
 
     from .login_session import AppLoginSession
     sess = AppLoginSession(plat, rt, pkg, logger=logger)
@@ -52,6 +84,15 @@ def handle_create(registry, plat: str, packages: dict, runtime_factory,
     except ValueError as e:
         return _err(str(e), 409)
     return {"ok": True, "session": sess.view()}, 200
+
+
+def _foreground_is(dev, pkg: str) -> bool:
+    """目标包名是否真在前台。拿不到判定就按「不在」，宁多重启。"""
+    try:
+        act = dev.current_activity() or ""
+    except Exception:
+        return False
+    return bool(pkg) and act.startswith(pkg + "/")
 
 
 def handle_frame(registry, plat: str) -> Tuple[bytes, int, dict]:
@@ -87,6 +128,27 @@ def handle_tap(registry, plat: str, body: dict) -> Tuple[dict, int]:
     return {"ok": True, "taps": sess.taps}, 200
 
 
+def handle_swipe(registry, plat: str, body: dict) -> Tuple[dict, int]:
+    """POST /api/app-login/swipe {plat,x1,y1,x2,y2,dur}"""
+    sess = registry.get(plat)
+    if sess is None:
+        return _err("没有进行中的登录会话", 409)
+    try:
+        x1 = int(body.get("x1"))
+        y1 = int(body.get("y1"))
+        x2 = int(body.get("x2"))
+        y2 = int(body.get("y2"))
+    except (TypeError, ValueError):
+        return _err("坐标必须是整数")
+    try:
+        dur = int(body.get("dur", 300))
+    except (TypeError, ValueError):
+        dur = 300
+    if not sess.swipe(x1, y1, x2, y2, dur):
+        return {"ok": False, "err": sess.detail or "滑动失败"}, 409
+    return {"ok": True, "swipes": sess.swipes}, 200
+
+
 def handle_input(registry, plat: str, body: dict) -> Tuple[dict, int]:
     """POST /api/app-login/input {plat,text}"""
     sess = registry.get(plat)
@@ -115,7 +177,8 @@ def handle_key(registry, plat: str, body: dict) -> Tuple[dict, int]:
     return {"ok": True}, 200
 
 
-def handle_state(registry, plat: str, snapshot_info=None) -> Tuple[dict, int]:
+def handle_state(registry, plat: str, snapshot_info=None,
+                 needs_login=None) -> Tuple[dict, int]:
     """GET /api/app-login/state?plat=x
 
     没有进行中的会话时也要报出「是否已保存过快照」：否则用户登录完、
@@ -130,14 +193,21 @@ def handle_state(registry, plat: str, snapshot_info=None) -> Tuple[dict, int]:
             snap_at = float(info.get("mtime") or 0)
         except Exception:
             saved, snap_at = False, 0.0
+    expired = False
+    if needs_login is not None:
+        try:
+            expired = bool(needs_login(plat))
+        except Exception:
+            expired = False
     if sess is None:
-        return {"ok": True, "session": None,
+        return {"ok": True, "session": None, "needs_login": expired,
                 "saved": saved, "saved_at": snap_at}, 200
     view = dict(sess.view())
     # 会话内 saved 只在 finish 之后为真；快照文件才是跨进程的事实。
     view["saved"] = bool(view.get("saved")) or saved
     view["saved_at"] = snap_at
-    return {"ok": True, "session": view}, 200
+    view["needs_login"] = bool(view.get("needs_login")) or expired
+    return {"ok": True, "session": view, "needs_login": expired}, 200
 
 
 def handle_finish(registry, plat: str, verify=None,
@@ -204,7 +274,8 @@ def dispatch(registry, method: str, path: str, query: dict,
         if sub == "frame":
             return handle_frame(registry, plat)
         if sub == "state":
-            return handle_state(registry, plat, ctx.get("snapshot_info"))
+            return handle_state(registry, plat, ctx.get("snapshot_info"),
+                                ctx.get("needs_login"))
         return _err("未知子路径", 404)
 
     if method == "POST":
@@ -214,6 +285,8 @@ def dispatch(registry, method: str, path: str, query: dict,
                                  ctx.get("runtime_factory"))
         if sub == "tap":
             return handle_tap(registry, plat, body)
+        if sub == "swipe":
+            return handle_swipe(registry, plat, body)
         if sub == "input":
             return handle_input(registry, plat, body)
         if sub == "key":

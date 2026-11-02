@@ -23,6 +23,8 @@ import sys
 import threading
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import webui  # noqa: E402
@@ -51,6 +53,17 @@ class _OkCrawler:
         while not done_evt.is_set():
             time.sleep(0.05)
         return True
+
+
+@pytest.fixture(autouse=True)
+def _pretend_graphical(monkeypatch):
+    """这些用例测的是「窗口能不能真的开」这件事，与运行机有没有 X 无关。
+
+    CI 是 Linux 且无 DISPLAY，`_no_graphical_env()` 恒 True——不隔离的话
+    /api/login 一律走 no_gui 短路，窗口逻辑一条都测不到（本地 Windows
+    永远复现不出来，CI 上 4 条全红）。
+    """
+    monkeypatch.setattr(webui, "_no_graphical_env", lambda: False)
 
 
 def _slot():

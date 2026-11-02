@@ -357,18 +357,40 @@ def test_radar_risk_evidence_arms_long_cooldown(monkeypatch):
 
 # ---------------- 4. ROUND-TRIP HONESTY ----------------
 
-def test_ret_date_unsupported_without_query(crawler, monkeypatch):
+def test_domestic_ret_date_routes_to_touch_rt_without_oneway(crawler,
+                                                             monkeypatch):
+    calls, seen = [], {}
+    monkeypatch.setattr(crawler, "_fetch_inner",
+                        lambda *a, **k: calls.append(1) or [])
+
+    def fake_rt(frm, to, dates, ret):
+        seen["args"] = (frm, to, list(dates), ret)
+        return []
+
+    monkeypatch.setattr(crawler, "_fetch_rt", fake_rt)
+    out = crawler.fetch("SHA", "PEK", ["2026-11-01"],
+                        ret_date="2026-11-08")
+    assert out == []
+    assert calls == [], "国内往返不得回落单程"
+    assert seen["args"] == ("SHA", "PEK", ["2026-11-01"], "2026-11-08")
+
+
+def test_intl_ret_date_unsupported_without_query(crawler, monkeypatch):
     calls = []
     monkeypatch.setattr(crawler, "_fetch_inner",
                         lambda *a, **k: calls.append(1) or [])
-    out = crawler.fetch("SHA", "PEK", ["2026-11-01"],
+    monkeypatch.setattr(
+        crawler, "_fetch_rt",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("国际往返不得走国内往返页")))
+    out = crawler.fetch("SHA", "TYO", ["2026-11-01"],
                         ret_date="2026-11-08")
     assert out == []
     assert calls == []
     assert len(crawler.paths) == 1
     rec = crawler.paths[0]
     assert rec["path"] == "TRIP" and rec["status"] == "unsupported"
-    assert "未发起单程查询" in rec["detail"]
+    assert "国际往返" in rec["detail"]
 
 
 # ---------------- 5. 1999 NO-RESULT VS LOGIN ----------------

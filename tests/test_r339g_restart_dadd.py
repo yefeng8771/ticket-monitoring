@@ -202,8 +202,24 @@ def _open_cfg(page):
     page.evaluate("switchView('cfg')")
     page.wait_for_function("typeof CFG !== 'undefined' && CFG && CFG.length")
     page.evaluate("showCfgPanel('users')")
-    page.evaluate("expandFolds()")
+    # `expandFolds()` 只是**当前 DOM 上的临时全开**（注释写明：搜索态全开、
+    # 清空后由 cfgSearchClear 还原）。配置数据晚到会重建表单并按 FOLD 回放，
+    # 于是「先 expandFolds、后重建」时展开态被丢掉，量到的 .dateSrow 是
+    # display:none（实测 0 高，连续 4 次）。
+    # 这里走产品自己的持久路径：先写 FOLD、再用 applyFolds 回放，
+    # 重建之后仍然保持展开——与用户点开航线是同一个状态源。
+    page.evaluate("""()=>{
+      FOLD.sec=FOLD.sec||{};FOLD.route=FOLD.route||{};
+      document.querySelectorAll('#cfgform .grouplab[data-sec]').forEach(
+        g=>{if(g.dataset.sec)FOLD.sec[g.dataset.sec]=false;});
+      document.querySelectorAll('#cfgform .rline[data-rk]').forEach(
+        rl=>{FOLD.route[rl.dataset.rk]=false;});
+      if(typeof saveFold==='function')saveFold();
+      if(typeof applyFolds==='function')applyFolds();
+    }""")
     page.wait_for_timeout(400)
+    page.evaluate("expandFolds()")
+    page.wait_for_timeout(200)
 
 
 def test_dadd_pick_adds_chip(page):

@@ -152,6 +152,18 @@ def test_renders_all_chips_and_toggles():
         "渠道勾选数量少于已注册渠道数：%d < %d" % (got["n"], len(REGISTRY)))
     assert got["tog"], "没有 App 渠道可供往返测试"
     for t in got["tog"]:
-        assert t["p"] in t["after"], "%s 点了没写进 platforms：%s" % (
-            t["p"], t)
-        assert t["p"] not in t["back"], "%s 再点没能取消：%s" % (t["p"], t)
+        # chip 是**开关**：默认配置里 App 渠道可能已经勾上（演示账号就是
+        # `app_zhixing` 默认在 platforms 里），那第一下点击是取消勾选，
+        # 第二下才勾回来。断言应按「与当前态相反」判，而不是一律假设
+        # 首点为新增（旧写法在默认已选时必红，且把正常开关判成缺陷）。
+        had = t["p"] in t["before"]
+        if had:
+            assert t["p"] not in t["after"], (
+                "%s 原本已选中，点一下应取消：%s" % (t["p"], t))
+            assert t["p"] in t["back"], (
+                "%s 再点一下应勾回：%s" % (t["p"], t))
+        else:
+            assert t["p"] in t["after"], "%s 点了没写进 platforms：%s" % (
+                t["p"], t)
+            assert t["p"] not in t["back"], "%s 再点没能取消：%s" % (
+                t["p"], t)

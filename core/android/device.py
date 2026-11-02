@@ -163,19 +163,60 @@ class AdbDevice:
         return out is not None
 
     def input_text(self, text: str) -> bool:
-        """输入文本。空格转 %s（input text 的约定），并做 shell 转义。"""
+        """输入文本。空格转 %s（input text 的约定），并做 shell 转义。
+
+        **必须校验文本真的进了界面**（r805ab 真机实测）：`adb shell input
+        text` 在没有聚焦输入框时**同样是返回成功**——命令发出去了，字却
+        掉在地上。内嵌画面此前只判「命令没报错」，于是用户点「输入文字」
+        后接口回 ok、画面一动不动（真机：城市页输入 "bei"，前后两帧 sha1
+        完全相同、视图树文本零变化）。
+
+        这里输入后读一次视图树，确认目标文本真的出现；读不到（或无焦点
+        导致没进去）就如实返回 False——调用方据此提示「请先点一下输入框」，
+        而不是让用户对着一个撒谎的 ok 发呆。
+        """
         if text is None:
             return False
-        payload = str(text).replace(" ", "%s")
+        s = str(text)
+        payload = s.replace(" ", "%s")
         out = self._sh("shell", "input", "text",
                        shlex.quote(payload))
-        return out is not None
+        if out is None:
+            return False
+        # 校验：视图树里要出现该文本（去空格后比对，容忍输入法与转义差异）
+        want = s.replace(" ", "").strip()
+        if not want:
+            return True
+        try:
+            page = self.dump() or ""
+        except Exception:
+            return True      # 读不到页面时不否决（dump 自身可能超时）
+        return want in page.replace(" ", "")
 
     def keyevent(self, key: str) -> bool:
         out = self._sh("shell", "input", "keyevent", str(key))
         return out is not None
 
     # ---------- App ----------
+    def lock_portrait(self) -> bool:
+        """锁定竖屏（关自动旋转 + user_rotation=0）。
+
+        采集脚本的元素坐标与滑动距离都按 900×1600 竖屏写。现场实证
+        （2026-11-01 18:30）：模拟器 `accelerometer_rotation=1`，某一轮 App
+        转成 **1600×900 横屏**——首页控件都在，但硬编码的
+        `swipe(800,1200,…,600)` 的 y 已超出 900 屏高，整轮点不动，账本只记
+        `set-city-dep`，人眼看是「这条通路时好时坏」。
+        失败不影响采集（下一轮会再锁）。
+        """
+        ok = True
+        for cmd in (("shell", "settings", "put", "system",
+                     "accelerometer_rotation", "0"),
+                    ("shell", "settings", "put", "system",
+                     "user_rotation", "0")):
+            if self._sh(*cmd) is None:
+                ok = False
+        return ok
+
     def app_start(self, pkg: str) -> bool:
         out = self._sh("shell", "monkey", "-p", pkg,
                        "-c", "android.intent.category.LAUNCHER", "1",

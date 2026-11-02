@@ -27,7 +27,9 @@ def _w():
 
 def test_saved_login_writes_relogin_intervention():
     w = _w()
-    i = w.index("_State.logger.info(\"[登录] %s 会话已保存（网页登录）\", key)")
+    # 锚点只取不随提示语变化的前缀：r805cf 起日志会区分「人机验证 / 网页登录」，
+    # 写死后缀会让行为完好的用例因文案变化而红（2026-11-02 实测 gate 唯一红项）。
+    i = w.index('_State.logger.info("[登录] %s 会话已保存')
     # 用下一个分支边界作终止符：固定字符窗口会被后续新增逻辑挤出
     # （r496 加了 30 秒去重后，1600 字符装不下 save_intervention）
     j = w.index('if key == "fliggy_h5":', i)

@@ -15,6 +15,15 @@ from core.storage import SCHEMA, PriceStorage
 
 _PLATS = ["qunar", "ctrip", "fliggy", "tongcheng", "tuniu"]
 
+# 演示页里「参与采集的渠道」= 5 家浏览器 + 2 个 App。
+#
+# `_PLATS` 只管价格种子：它的下标参与价格偏移计算（`base{...}` 只认 5 家），
+# 直接扩它会改掉演示价。但**健康卡与脉冲图**画的是「哪些渠道在跑」——
+# 真实账本每轮 7 家全在（app_qunar/app_zhixing 各 58/59 条），演示少画
+# 两个会让访客以为 App 渠道不参与采集。
+# 两处必须同源：同一演示页两套渠道集合 = 读者看到互相矛盾的宇宙。
+DEMO_SCAN_PLATS = _PLATS + ["app_zhixing", "app_qunar"]
+
 
 def _d(days):
     return (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
@@ -146,7 +155,11 @@ def _mk_intl_detail(rng, plat, dep_date, base_d, base_t, to_code):
 
 
 def demo_cfg(db_path, port=8765):
+    # platforms 必须显式给：缺省时 main 的兜底是 4 家老清单（连携程都没有），
+    # 配置页「监控渠道」就会出现 7 个 chip 里只亮 4~5 个、两个 App 永不勾选
+    # ——同一页两套渠道宇宙（r805）。
     return {"output": {"db_path": db_path, "log_path": "logs/monitor.log"},
+            "platforms": list(DEMO_SCAN_PLATS),
             "web": {"port": port}}
 
 
@@ -177,8 +190,11 @@ def _mk_detail(rng, plat, dep_date, base, dep_min_only=False, route=None):
     for i, (nm, code) in enumerate(airlines):
         # 桶位偏移用枚举序号而非 hash(plat)：Python 字符串 hash 每进程
         # 随机化（无 PYTHONHASHSEED），docstring「确定性种子，截图可
-        # 复现」曾不成立——同一份演示数据每次进程时段分布不同
-        dpt, art, plus = slots[(i + _PLATS.index(plat) % 3) % len(slots)]
+        # 复现」曾不成立——同一份演示数据每次进程时段分布不同。
+        # 用 DEMO_SCAN_PLATS 取序号（含两个 App）：原先用 _PLATS.index，
+        # 一旦传进 App 渠道就 ValueError（r805 实测：demo 直接起不来）。
+        dpt, art, plus = slots[(i + DEMO_SCAN_PLATS.index(plat) % 3)
+                               % len(slots)]
         if dep_min_only and dpt < "17:00":
             continue
         price = base + rng.randint(-120, 160)
@@ -411,14 +427,22 @@ def build_demo_db(path, seed=20260909):
                 (_PLATS[(i + ri) % len(_PLATS)], r["from"], r["to"],
                  r["dates"][0], min(dp, tp), "东航", "MU8369", ts_s,
                  json.dumps(extra, ensure_ascii=False)))
-    # ---- 当轮富明细：近 30 分钟内，5 渠道 × 3 航线 ----
-    for pi, plat in enumerate(_PLATS):
+    # ---- 当轮富明细：近 30 分钟内，采集渠道 × 3 航线 ----
+    # 用 DEMO_SCAN_PLATS（7 家）而不是 _PLATS（5 家价格种子）：真实库里
+    # 两个 App 有明细行（48h app_zhixing 24 / app_qunar 6），生产 8765
+    # 明细页实测也真渲染出 app_zhixing 行。演示缺它们会让访客以为
+    # 「App 渠道不参与采集」，且连带让检索页的 App chip 恒为 0、
+    # 关注卡看不到 App 覆盖。
+    for pi, plat in enumerate(DEMO_SCAN_PLATS):
         ts_s = (now - timedelta(minutes=4 + pi * 3)).strftime(
             "%Y-%m-%d %H:%M:%S")
         for ri, r in enumerate(routes):
             c = curves[ri]
+            # App 渠道报价通常略低于浏览器端（真机专属价），这里取
+            # 负偏移以体现差异，不改变任何浏览器渠道的既有价。
             base = {"qunar": 0, "ctrip": -30, "fliggy": 60,
-                    "tongcheng": 90, "tuniu": 120}[plat]
+                    "tongcheng": 90, "tuniu": 120,
+                    "app_zhixing": -45, "app_qunar": -60}[plat]
             if r["to"] in _INTL_PLAN:
                 # R49 国际专用池（不共用国内 airlines/slots——行头
                 # 机场对错挂国内虹桥/天山即在此规避）
@@ -525,6 +549,11 @@ def demo_health(hours=24, seed=7):
     # 否则公共演示仍宣称“携程日历价 3（无航班明细）”，与 README/
     # Release 的 174 行真实航班直接矛盾。
     cal_only = {"fliggy", "tongcheng"}
+    # 健康时间线要覆盖**全部已注册渠道**，含两个 App。
+    # 用 DEMO_SCAN_PLATS 而不是 _PLATS：后者只是价格种子（下标参与价格
+    # 偏移），扩它会改演示价。真实账本里 7 家每轮都在，演示缺了会让
+    # 访客以为 App 渠道不参与采集。
+    health_plats = list(DEMO_SCAN_PLATS)
 
     def _cell(s, ok, tot, note="", cal=0, detail=0, auth=False):
         return {"s": s, "ok": ok, "tot": tot, "note": note,
@@ -533,7 +562,7 @@ def demo_health(hours=24, seed=7):
     for i in range(n):
         ts = now - timedelta(minutes=15 * (n - 1 - i))
         plats = {}
-        for plat in _PLATS:
+        for plat in health_plats:
             roll = rng.random()
             if plat == "fliggy" and i < n - 14:
                 plats[plat] = _cell("maint", 0, 0, "渠道维护模式")
@@ -592,8 +621,12 @@ def demo_pulse(seed=11):
     每轮各渠道行数/耗时，供主页概览条与脉冲柱演示。"""
     rng = random.Random(seed)
     now = datetime.now().replace(second=0, microsecond=0)
-    chans = {"qunar": (70, 16), "ctrip": (18, 8), "fliggy": (24, 9),
-             "tongcheng": (30, 12), "tuniu": (12, 7)}
+    # 与 demo_health 同源（DEMO_SCAN_PLATS）：同一演示页两处渠道集合
+    # 分裂，读者会看到互相矛盾的两组渠道。
+    _base = {"qunar": (70, 16), "ctrip": (18, 8), "fliggy": (24, 9),
+             "tongcheng": (30, 12), "tuniu": (12, 7),
+             "app_zhixing": (20, 9), "app_qunar": (26, 10)}
+    chans = {p: _base[p] for p in DEMO_SCAN_PLATS}
     rounds = []
     for i in range(40):
         ts = now - timedelta(minutes=15 * (39 - i))

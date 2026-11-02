@@ -124,7 +124,8 @@ def _open_search(pg):
 def test_demo_honesty_labels_present():
     assert "live.innerHTML='<i></i>'+(demo?'DEMO':'LIVE')" in SRC
     assert "演示数据 · 合成" in SRC
-    assert "五渠道合成演示行" in SRC
+    # 文案不写死渠道数量（接入 App 后是 7 家）；守的是「演示行必须自报合成」
+    assert "合成演示行" in SRC
     assert "演示库不含真实报价" in SRC
 
 
@@ -159,10 +160,11 @@ def test_mobile_and_responsive_contracts():
     # 价格字符数算宽，行间价格左缘参差 17px（用户实报对齐问题）
     assert "grid-template-columns:26px minmax(0,1fr) 86px 118px" in SRC
     assert "左右滑动查看更多日期" in SRC
-    # r420：镜像工具条窄档不再 wrap（wrap 会把「收起镜像」单独挤到第二行），
-    # 改为单行横向滚动。约束用「两档都 nowrap、全站无 wrap 残留」表达，
-    # 不依赖具体断点块的排版位置。
-    assert SRC.count("srx-mrail{flex-wrap:nowrap") >= 2
+    # r420：镜像工具条不再 wrap（wrap 会把「收起镜像」单独挤到第二行），
+    # 改为单行横向滚动。r700 起这条约束收敛成**一处**（基础层就 nowrap，
+    # 折叠钮/工具组在所有桌面宽度都 sticky right），不再按断点各写一份——
+    # 所以判据改成「至少一处 nowrap 且全站无 wrap 残留」。
+    assert SRC.count("srx-mrail{flex-wrap:nowrap") >= 1
     assert "srx-mrail{flex-wrap:wrap" not in SRC
     assert ".monwatch:last-child:nth-child(odd)" in SRC
     assert "bottom:calc(18px + env(safe-area-inset-bottom))" in SRC

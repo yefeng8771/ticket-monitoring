@@ -291,8 +291,10 @@ def test_probe_ui_priority_order_source():
     import pathlib
     src = pathlib.Path(webui.__file__).read_text(encoding="utf-8")
     assert "const SRX_PLAT_ORDER=['ctrip','qunar','fliggy','tongcheng','tuniu'];" in src
-    assert 'aria-label="探针渠道（优先级：携程、去哪儿、飞猪、同程、途牛）"' in src
-    assert "SRX_PLAT_ORDER.filter(p=>(lg.channels||{})[p])" in src
+    assert 'aria-label="探针渠道（优先级：携程、去哪儿、飞猪、同程、途牛；智行 App / 去哪儿 App 需勾选，走真机通道）"' in src
+    # 顺序仍由 SRX_PLAT_ORDER 决定；但**渠道集合必须来自数据**——
+    # 原来直接 filter 固定表，App 渠道的实时进度永远不会显示。
+    assert "Object.keys(lg.channels||{})" in src and         "SRX_PLAT_ORDER.indexOf(a)" in src
 
 
 def _mk_task(plans, want):

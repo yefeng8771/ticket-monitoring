@@ -14,7 +14,7 @@
 import argparse
 import json
 
-__version__ = "1.5.306"
+__version__ = "1.5.307"
 import os
 import subprocess
 import sys
@@ -2158,6 +2158,7 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
         走的是不同入口/登录墙，混在一起自检会把"国际被拦"误读成"整家挂"。
         查询取该 scope 第一条航线的第一个日期——自检验的是链路，不是价格。
         """
+        from datetime import datetime as _dtm
         _want = str(scope or "").strip().lower()
         if _want not in ("", "dom", "intl"):
             return {"ok": False, "err": "scope 必须是 dom/intl/空"}

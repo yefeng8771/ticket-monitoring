@@ -91,9 +91,13 @@ def ui(browser):
     page.route("**/*", route)
     page.goto("http://channel-ui.test/", wait_until="networkidle")
     page.evaluate("""() => {
+        // 真实探针响应一定带 want（webui.py 建任务时 `"want": _want_all`），
+        // 它就是「本次真的要过哪些渠道」。替身缺这一项时，能力条无法区分
+        // 「跑了没数据」和「没跑」，会同程一家都不列（r794 复现）。
         SRX.probe = {rows: [{from:'SHA', to:'NRT', date:'2026-11-16',
           intl:true, platKey:'tuniu', code:'MU523', depTime:'09:05', arrTime:'13:15',
-          price:719, isStale:false, isCal:false}], channels:{}};
+          price:719, isStale:false, isCal:false}], channels:{},
+          want:['ctrip','qunar','fliggy','tongcheng','tuniu'], legs:[]};
         SRX.pair = 'SHA|NRT'; SRX.date = '2026-11-16';
     }""")
     yield page, state, calls

@@ -536,8 +536,14 @@ def test_demo_paths_and_health_share_one_aggregation():
     via_health = {}
     webui._attach_demo_paths({"rounds": rounds, "__x": via_health})
     assert webui._paths_payload(24, demo=True)["platforms"] == direct
-    assert direct and set(direct) == {"qunar", "ctrip", "fliggy",
-                                      "tongcheng", "tuniu"}
+    # 渠道宇宙从单源派生，不再硬编码 5 家：演示的采集渠道是
+    # DEMO_SCAN_PLATS（5 浏览器 + 2 App）。这条钉守的是「两处同源」，
+    # 不是「必须是这 5 个名字」——写死清单会在新增渠道时变成假红。
+    from core.demo import DEMO_SCAN_PLATS
+    assert direct, "演示 /api/paths 聚合为空"
+    assert set(direct) == set(DEMO_SCAN_PLATS), (
+        "演示 /api/paths 的渠道族 %s 与 DEMO_SCAN_PLATS %s 不一致"
+        % (sorted(direct), sorted(DEMO_SCAN_PLATS)))
 
 
 def test_demo_path_exposes_query_level_detail_calendar_split():

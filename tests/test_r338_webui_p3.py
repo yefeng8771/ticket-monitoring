@@ -46,11 +46,14 @@ def test_p3_1_header_padding_matches_bleed_function():
     assert "padding:9px clamp(12px,3vw,18px)" in src
     # 置尾覆写块同函数（≤760 移动端合并块声明序在基础块后，同特异性
     # 恒压——漏改它则 391-760 全带被压回恒 18px，探针实锤）：上下
-    # 12px 移动档保留，左右随出血函数
-    assert "header{padding:12px clamp(12px,3vw,18px)}" in src
+    # 12px 移动档保留，左右随出血函数。
+    # r808 起页头选择器带作用域（`#hdcard`）——裸 `header{}` 会同时命中
+    # 8 个组件卡头（白横带 + 分割线），由 test_r808_header_selector_scope
+    # 守死；本钉跟到同一选择器，守的仍是「padding 与出血同函数」。
+    assert "#hdcard{padding:12px clamp(12px,3vw,18px)}" in src
     # 禁复活：恒 18px 旧形态（基础块 391-599 带偏 6px / ≤760 块压回恒值）
     assert "padding:9px 18px;display:flex" not in src
-    assert "header{padding:12px 18px}" not in src
+    assert "#hdcard{padding:12px 18px}" not in src
 
 
 def test_p3_2_transfer_terminal_word_nowrap():

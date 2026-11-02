@@ -579,7 +579,12 @@ def _fit_text(d, text, x, y, max_w, base=15, fill=C_TEXT, min_size=11,
 
 PLAT_DOT = {"qunar": (26, 115, 232), "fliggy": (230, 126, 34),
             "ctrip": (46, 164, 79), "tongcheng": (130, 80, 223),
-            "tuniu": (210, 153, 34)}
+            "tuniu": (210, 153, 34),
+            # App 渠道用界面同一组品牌色（webui 的 --c-app_zhixing /
+            # --c-app_qunar），报告与界面读作同一家。此前这里只有 5 家，
+            # 取不到颜色 → 圆点不画、渠道名从 x+10 起排（有圆点的行从
+            # x+24 起）→ App 行整体左移 14px，与相邻行不对齐。
+            "app_zhixing": (0, 140, 255), "app_qunar": (3, 205, 233)}
 # 箭头区（←-⇿ U+2190-21FF、⬀-⯿ U+2B00-2BFF）不剥：箭头是正文字符非
 # emoji（msyh 有字形），组名「上→乌」/时刻「08:30→13:50」的航线语义依赖
 # ——曾整段入类被剥成「上乌」「08:3013:50」（修正）
@@ -788,7 +793,11 @@ def render_flights_table(rows, title, out_path="data/flights_table.png",
     才用文本」定律：无数据渠道/直挂标注缺失/孤低价拦截均无跳转需求，
     文本直出曾占推送首屏）。中性灰盒+灰字，勿用档位语义色。"""
     from core.alerter import Alerter
-    plat_cn = Alerter.PLATFORM_CN
+    # 必须用**合并后**的名字表：`Alerter.PLATFORM_CN` 只是浏览器五家
+    # （它同时充当「默认渠道全集」，不能塞 App 进去），App 的中文名在
+    # `PLATFORM_CN_EXTRA`。只取前者会让报告里印出裸 id `app_zhixing`
+    # ——实测 2026-11-01 渲染实证：渠道列文字就是 `app_zhixing`。
+    plat_cn = dict(Alerter.PLATFORM_CN, **Alerter.PLATFORM_CN_EXTRA)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     row_h, head_h, grp_h = 44, 42, 44
     cmp_h = 64   # 比价行两行式：航班+可省 / 渠道链整行（信息零截断）
@@ -1465,8 +1474,11 @@ def render_flights_table(rows, title, out_path="data/flights_table.png",
                                font=d.font(f13),
                                fill=C_QUAL if badge == "直挂"
                                else DESIGN.MUTED, anchor="mm")
-                elif name == "渠道" and dot:
-                    d.ellipse([x + 10, yc - 4, x + 18, yc + 4], fill=dot)
+                elif name == "渠道":
+                    # 圆点列**恒定预留**：文字起点不能取决于「这渠道有没有
+                    # 配颜色」，否则将来再加渠道就又会有一排左移 14px。
+                    if dot:
+                        d.ellipse([x + 10, yc - 4, x + 18, yc + 4], fill=dot)
                     _fit_text(d, txt, x + 24, yc, w - 28,
                               base=16, fill=fill, anchor="lm")
                 elif name == "中转":

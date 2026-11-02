@@ -8,9 +8,18 @@
 
 - fliggy  PC / H5  → 两格。两个独立 profile：PC 落 .fliggy.com，
   H5 落 .m.taobao.com/.taobao.com；实测同账号也要分别登。
-- ctrip / qunar / tongcheng / tuniu → 各一格。实测同一 profile 下
-  PC 国内 / PC 国际 / H5 国内 / H5 国际 全部同一登录态（同程国际 H5
-  明确显示「退出」），拆成两格会强迫用户登两次同一个账号。
+- ctrip / qunar / tongcheng / tuniu → 各一格。**一个 profile 装得下
+  同一个账号的多套 cookie**，所以拆成两格会强迫用户登两次同一个账号。
+
+  但「同一 profile」≠「站点在每个面都认这套登录态」：
+  · 同程国际 H5 实测明确显示「退出」（ly.com 父域 cookie 覆盖全子域）。
+  · 途牛 2026-11-01 实测有两套 cookie 家族：www/passport 面是
+    `tuniuuser_*` / `TDC_itoken` / `ssoUser`，m. 面是
+    `muser` / `TUNIUmuser` / `isLogined`。用户现场：国内页账号还在，
+    切到**国际航线**却被要求重新登录；账本里国际通道也确有
+    `710114/needLogin` 的登录门记录（`H5/API login`）。
+  所以登录卡说「已保存」只代表**该槽位核验过**，不代表站点的每个入口
+  都放行——国际入口再要求登录时，按站点的登录墙处理，不要判成通道故障。
 
 本模块只放元数据：profile、登录 URL、移动窗口标记。不含凭据与 cookie。
 """

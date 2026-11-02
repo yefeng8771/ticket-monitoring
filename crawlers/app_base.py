@@ -86,7 +86,14 @@ class AppCrawler:
 
     # 登录墙判据（子类覆盖）：默认认手机号表单 + 「立即登录」类文案。
     # 各渠道登录墙形态不同，但「恢复快照后仍在登录页」这件事必须能判出来。
-    LOGIN_FORM_MARKS = ("请输入手机号", "获取验证码")
+    #
+    # r723：**验证码页也是登录墙**。真机实测：输手机号收到短信后，页面变成
+    # 「请输入验证码 / 验证码已发送到 +86 199****8573 / 46秒后重发」，
+    # 原先两条判据都不匹配 → 登录墙被当成普通页，继续去找城市位，
+    # 账本最后记成「选日期失败」/「设到达城市失败」，
+    # 用户按提示去查选择器，实际只要重登一次。
+    LOGIN_FORM_MARKS = ("请输入手机号", "获取验证码",
+                        "请输入验证码", "验证码已发送")
 
     def is_login_wall(self, xml: str) -> bool:
         """当前页面是不是登录墙（子类可加自己的判据）。"""
@@ -182,6 +189,7 @@ class AppCrawler:
             if xml and not self._looks_blank(xml) and \
                     not self.is_login_wall(xml):
                 self.logger.info("[%s] 设备上已登录，跳过快照恢复", self.name)
+                self._app_fresh = True      # 刚冷启过，本轮不必再启一次
                 return False
         except Exception:
             pass
@@ -215,7 +223,33 @@ class AppCrawler:
                                   + str(detail)[:100] + expired)
             # 恢复里刚 app_start 过，等界面稳定再让调用方继续判断；
             # 否则紧接着的 dump 可能还是旧的（权限框/首页都读不到）。
-            time.sleep(2)
+            #
+            # r720：只看「不是登录墙」不够。快照 restore 会**重启 App**，
+            # 冷启动到首页面板实测 8–12s；原先这里只 `sleep(2)`，调用方拿到的
+            # 是启动首屏（或登录墙之外的白屏中间态），里面没有城市位/搜索面板
+            # → `_set_city` 找不到 `atom_flight_tv_dep_city` → 整轮记
+            # `set-city-dep`（真机实测三条航线全 0 条，日志却报「设出发城市失败」，
+            # 把启动时序问题伪装成城市选择失败）。
+            # 这里轮询到「有界面且不是白屏」为止；停在登录墙则如实标注失效。
+            deadline = time.time() + 45
+            ready = ""
+            while time.time() < deadline:
+                try:
+                    probe = dev.dump() or ""
+                except Exception:
+                    probe = ""
+                if probe and not self._looks_blank(probe):
+                    ready = probe
+                    break
+                time.sleep(2.5)
+            if ready and self.is_login_wall(ready):
+                expired = "；快照已失效（仍停在登录墙，需重新登录）"
+            elif not ready:
+                expired = "；快照恢复后界面未就绪（45s 内无可用 dump）"
+            self.path_note("snap-restore", "ok", rows=0,
+                           detail="登录态恢复（非取数）："
+                                  + str(detail)[:100] + expired)
+            self._app_fresh = True
             return True
         self.logger.warning("[%s] 登录态快照恢复失败：%s", self.name, detail)
         # 「设备上的登录态比快照新」不是失败，是刻意保留——记成 error 会
@@ -226,7 +260,55 @@ class AppCrawler:
                            detail="跳过恢复（非失败）：" + str(detail)[:120])
             return False
         self.path_note("snap-restore", "error", detail=str(detail)[:150])
+        # 「拿不到 root」这类**环境原因**恢复不了快照时，别把 App 留在半死
+        # 状态：设备上本来就是登录着的（快照只是副本）。冷启一次再判——
+        # 这一步不改变「恢复失败」的事实（上面已落 error），只保证本轮还能采。
+        page = self._cold_start_and_probe(dev)
+        if page and not self.is_login_wall(page):
+            self.logger.info("[%s] 快照恢复失败但设备仍登录，继续采集", self.name)
+        elif page:
+            self.login_suspect = True
         return False
+
+    def _cold_start_and_probe(self, dev, wait_s: float = 30) -> str:
+        """冷启 App 并等到「有界面」；返回最后一帧 dump（失败返回 ""）。
+
+        与「设备已登录就跳过恢复」那段同律：冷启动到首页要 8–12s，取太早
+        会拿到启动首屏/白屏，后面 `_set_city` 会读成「没有城市控件」。
+        """
+        try:
+            dev.app_stop(self.package)
+            time.sleep(1.5)
+            if getattr(self, "home_uri", ""):
+                dev.deep_link(self.home_uri)
+            else:
+                dev.app_start(self.package)
+            deadline = time.time() + wait_s
+            page = ""
+            while time.time() < deadline:
+                time.sleep(2.5)
+                page = dev.dump() or ""
+                if page and not self._looks_blank(page):
+                    return page
+            return page
+        except Exception:
+            return ""
+
+    def _ensure_app_fresh(self, dev) -> bool:
+        """每条航线开始前把 App 冷启一次，拿一个确定的起点。
+
+        现场实证（2026-11-01，去哪儿 App）：同一进程里第一条航线
+        （19:16 SHA→BKK）成功；后续航线**复用上一轮界面**时开始卡在设城市
+        （20:29 `set-city-dep`、20:34 `set-city-arr`），而手动 force-stop
+        后同一坐标一次点开——多轮操作留下的广告/动效/子页残留会吞掉点击。
+        快照恢复那条路已经冷启过时（`_app_fresh`）不重复启。
+        """
+        if getattr(self, "_app_fresh", False):
+            self._app_fresh = False
+            return True
+        page = self._cold_start_and_probe(dev)
+        self._app_fresh = False
+        return bool(page and not self._looks_blank(page))
 
     def _dismiss_system_prompts(self, dev) -> int:
         """点掉系统权限弹窗（通知/定位等）。返回处理次数。
@@ -447,9 +529,53 @@ class AppCrawler:
         App，而重启后最容易撞上「没有响应」死锁（实证：主线程等 so 下载
         锁）。放在这里，任何渠道第一轮都不会因为卡死白跑。
         """
+        # 先锁竖屏：坐标/滑动按 900×1600 写，横屏会让整轮点不动
+        # （2026-11-01 现场：accelerometer_rotation=1，App 转成 1600×900，
+        # 首页控件都在却怎么点都打不开城市页，账本记 set-city-dep）
+        try:
+            dev.lock_portrait()
+        except Exception:
+            pass
         self.restore_login_snapshot(dev)
         self._dismiss_system_prompts(dev)
+        self._ensure_own_app(dev)
         self.recover_anr(dev, wait_s=30)
+
+    def _ensure_own_app(self, dev) -> bool:
+        """确保前台是自家 App；不是就切回来（真返回 True 表示切过）。
+
+        实测（2026-11-02）：同一台模拟器先跑去哪儿、再跑智行时，后者的
+        `prepare_device` 没做任何前台校验——智行顺着**去哪儿**的首页去解析，
+        dump 里全是 `com.Qunar:id/...`，账本还记成「页面选择不覆盖」。
+        开错 App 与「页面没数据」在账本上长得一样，只能靠这里先纠正。
+        """
+        if not self.package:
+            return False
+        try:
+            act = str(dev.current_activity() or "")
+        except Exception:
+            return False       # 读不到就不动手（可能只是 adb 慢）
+        cur = act.split("/")[0].strip()
+        if not cur or cur == self.package:
+            return False
+        self.logger.warning("[%s] 前台是 %s，先切回 %s（上一渠道未退出）",
+                            self.name, cur, self.package)
+        try:
+            dev.app_start(self.package)
+        except Exception as e:
+            self.logger.warning("[%s] 切回 %s 失败：%s", self.name,
+                                self.package, e)
+            return False
+        time.sleep(2.5)
+        try:
+            after = str(dev.current_activity() or "").split("/")[0].strip()
+        except Exception:
+            after = ""
+        if after and after != self.package:
+            self.logger.warning("[%s] 已启动 %s，但前台仍是 %s",
+                                self.name, self.package, after)
+            return False
+        return True
 
     def recover_anr(self, dev, attempts: int = 1, wait_s: int = 45,
                     restart_after: bool = True) -> bool:

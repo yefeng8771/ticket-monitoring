@@ -37,14 +37,20 @@ SRC_TUNIU = "tuniu"
 SRC_CTRIP = "ctrip"
 SRC_CTRIP_BD = "ctripbd"
 SRC_FLIGGY = "fliggy"
-# App 渠道发现源：去哪儿 App「低价机票」（真机，每天一条最低价）
+# 浏览器渠道发现源（r3xx 补齐）：去哪儿官方 H5 低价日历、同程 H5 低价日历
+SRC_QUNAR = "qunar"
+SRC_TONGCHENG = "tongcheng"
+# App 渠道发现源：去哪儿 App「低价机票」、智行 App「特价」
+# （均为真机，每次读该航线逐天一条最低价）
 SRC_APP_QUNAR = "app_qunar"
+SRC_APP_ZHIXING = "app_zhixing"
 _KNOWN_SOURCES = (SRC_TUNIU, SRC_CTRIP, SRC_CTRIP_BD, SRC_FLIGGY,
-                  SRC_APP_QUNAR)
+                  SRC_QUNAR, SRC_TONGCHENG, SRC_APP_QUNAR, SRC_APP_ZHIXING)
 # 推送词面：源价口径标注（tuniu/ctripbd/fliggy=榜单裸价 / ctrip=日历价）
 _SRC_LABEL = {SRC_TUNIU: "榜单", SRC_CTRIP: "日历",
               SRC_CTRIP_BD: "主题榜", SRC_FLIGGY: "飞猪榜",
-              SRC_APP_QUNAR: "App低价"}
+              SRC_QUNAR: "去哪日历", SRC_TONGCHENG: "同程日历",
+              SRC_APP_QUNAR: "App低价", SRC_APP_ZHIXING: "智行特价"}
 
 # 特价雷达渠道能力（只陈述现役发现源，不把未接入写成可用）。
 SPECIAL_CAPABILITY = {
@@ -52,12 +58,28 @@ SPECIAL_CAPABILITY = {
               "note": "主题榜 + 低价日历"},
     "tuniu": {"sources": [SRC_TUNIU], "note": "特价榜单（无公开特价页）"},
     "fliggy": {"sources": [SRC_FLIGGY], "note": "PC 特价榜"},
-    "qunar": {"sources": [], "note": "lowFlight 缓采；H5 低价榜"},
-    "tongcheng": {"sources": [], "note": "采集未接入；H5 特价榜"},
-    # App 渠道：真机「低价机票」→ 每天一条最低价（页面未标价格口径）。
-    # 不需要 Playwright，也没有页面签名；依赖 MuMu + 已登录会话。
+    # 去哪儿 / 同程此前被写成 `sources: []`（「缓采 / 未接入」），但雷达里
+    # `_qunar_deals`（官方 H5 低价日历，页面 JS 自签名）与
+    # `_tongcheng_deals`（H5 低价日历 90/180 天窗口，免登录免签名）
+    # **都是真实可用源**——同一件事两张表给出相反答案，属文档/代码漂移。
+    # 这里按实现收敛：有源就登记源，并如实写明各自的边界。
+    "qunar": {"sources": [SRC_QUNAR], "note": "官方 H5 低价日历（自签名）"},
+    "tongcheng": {"sources": [SRC_TONGCHENG],
+                  "note": "H5 低价日历（90/180 天窗口）"},
+    # 去哪儿 App「低价机票」：登录后落原生 RN 页
+    # （QReactNativeActivity1），不是 H5 WebView；2026-11-02 真机
+    # BJS→SHA 14 天逐日价 ¥408/359/…（41.2s，path low-fare ok）。
+    # 恢复为真实发现源；H5 WebView 仅在异常转场时兜底。
     "app_qunar": {"sources": [SRC_APP_QUNAR],
-                  "note": "真机低票价（14 天窗口；口径未标注）"},
+                  "note": "原生低价机票页·逐日最低价（需登录）"},
+    # 智行 App 的「特价」页早期被记成「目的地低价榜、口径对不上」——那是把
+    # 首页「省钱攻略」的推荐卡当成了特价档。r732 真机复核：首页「特价」
+    # 页签 → 设出发/到达 + 日期区间 →「搜索特价」→ 结果页逐天列出
+    # `02.16 周二 ¥1646`，与去哪儿 App「低价机票」同一契约。发现源在
+    # `core/special_radar.py::_app_zhixing_deals`，页面未标价格口径，
+    # 所以 radar 行标「口径未标注」。
+    "app_zhixing": {"sources": [SRC_APP_ZHIXING],
+                    "note": "真机·逐天最低价·口径未标注"},
 }
 
 # 核实容忍带：核实价 > 源价 ×1.15 判「榜单价虚高/口径差」丢弃

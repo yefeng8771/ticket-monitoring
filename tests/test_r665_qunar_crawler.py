@@ -97,10 +97,14 @@ def test_pick_date_home_showing_target_is_already_selected():
     c = _crawler()
     tapped = []
 
+    # r722 起判据只看「首页日期行节点自身文本」（按 resource-id 定位），
+    # 不能全文搜 —— 否则日历网格里的同日候选会把「没设日期」判成已选好。
+    home = ('<hierarchy><node resource-id="com.Qunar:id/atom_flight_tv_dep_date" '
+            'text="10月31日" bounds="[48,564][178,609]" /></hierarchy>')
+
     class D:
         def dump(self, retries=2):
-            return ('<hierarchy><node text="10月31日" '
-                    'bounds="[48,564][178,609]" /></hierarchy>')
+            return home
 
         def tap(self, x, y):
             tapped.append((x, y))
@@ -109,9 +113,7 @@ def test_pick_date_home_showing_target_is_already_selected():
         def swipe(self, x1, y1, x2, y2, dur=400):
             return True
 
-    ok = c._pick_date(D(), '<hierarchy><node text="10月31日" '
-                      'bounds="[48,564][178,609]" /></hierarchy>',
-                      "2026-10-31")
+    ok = c._pick_date(D(), home, "2026-10-31")
     assert ok is True
     assert tapped == [], "首页已是目标日却还去点了（会打开日历弹层）：%s" % tapped
 
@@ -260,3 +262,88 @@ def test_no_priced_rows_is_not_reported_as_ok(monkeypatch):
     prices, why = c._search_and_parse(D(), "2026-10-30", "BJS", "SHA")
     assert prices == []
     assert why == "no-priced-rows", why
+
+
+def _list_page(with_price):
+    def n(t, a, b, c, d):
+        return ('<node text="%s" bounds="[%d,%d][%d,%d]" />' % (t, a, b, c, d))
+    rows = (n("搜索", 48, 769, 1552, 826)
+            + n("20:45", 36, 354, 120, 404)
+            + n("22:55", 270, 354, 354, 404)
+            + n("东航KN5977", 57, 427, 160, 448))
+    if with_price:
+        rows += n("¥", 1492, 403, 1504, 444) + n("938", 1504, 400, 1563, 444)
+    return "<hierarchy>" + rows + "</hierarchy>"
+
+
+class _LatePriceDev:
+    """骨架屏：价还没渲出来时只有航班行；`late=True` 之后才带价。"""
+
+    def __init__(self):
+        self.late = False
+
+    def dump(self, retries=2):
+        return _list_page(self.late)
+
+    def tap(self, x, y):
+        return True
+
+    def swipe(self, *a, **k):
+        return True
+
+
+def _fake_time(monkeypatch):
+    import crawlers.app_qunar as M
+    ticks = {"t": 0.0}
+
+    class FakeTime:
+        @staticmethod
+        def time():
+            ticks["t"] += 1.0
+            return ticks["t"]
+
+        @staticmethod
+        def sleep(_s):
+            pass
+
+        # 类属性不走 __getattr__：落现场时 `time.strftime` 是**类上**取的
+        strftime = staticmethod(lambda fmt: "20261101_000000")
+
+        def __getattr__(self, k):
+            return getattr(__import__("time"), k)
+
+    monkeypatch.setattr(M, "time", FakeTime)
+    return M
+
+
+def test_price_rendered_one_frame_late_is_still_collected(monkeypatch):
+    """整窗等完后**再等一拍**：价可能只是比航班号晚渲出来。
+
+    真机 2026-11-01 22:36 SHA→LHR 就是「有航班行、一行都不带价」；
+    慢机上 60s 只够 3 帧，最后一帧可能仍在骨架屏。
+    """
+    M = _fake_time(monkeypatch)
+    dev = _LatePriceDev()
+
+    def _sleep(s):
+        if s >= 10:          # 只有「再等一拍」那一次是 10s
+            dev.late = True
+
+    monkeypatch.setattr(M, "_sleep", _sleep)
+    prices, why = _crawler()._search_and_parse(
+        dev, "2026-11-16", "SHA", "LHR")
+    assert why == "ok", why
+    assert prices and float(prices[0].price) == 938, prices
+
+
+def test_no_priced_rows_saves_the_scene(tmp_path, monkeypatch):
+    """两拍都无价时要落现场：账本只写 no-priced-rows，看不出列表长什么样。"""
+    M = _fake_time(monkeypatch)
+    monkeypatch.setattr(M, "_sleep", lambda s: None)
+    monkeypatch.setenv("TICKET_SCENE_DIR", str(tmp_path / "scene"))
+    prices, why = _crawler()._search_and_parse(
+        _LatePriceDev(), "2026-11-16", "SHA", "LHR")
+    assert prices == [] and why == "no-priced-rows", why
+    got = sorted((tmp_path / "scene").glob("qunar_app_*_nopriced-*.txt"))
+    assert got, "无价失败没有落现场快照"
+    assert "KN5977" in got[0].read_text(encoding="utf-8")

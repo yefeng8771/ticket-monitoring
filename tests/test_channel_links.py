@@ -27,11 +27,16 @@ def test_entry_mode_has_all_twenty_cells():
                for x in c.values())
     assert "flight.qunar.com/site/" in c[("qunar", "pc", "domestic")]["url"]
     assert "market.m.taobao.com" in c[("fliggy", "h5", "domestic")]["url"]
-    # r413：同程 H5 国际此前配的是**国内页** ft/touch/index（实测正文
-    # 「国内 国际 往返 特价机票」、默认上海→北京），点国际入口落国内页。
-    # 真实国际入口是 tiflight/book1.html（带参会 302 passport 登录）。
-    assert "m.ly.com/tiflight/book1.html" in c[("tongcheng", "h5", "intl")]["url"]
-    assert "需登录" in c[("tongcheng", "h5", "intl")]["note"]
+    # r815b：同程 H5 国际不是独立 URL——实测点「国际」后 location 仍是
+    # ft/touch/index（同页切换，默认国内→上海/北京）；tiflight/book1.html
+    # 是已选好航线的列表/订票壳，直接打开会「网络开小差了 / 找不到合适
+    # 的行程」。入口落查询页；文案与携程/去哪儿同页切国际保持同构，
+    # 登录要求由登录区单独表达，不再往标题里塞长句。
+    h5_intl = c[("tongcheng", "h5", "intl")]
+    assert h5_intl["url"] == "https://m.ly.com/ft/touch/index", h5_intl
+    assert h5_intl["note"] == "H5 机票搜索（与国内同页，页内切国际）", h5_intl
+    assert h5_intl["login_required"] is True, h5_intl
+    assert "tiflight/book1" not in h5_intl["url"], h5_intl
     # 飞猪 H5 没有国内入口，进入即淘宝登录——文案必须这么说
     assert "淘宝登录" in c[("fliggy", "h5", "domestic")]["note"]
     assert "淘宝登录" in c[("fliggy", "h5", "intl")]["note"]
@@ -74,7 +79,13 @@ def test_intl_route_links_pc_h5_for_each_channel():
     assert "from=outer" in c[("ctrip", "h5", "intl")]["url"]
     assert "touch.qunar.com/ncs/page/interlist" in c[("qunar", "h5", "intl")]["url"]
     assert "sijipiao.fliggy.com/ie" in c[("fliggy", "pc", "intl")]["url"]
-    assert "tiflight/book1.html" in c[("tongcheng", "h5", "intl")]["url"]  # 有航线/日期时才走 book1
+    # 同程 H5 国际无可靠航线深链：产品页内切「国际」再搜才会带全参数，
+    # 手拼 book1 会落到「网络开小差了」，入口回落到查询页（2026-11-02 实测）。
+    # 文案与静态入口同构，避免 2 行换行破坏四列对齐。
+    assert c[("tongcheng", "h5", "intl")]["url"] == "https://m.ly.com/ft/touch/index"
+    assert c[("tongcheng", "h5", "intl")]["note"] == \
+        "H5 机票搜索（与国内同页，页内切国际）"
+    assert "tiflight/book1" not in c[("tongcheng", "h5", "intl")]["url"]
     assert "m2015/intlFlight" in c[("tuniu", "h5", "intl")]["url"]
     assert "其他范围" in c[("ctrip", "pc", "domestic")]["note"]
 
@@ -121,7 +132,13 @@ def test_channel_login_metadata_separates_session_and_page():
     from core.channel_links import channel_links
     r = channel_links()
     ch = {x["plat"]: x for x in r["channels"]}
-    assert set(ch) == {"ctrip", "qunar", "fliggy", "tongcheng", "tuniu"}
+    # 五家浏览器渠道必须在；且注册表里的每个渠道（含 App）都要有入口条目
+    # ——写死「恰好五家」会在接入 App 渠道后过期，且掩盖「新渠道没入口」。
+    from core.channels import APP_CHANNELS, BROWSER_CHANNELS
+    assert set(BROWSER_CHANNELS) <= set(ch), "缺浏览器渠道入口：%s" % (
+        set(BROWSER_CHANNELS) - set(ch))
+    assert set(APP_CHANNELS) <= set(ch), "App 渠道没有入口条目：%s" % (
+        set(APP_CHANNELS) - set(ch))
     # 五家全部 required
     for p in ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu"):
         assert ch[p]["session"] == "required", (p, ch[p]["session"])

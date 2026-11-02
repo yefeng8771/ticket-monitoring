@@ -148,7 +148,19 @@ def _measure(widths, force_nowrap=False):
                     pg.set_viewport_size({"width": w, "height": 1400})
                     pg.evaluate("""()=>{try{switchView('mon')}catch(e){}
                       try{showMonTab&&showMonTab('health',true)}catch(e){}}""")
-                    pg.wait_for_timeout(900)
+                    pg.wait_for_timeout(300)
+                    # 固定 900ms 在 7 卡 + xdist 并发下不够：行已在但 e2 还没
+                    # 填好，量到 clientWidth=0（全量实测 1024/768 假红）。
+                    pg.wait_for_function("""()=>{
+                      const b=document.getElementById('paceBox');
+                      if(!b)return false;
+                      const r=[...b.querySelectorAll('.pace-row')]
+                        .find(x=>/智行/.test(x.innerText));
+                      if(!r)return false;
+                      const e2=r.querySelector('.ev .e2');
+                      return !!e2 && e2.clientWidth>0
+                        && (e2.innerText||'').trim().length>0;}""",
+                        timeout=10000)
                     out[w] = pg.evaluate(r"""()=>{
                       const box=document.getElementById('paceBox');
                       const row=[...box.querySelectorAll('.pace-row')]

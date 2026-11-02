@@ -40,6 +40,17 @@ _DATE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
 _OK_PRICE = re.compile(
     r"(?:日历最低含税价|最低含税价|最低价)\s*[￥¥]\s*([\d,]+)")
 _DETAIL_COUNT = re.compile(r"明细\s*[1-9]\d*\s*条")
+# App 渠道（智行/去哪儿 App）的出数日志只有这一种措辞：
+#   `[app_zhixing] 抓取完成，得到 1 条记录`
+# 它既不含「最低价 ￥」，也不含「明细 N 条」，于是落进「无事件」分支
+# ——`ok=0,tot=0` → 判 fail。实测（2026-11-01）生产账本同一轮
+# `app_zhixing` 有 32 条 ok、日志 08:02/08:06/08:10 三次「得到 1 条」，
+# 健康卡却写「抓取失败（原因待核对）」。N 必须 >0 才算出数
+# （「得到 0 条记录」是空，不是成功）。
+_APP_ROWS = re.compile(r"抓取完成，得到\s*([1-9]\d*)\s*条")
+# 「得到 0 条」是**空结果**，不是抓取失败：App 端真跑通了、只是这天没票。
+# 落成 fail 会让人去查根本不存在的问题（重登/换网络）。
+_APP_EMPTY = re.compile(r"抓取完成，得到\s*0\s*条")
 _FAIL_DATED = ("达到最大重试圈数", "未解析到价格", "未拿到真实价格",
                "未拿到日历价")
 # 非法链接/会话门拒也可能来自签名、入口或业务校验，不能证明认证失效。
@@ -225,10 +236,20 @@ def parse_health(log_text, now=None, hours=24):
         dm = _DATE.search(rest)
         d = dm.group(1) if dm else None
         okm = _OK_PRICE.search(msg)
+        app_rows = _APP_ROWS.search(msg)
         auth_reason = next((k for k in _AUTH_MARKS if k in msg), "")
         if _MAINT_MARK in msg:
             maint.add(plat)
             ev["note"] = "渠道维护模式"
+        elif app_rows:
+            # App 渠道出数（见 _APP_ROWS 注释）：日志不带日期，用去程日
+            # 兜底；仍无日期时用「本渠道本轮出过数」占一位，语义是
+            # 「这一轮采到了」，不是「某天采到了」。
+            ev["ok"].add(d or ("app:" + plat))
+            if ev["kinds"].get(d or plat) != "detail":
+                ev["kinds"][d or plat] = "detail"
+            _record_evidence(plat, _evidence_scope(msg), ts, "detail_at")
+            maint.discard(plat)
         elif okm and d:
             ev["ok"].add(d)
             # 同日先后出现日历与明细时以明细为准（明细信息量更高），
@@ -255,6 +276,10 @@ def parse_health(log_text, now=None, hours=24):
                 ev["generic_fail"] += 1
             if not ev["note"]:
                 ev["note"] = "请求被拒（认证状态未确认）"
+        elif _APP_EMPTY.search(msg):
+            ev["empty"] += 1
+            if not ev["note"]:
+                ev["note"] = "本轮无票（得到 0 条）"
         elif any(k in msg for k in _EMPTY_MARKS):
             ev["empty"] += 1
             if not ev["note"]:

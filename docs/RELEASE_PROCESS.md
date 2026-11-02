@@ -7,13 +7,13 @@ This is the fixed cadence for every UI/design wave and every public release. It 
 The opening blockquote of `README.md` / `README_EN.md` is the original introduction and must not be re-positioned or extended:
 
 ```markdown
-> 自托管的多渠道机票价格监控：五平台明细采集 → 钉钉图文推送 → 达标四层强提醒。
+> 自托管的多渠道机票价格监控：航班明细采集 → 钉钉图文推送 → 达标四层强提醒。
 > 国内航线与国际航线（五洲目的地）同一套采集-判定-推送链路。
 > 数据留在本机，配置全在网页，开源免费。
 ```
 
 ```markdown
-> Self-hosted multi-channel flight price monitoring: 5-platform fare collection →
+> Self-hosted multi-channel flight price monitoring: fare collection →
 > rich DingTalk group reports → 4-layer urgent alerts when your target price hits.
 > Domestic and international routes (destinations across five continents) run
 > through the same collection → judging → push pipeline.
@@ -89,3 +89,31 @@ Do not push, retag, publish or rewrite shared history without explicit user auth
 - Public history is a single initialization commit. Working commits and fixups are temporary and must be converged before publication; never expose the development train as the public story.
 - One GitHub Release, one Pages deployment, one asset set. Do not upload intermediate builds or re-bake identical screenshots just to create a new commit.
 - A history rewrite must be explicit: freeze writers, create a backup branch outside the public line, verify pre/post tree equality, then re-point `main` and `v1.0` with expected-state protection and rebuild assets from the new SHA.
+
+## 6. 预检与并发写陷阱（2026-11-01 实测）
+
+- **站点戳 = `sha256(webui.py)[:12]`**（不是 commit SHA）。任何一次 webui 改动都会让戳立刻过期；冻结点确定后重烘 `python docs/demo_build.py`，再跑对账。2026-11-01 曾烘到 `code:b7cd172d18df` 并通过，随后并行会话在 00:01 改写 webui，戳再次过期——**不要在热树上把 25/25 当最终结论**。
+- **对账的 pytest 项数是「已跟踪测试」**（`git ls-files tests` + `pytest --collect-only`），不是工作树全量。新增测试未入库时不计入；把它们 stage/commit 后数字会变。因此：**对齐放最后**，任何 staging/提交之后同步 README/EN 的跟踪口径并重跑 `release_align_check.py --local`。
+- **对账的 UI 项数读 `HEAD:docs/uitest_result.txt`**（已提交版本），不是工作树。工作树新跑出 670/670 并不会让对账变 670；发布提交要把新的 uitest 结果一起入库，README 的 668 同步改 670，再对账。
+- **全量门禁在并发会话下用 `--workers 4`**：8 worker 曾出现 demo free-port 竞态（`test_r851` setup 连接拒绝，已加三次新端口重试）与内存压力。跑前/跑后必须看工具的 CODE_GLOBS 哈希 WARN；一旦产品代码被改写，整轮作废，不得把其中的 passed 当绿证。
+- **线上 8765 只在写会话停止后重启**：比较进程启动时间与 `webui.py` mtime；启动早于最后一次改动即为旧代码。重启后复验 `/api/health` 诊断卡 7 家、探针 7 chip、390 无横向溢出。
+- **本地 25/25 是快照**：它证明 README/截图/站点戳/计数在当前 tracking 下自洽；在线 Release/tag/四平台包/ghcr 镜像仍需带 token 的在线对账与 `release-build` 工作流。
+
+### 6.1 在线面预检（2026-11-02 01:00 +0800 实测）
+
+本地绿不等于在线自洽。发布前先用 token 核四角；当时在线面有三处不一致，下轮发布必须一并收口：
+
+- **tag 目标 ≠ 已发布源码**：`v1.0` → `02766a3`，但 Release 正文与 `release-build` run `41105554843` 的 `head_sha` 都是 `5cff7f5`；两棵树不同（`5cff7f5` 比 `02766a3` 多 9 个文件改动，含 App 雷达修复）。按 §3.9，tag 必须移到本轮**实际构建**的那个 SHA。
+- **站点戳 ≠ 已发布树**：线上 `site/` 的 `tm-build code:` = `2a326e3c8a3d`（=`02766a3:webui.py` 的 `sha256[:12]`），而 `5cff7f5:webui.py` = `5e1f74c5daef`。Pages 部署记录的 sha 虽是 `5cff7f5`，站点内容却是旧树烘的——**部署 sha 不等于烘站源码**。每轮必须在最终树上重烘，戳必须对 `sha256(webui.py)[:12]`。
+- **已发布 SHA 的 CI 是红的**：run `41105518625` 在 `5cff7f5` 上 `21 failed / 5185 passed`（r620 无 DISPLAY、r652 Windows 盘符、r675 容器 host 等此后已在本地树修掉，但**下次推送必须等 CI 绿**再动 tag/资产）。
+- ghcr 公开镜像当前 `latest` 与 `sha-5cff7f5` 同源；下一轮必须在新 SHA 上重建并推送，`latest` 才能与 Release 对上。
+
+只读核验：`git ls-remote --heads origin`；GitHub API `releases/latest`、`git/ref/tags/v1.0`、`actions/runs`；`curl https://<pages>/site/ | grep tm-build`；匿名 `ghcr.io/token` + `/v2/<owner>/<repo>/tags/list`。
+
+### 6.2 在线对账器与预跑清单（2026-11-02 实测）
+
+- **`git ls-files` 必须用 `-z`**：默认 quotePath 把中文测试名（`tests/test_r643_干预覆盖每个可见渠道.py`）包成引号转义，`startswith("tests/test_")` 过滤掉它 → tracked 计数少 2（HEAD 真实 5445、旧 README 5443；发布应 5885）。普查/计数一律 NUL 分隔，并在提交树上算。
+- **GitHub API / SHA256SUMS 走 curl/Schannel**：本机 Python/OpenSSL 无 CA bundle（`C:\Program Files\Common Files\SSL/cert.pem` 不存在），`api.github.com` 报 `unable to get issuer certificate`；curl（Windows 证书库）正常。`_curl` 用 `--config -` 从 stdin 读 token，**不关 TLS 校验**；Pages/ghcr 仍用 urllib。不要给资产 URL 加多轮 retry——代理 502 时重试会把一次失败放大成 60s 挂起。
+- **资产 502 的回退**：`SHA256SUMS` 下载失败时，用 release API 的 `digest` 对正文 SHA 做**明确标注**的回退校验；不静默跳过，也不把代理 502 当产品失败。
+- **预跑实测（29/46）**：线上正文 intro/version 仍 1.5.306、**正文 SHA 只与 win64 当前资产一致（另 3 个 zip 的 API digest 不在正文）**、Pages 部署 **11 个**、站点戳 `2a326e3c` 旧树、source/tag/CI/release-build/ghcr 不同源；live 8765 1.5.307 通过。发版须重建正文+四资产（同一组 SHA）、`prune_deployments.py` 到 1、重烘站点、CI/release-build 绿、ghcr 新 SHA，再在线对账全绿。
+- **计数以冻结后的 tracked 为准**：并行会话与日期参数会让计数漂移；发布前冻结写者、重跑 4w、`git ls-files -z tests` 重新 collect 并同步 README/EN/UI，再做 root commit。

@@ -15,12 +15,21 @@ import os
 import subprocess
 import sys
 import time
+import socket
 import urllib.request
 
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PORT = 9136
+def _free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+PORT = _free_port()
 BASE = "http://127.0.0.1:%d" % PORT
 
 JS = r"""() => {

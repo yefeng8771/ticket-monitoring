@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """携程数据诚实门（INTL_DESIGN §5/§10）：三处「不装懂」回归钉。
 
-- 往返（ret_date）：Ctrip 无回程查询，不得用单程价冒充往返总价，
-  不发查询、落 unsupported 证据、返回空；
+- 往返（ret_date）：走 PC `round-...&containstax=1` 往返列表，只采
+  页面自己的「往返含税价」总价；**不得**回落到单程 H5/日历通路
+  （r815i 起替代旧的 unsupported 短路）；
 - 机场级航线（PVG/NRT）：城市日历（SHA/TYO）无机场维度，机场级
   缺口不得用城市日历价回填（跨机场串价），城市级航线行为不变；
 - 国内 H5 起飞日门：滚动/推荐位行（ddate 非请求日）剔除；仅在行内
@@ -33,23 +34,27 @@ def _cal_row(date="2026-11-16", price=1100):
                        depart_time="", arrive_time="", extra="[]")
 
 
-# ---- 1. 往返诚实：不发单程查询 ----
+# ---- 1. 往返诚实：只走往返列表，不回落到单程 ----
 
-def test_fetch_ret_date_unsupported_no_oneway_query(monkeypatch):
+def test_fetch_ret_date_uses_round_trip_path_not_oneway(monkeypatch):
     c = _crawler()
+    seen = {}
 
     def boom(*_a, **_k):
-        raise AssertionError("往返请求不得发起单程查询/浏览器")
+        raise AssertionError("往返请求不得走单程 H5/日历通路")
 
-    monkeypatch.setattr(c, "browser", boom)
-    # 国内、国际两条分流都必须在浏览器前短路
+    def fake_rt(frm, to, dates, ret):
+        seen["args"] = (frm, to, list(dates), ret)
+        return []
+
+    monkeypatch.setattr(c, "_fetch_rt", fake_rt)
+    monkeypatch.setattr(c, "_fetch_intl", boom)
+    # 国内、国际同一 PC 往返入口，都在分流通路之前接住
     for frm, to in (("SHA", "CAN"), ("SHA", "TYO")):
         out = c.fetch(frm, to, ["2026-11-10"], ret_date="2026-11-15")
         assert out == []
-        notes = [p for p in c.paths if p["path"] == "TRIP"]
-        assert len(notes) == 1, c.paths
-        assert notes[0]["status"] == "unsupported"
-        assert notes[0]["detail"] == "往返明细暂不支持，未发起单程查询"
+    assert seen["args"] == ("SHA", "TYO", ["2026-11-10"], "2026-11-15")
+    assert [p for p in c.paths if p["path"] == "TRIP"] == []
 
 
 def test_fetch_single_trip_reaches_query_paths(monkeypatch):

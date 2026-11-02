@@ -89,6 +89,12 @@ class CtripCrawler(BaseCrawler):
     URL_LIST_DOM = ("https://flights.ctrip.com/online/list/"
                     "oneway-{from_city}-{to_city}?depdate={date}"
                     "&cabin=y_s_c_f&adult=1&child=0&infant=0")
+    # 往返 PC 列表（r815i）：`round-...` + `containstax=1` 出
+    # 「¥N起 / 产品往返总价标签 / 选为去程」卡片；价格是产品往返总价。
+    URL_RT_PC = ("https://flights.ctrip.com/online/list/"
+                 "round-{from_city}-{to_city}"
+                 "?depdate={date}_{ret_date}&cabin=y_s"
+                 "&adult=1&child=0&infant=0&containstax=1")
 
     # 仅认航班列表接口；LowestPriceSearch 是跨日期低价日历，会混入其他日期价格
     XHR_KEYS = [
@@ -119,6 +125,8 @@ class CtripCrawler(BaseCrawler):
 
     # 预热成效判据：cticket/bfa 落下才算真会话（空=不判）
     RISK_COOKIES = ("cticket", "_bfa", "MKT_CKID")
+    # 登录凭证（采集后快照回写只认它；_bfa/MKT_CKID 未登录也可能在）
+    AUTH_COOKIES = ("cticket",)
 
     def login_url(self) -> str:
         # 与登录卡单源（r678 实测）：www.ctrip.com 在移动指纹下是 App 式
@@ -129,17 +137,12 @@ class CtripCrawler(BaseCrawler):
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
         self.path_reset()
-        # 往返诚实（§5/§10）：Ctrip 未实现回程查询，忽略 ret_date 返回
-        # 单程价会被告警/走势当成往返总价（Fliggy/同程已真往返）。不发
-        # 单程查询，直接以 unsupported 落账，宁缺勿错。
+        # 往返（r815i）：PC `round-...&containstax=1` 列表页在受信
+        # profile 下直出「¥N起 / 产品往返总价标签 / 选为去程」卡片，价格是
+        # 渠道自己的往返含税总价——只采这个价，不把两段单程相加。
+        # （r733 的 H5 `adate` 结果页仍只有去程一列，不用它。）
         if ret_date:
-            self.logger.warning(
-                "[ctrip] 往返明细暂不支持（返程 %s），未发起单程查询",
-                ret_date)
-            self.path_note(
-                "TRIP", "unsupported",
-                detail="往返明细暂不支持，未发起单程查询")
-            return []
+            return self._fetch_rt(from_city, to_city, dates, ret_date)
         # 国际分流（r325→R44b 定谳改道）：14488 列表端点对国际查询
         # 业务性拒答（请求体与国内逐字段同构仍 30212，r39_reqdiff
         # 实证），国际真价面=FlightIntlAndInlandLowestPriceSearch
@@ -581,6 +584,217 @@ class CtripCrawler(BaseCrawler):
                 continue
             kept.append(f)
         return kept, dropped
+
+    # 往返卡片：航司 / [航班号 机型] / 起飞时刻 / 起飞机场 / 到达时刻 /
+    # 到达机场 / 时长 / 「¥N起」/ 产品总价标签 /「选为去程」。只认紧邻
+    # 产品总价标签的价锚——顶部「更多日期」条带里的 ¥N低 是单程日价，
+    # 不能混进往返池。标签随端面变化：国际「往返含税价」、国内
+    # 「往返总价」（2026-11-02 两棵真页面各 6 行）。
+    _RE_RT_PRICE = re.compile(r"^¥\s*([0-9][0-9,]*)\s*起$")
+    _RE_RT_TIME = re.compile(r"^\d{2}:\d{2}$")
+    _RE_RT_FLIGHT = re.compile(r"^([A-Z0-9]{2}\d{1,4})\s*(.*)$")
+    _RT_LABELS = ("往返含税价", "往返总价")
+
+    @classmethod
+    def _parse_rt_body(cls, body: str, date: str, ret_date: str) -> list:
+        """PC 往返列表正文 → 统一行（价格=渠道往返含税总价）。
+
+        买点只在「¥N起 + 产品总价标签」这一对（国际「往返含税价」/
+        国内「往返总价」）：价格是产品自己给出的往返组合总价，不把
+        两段单程相加。卡片缺时刻/航班号时不臆造，整卡跳过（残缺价
+        会被上游当头条价，绕过明细守卫）。
+        """
+        lines = [ln.strip() for ln in (body or "").splitlines()]
+        rows, seen = [], set()
+        boundary = 0  # 上一张卡「选为去程」之后，防止跨卡取时刻
+        for i, ln in enumerate(lines):
+            m = cls._RE_RT_PRICE.match(ln)
+            if not m:
+                continue
+            ahead = [x for x in lines[i + 1:i + 4] if x]
+            label = next((x for x in ahead
+                          if any(k in x for k in cls._RT_LABELS)), "")
+            if not label:
+                continue
+            price = float(m.group(1).replace(",", ""))
+            window = lines[max(boundary, i - 14):i]
+            times = [(j, t) for j, t in enumerate(window)
+                     if cls._RE_RT_TIME.match(t)]
+            if len(times) < 2:
+                continue
+            dep_j, dep_t = times[0]
+            arr_j, arr_t = times[1]
+            fl_idx, flight, aircraft = None, "", ""
+            for j, txt in enumerate(window):
+                fm = cls._RE_RT_FLIGHT.match(txt)
+                if fm and j < dep_j:
+                    fl_idx, flight = j, fm.group(1)
+                    aircraft = fm.group(2).strip()
+                    break
+            if fl_idx is not None and fl_idx > 0:
+                airline = window[fl_idx - 1]
+            elif dep_j > 0:
+                airline = window[dep_j - 1]
+            else:
+                airline = ""
+            row = {
+                "airline": airline,
+                "flight": flight,
+                "aircraft": aircraft,
+                "dep": dep_t,
+                "arr": arr_t,
+                "depAirport": (window[dep_j + 1]
+                               if dep_j + 1 < len(window) else ""),
+                "arrAirport": (window[arr_j + 1]
+                               if arr_j + 1 < len(window) else ""),
+                "price": price,
+                "priceLabel": label,
+                "basis": ("product_round_trip_tax" if "含税" in label
+                          else "product_round_trip_total"),
+                "tripType": "RT",
+                "depDate": date,
+                "backDate": ret_date,
+            }
+            key = (flight, dep_t, arr_t, price)
+            if key not in seen:
+                seen.add(key)
+                rows.append(row)
+            for k in range(i + 1, min(i + 5, len(lines))):
+                if lines[k] == "选为去程":
+                    boundary = k + 1
+                    break
+            else:
+                boundary = i + 2
+        return rows
+
+    def _fetch_rt(self, from_city: str, to_city: str,
+                  dates: List[str], ret_date: str) -> List[FlightPrice]:
+        """PC 往返列表：只落产品往返总价（r815i）。
+
+        `round-{fc}-{tc}?depdate={date}_{ret_date}&containstax=1` 在
+        受信 profile 下直接出卡片；国际写「往返含税价」、国内写
+        「往返总价」（同一 URL 模板，2026-11-02 两棵真页面）。国际用
+        城市码（NRT→TYO）。价格带按 scope 判（国内 100-50000 /
+        国际宽带，与单程同律）。
+        """
+        fc, tc = (airport_city_code(from_city.upper()),
+                  airport_city_code(to_city.upper()))
+        intl = is_intl_route(from_city, to_city)
+        results: List[FlightPrice] = []
+        bak = self.use_mobile
+        self.use_mobile = False
+        try:
+            with self.browser() as ctx:
+                warm = self.new_page(ctx)
+                try:
+                    warm.goto("https://flights.ctrip.com/",
+                              wait_until="domcontentloaded", timeout=30000)
+                    warm.wait_for_timeout(2500)
+                except Exception as e:
+                    self.logger.warning("[ctrip][rt] PC 预热失败: %s", e)
+                finally:
+                    try:
+                        warm.close()
+                    except Exception:
+                        pass
+                for date in dates:
+                    page = self.new_page(ctx)
+                    url = self.URL_RT_PC.format(
+                        from_city=fc.lower(), to_city=tc.lower(),
+                        date=date, ret_date=ret_date)
+                    self.logger.info("[ctrip][rt] GET %s", url)
+                    t_rt = time.time()
+                    try:
+                        page.goto(url, wait_until="domcontentloaded",
+                                  timeout=45000)
+                        body = ""
+                        # 卡片由 batchSearch 异步渲染；以产品总价标签
+                        # 为就绪锚，最多等 20s，不拿半张页面判空。
+                        for _ in range(20):
+                            try:
+                                body = page.inner_text("body", timeout=3000)
+                            except Exception:
+                                body = ""
+                            if any(k in body for k in self._RT_LABELS):
+                                # 价签先到、航班号行随后渲染（国内页实测
+                                # 首读只有价没有班号）；补一次短稳定读。
+                                page.wait_for_timeout(800)
+                                try:
+                                    body = page.inner_text(
+                                        "body", timeout=3000)
+                                except Exception:
+                                    pass
+                                break
+                            page.wait_for_timeout(1000)
+                        flights = self._parse_rt_body(body, date, ret_date)
+                        flights = [f for f in flights
+                                   if self._band_ok(f["price"], intl=intl)]
+                        if flights:
+                            CtripCrawler.login_suspect = False
+                            best = min(flights, key=lambda f: f["price"])
+                            results.append(FlightPrice(
+                                platform=self.name,
+                                from_city=from_city, to_city=to_city,
+                                depart_date=date, price=best["price"],
+                                flight_no=best.get("flight", ""),
+                                depart_time=best.get("dep", ""),
+                                arrive_time=best.get("arr", ""),
+                                extra=json.dumps(flights, ensure_ascii=False),
+                            ))
+                            self.path_note(
+                                "往返", "ok", rows=len(flights), date=date,
+                                url=str(getattr(page, "url", "") or ""),
+                                detail="flights.ctrip.com 往返列表"
+                                       "（产品往返总价）",
+                                ms=int((time.time() - t_rt) * 1000))
+                            self.logger.info(
+                                "[ctrip][rt] %s→%s 返 %s 最低往返总价 ¥%.0f"
+                                "（明细 %d 条）", date, ret_date,
+                                best["price"], len(flights))
+                        else:
+                            _blocked = bool(re.search(
+                                r"whaleguard|验证码|安全验证|访问验证|滑块",
+                                body))
+                            _sig = classify_text(body[:2000],
+                                                 str(page.url))
+                            _login = bool(_sig and _sig.status == "login")
+                            if _blocked:
+                                _detail = "风控验证页"
+                            elif _login:
+                                CtripCrawler.login_suspect = True
+                                _detail = "往返列表需携程登录"
+                            elif re.search(r"没有.{0,8}(航班|机票)|"
+                                           r"暂无.{0,8}(航班|机票)|"
+                                           r"未找到.{0,8}航班", body):
+                                _detail = "站点明确无可售往返"
+                            else:
+                                _detail = "往返列表未解析到往返总价"
+                            self.path_note(
+                                "往返", "blocked" if _blocked
+                                else ("login" if _login
+                                      else ("empty" if _detail.startswith(
+                                          "站点明确") else "error")),
+                                date=date, detail=_detail,
+                                ms=int((time.time() - t_rt) * 1000))
+                            self.logger.warning(
+                                "[ctrip][rt] %s→%s 未解析到往返价（%s）",
+                                date, ret_date, _detail)
+                            self._debug_snapshot(page, f"rt_nopx_{date}")
+                    except Exception as e:
+                        self.logger.exception(
+                            "[ctrip][rt] %s 抓取异常: %s", date, e)
+                        self.path_note("往返", "error", date=date,
+                                       detail=str(e)[:120],
+                                       ms=int((time.time() - t_rt) * 1000))
+                    finally:
+                        try:
+                            page.close()
+                        except Exception:
+                            pass
+                    time.sleep(0.5)
+        finally:
+            self.use_mobile = bak
+        return results
 
     @staticmethod
     def _extract_intl_list(body: str, date: str):

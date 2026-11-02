@@ -63,10 +63,20 @@ class FakeDevice:
         return False
 
     def dump(self, retries=2):
-        return self.pages.pop(0) if len(self.pages) > 1 else self.pages[0]
+        # 真机语义：**同一页可以被反复读**，只有发生了点击/切换才翻页。
+        # 旧实现每次 dump 都 pop，于是前置探测（restore_login_snapshot 会
+        # 先 dump 一次判断「设备是否已登录」）就把广告页吃掉，
+        # `_clear_blockers` 拿到的是下一页 → 广告永远关不掉（真机不会这样：
+        # 广告没点掉就一直盖着）。
+        return self.pages[0]
+
+    def advance(self):
+        if len(self.pages) > 1:
+            self.pages.pop(0)
 
     def tap(self, x, y):
         self.taps.append((x, y))
+        self.advance()
         return True
 
     def window_size(self):

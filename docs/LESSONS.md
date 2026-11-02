@@ -305,7 +305,7 @@ H5 touchInnerList 与 PC wbdflightlist 同族但有三处不同，照搬 H5 解�
 ### 3. 渠道 PC 化要"逐渠道定证"，不是一刀切
 - **qunar**：H5 死 ⇒ PC 必换（救活，72 条明细实测）——但 2026-10-10 PC /site/ 页停服（302 回 www 促销聚合），`wbdflightlist` 断供 ⇒ 主路径回归 H5 `m.flight`（出全量明细），PC 仅保留 `PC_PROBE_ON_MISS=False` 的显式复活探测；
 - **ctrip**：PC 版 302→432 风拒 ⇒ 保留 H5（登录态路径），改动即打破现状；
-- **tongcheng**：PC 接口 getflightlist 带易盾 openDun、无头下列表卡片不渲染、价格口径未证实（日历价 2600 与 H5 存量一致 ⇒ H5 口径正确）⇒ 保留 H5，路由/接口/响应证据存 debug/tc_pc_list.json 备查；
+- **tongcheng**：~~PC 接口 getflightlist 带易盾 openDun、无头下列表卡片不渲染⇒ 保留 H5~~ **（2026-10-31 r805 推翻）**：当时看到的是**渲染层**问题（页面用虚拟列表，headless 滚动收敛慢导致卡片没渲染），**接口一直是好的**（debug/tc_pc_list.json 那份 14 条就是接口原文）。真浏览器实测 64 条、页面可见价与 `productPrices` 逐条相等、端到端 13.7s 出数 ⇒ **已接通 PC**。教训：判「某端不可用」要看**接口响应**，不能只看页面渲染——虚拟列表/懒加载会把「有数据」读成「没实现」；
 - **tuniu**：无独立 PC 机票页，纯 httpx API 性能最优 ⇒ 保留；
 - **fliggy**：PC SSR 直读，本就是 PC。
 通用律：**"以 PC 为准"的正确姿势是给每个渠道拿证据做决策**——能救活的救活（qunar 曾以 PC 救活），已优的保留（tuniu/fliggy），有疑点的存证不动（tongcheng/ctrip）；**救活不等于永久——通路会再变，决策表必须带时间戳与失效条件**（qunar 的 PC 救活仅维持到 2026-10-10 停服）。SPA 404 页返回完整壳 ≠ 路由不存在（前端路由接管）；同程 PC 路由从 JS bundle 里 grep `itinerary` 得来（/flights/itinerary/oneway/:code，少个斜杠就是 404）。

@@ -47,7 +47,36 @@ _ITEM_ID_RE = re.compile(r"^date-item-(\d+)(?:-(date|day|price)-text)?$")
 
 _DATE_RE = re.compile(r"^(\d{2})-(\d{2})$")
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
-_FLIGHT_RE = re.compile(r"\b([A-Z]{2}\d{3,4})\b")
+# 航班号必须含字母：`CA8573` / `3U8888`。纯数字（`984839`）是图标字形的
+# 数字实体被当作文本后的产物，不是航班号（真机实测，见 _unescape）。
+_FLIGHT_RE = re.compile(r"\b((?=[A-Z0-9]{2}\d{3,4}\b)[A-Z0-9]*[A-Z][A-Z0-9]*\d{3,4})\b")
+# XML 字符实体：智行的图标是私用区字形，dump 里写成 `&#986266;`。
+# 不解码的话 text 里是字面量 `&#986266;`，其中的 6 位数字会被
+# `_DIGITS_RE`/旧航班号正则当成价格/航班号——实测把底部工具栏的三个
+# 图标当成了 `984839` 这一「航班」的号，还给它配上了 ¥2094。
+_ENTITY_RE = re.compile(r"&#(\d+);|&#[xX]([0-9a-fA-F]+);"
+                        r"|&(amp|lt|gt|quot|apos);")
+_NAMED = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'"}
+
+
+def _unescape(text: str) -> str:
+    if "&" not in (text or ""):
+        return text
+
+    def rep(m):
+        if m.group(1):
+            try:
+                return chr(int(m.group(1)))
+            except (ValueError, OverflowError):
+                return m.group(0)
+        if m.group(2):
+            try:
+                return chr(int(m.group(2), 16))
+            except (ValueError, OverflowError):
+                return m.group(0)
+        return _NAMED.get(m.group(3), m.group(0))
+
+    return _ENTITY_RE.sub(rep, text)
 # 货币符号有全角/半角两种写法，dump 里都出现过，必须都认
 _CURRENCY = "\u00a5\uffe5"
 # 整串价：¥450 / ￥450 / ¥ 450
@@ -91,6 +120,7 @@ def _nodes(xml: str) -> List[Node]:
         b = _BOUNDS_RE.search(tag)
         if not b:
             continue
+        text = _unescape(text)
         out.append(Node(text, _attr(tag, "resource-id").strip(),
                         int(b.group(1)), int(b.group(2)),
                         int(b.group(3)), int(b.group(4))))

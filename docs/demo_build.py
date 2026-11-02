@@ -127,7 +127,10 @@ def build():
             transfer_arrival_max=r["transfer_arrival_max"],
             dep_time_min=r["dep_time_min"], dep_time_max=r["dep_time_max"])
             for r in demo_routes()],
-        "platforms": ["qunar", "ctrip", "fliggy", "tongcheng", "tuniu"],
+        # 与 webui._watch_plats() 同源：演示用户的采集渠道 = 5 家浏览器
+        # + 已注册 App。写死 5 家会让演示配置页少两个可勾项，而健康卡/
+        # 检索/关注台都按 7 家渲染——同一页两套渠道宇宙。
+        "platforms": list(webui._watch_plats()),
         "notifier": {"dingtalk": {"at_mobile": "138****1234"}},
         "schedule": {"interval_minutes": 15},
     }]
@@ -229,14 +232,18 @@ def build():
     assert "<script>" in page, "PAGE 结构变化，找不到注入点"
     page = page.replace("<script>", "<script>" + shim, 1)
     page = page.replace("<title>机票监控台</title>",
-        "<title>机票监控台 · 自托管五渠道价格监控与钉钉推送</title>")
+        "<title>机票监控台 · 自托管多渠道价格监控与钉钉推送</title>")
     page = page.replace(
-        '<meta name="description" content="自托管多渠道机票价格监控：五渠道明细、达标强提醒、配置全热加载">',
-        '<meta name="description" content="可在线试玩的机票价格监控：五平台报价、达标强提醒、'
+        '<meta name="description" content="自托管多渠道机票价格监控：多渠道明细、达标强提醒、配置全热加载">',
+        '<meta name="description" content="可在线试玩的机票价格监控：多渠道报价、达标强提醒、'
         '日期模式条与全量配置可视化；支持钉钉/邮件/ntfy/Bark，本机自托管。">'
         '<meta property="og:title" content="机票监控台 · 在线演示">'
-        '<meta property="og:description" content="五渠道机票监控、达标强提醒与全量配置可视化。">'
+        '<meta property="og:description" content="多渠道机票监控、达标强提醒与全量配置可视化。">'
         '<meta property="og:type" content="website">')
+    # 上面两处 replace 是**字面量**匹配：webui 的 title/meta 一改，替换会静默失效，
+    # 演示站就带着 app 自己的 meta 上线。烘焙时把结果钉住，失效即失败。
+    assert '<meta property="og:title" content="机票监控台 · 在线演示">' in page, (
+        "demo 站 SEO 头未注入（webui 的 title/description 变了？）")
     try:
         with open(os.path.join(ROOT, "main.py"), encoding="utf-8") as f:
             m = re.search(r'^__version__\s*=\s*"([^"]+)"', f.read(), re.M)

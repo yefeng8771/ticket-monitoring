@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import List
 
 from core.models import FlightPrice
@@ -102,7 +103,136 @@ class AppZhixingCrawler(AppCrawler):
         # 它已 try/except 并记 `app-error`（含本段抛出的一切）。此处再包一层
         # 只是重复防御，且会抢在 safe_fetch 的去重判断之前多记一条。
         with rt.device_lock():
+            if ret_date:
+                return self._fetch_round_trip_locked(
+                    dev, from_city, to_city, dates, ret_date)
             return self._fetch_locked(dev, from_city, to_city, dates)
+
+    # ---------- 往返 ----------
+    #: 智行的「往返」是真功能（真机 2026-10-31：去程/返程双列 + 往返总价
+    #: ￥706），不是「单程价冒充往返」。总价只在左列（去程侧），右列
+    #: 的 `¥ 0 / ¥ 26` 是返程加价——把它当票价会产出 0 元假数据。
+    supports_round_trip = True
+
+    def _fetch_round_trip_locked(self, dev, from_city: str, to_city: str,
+                                 dates: List[str], ret_date: str
+                                 ) -> List[FlightPrice]:
+        """往返：设航线 → 切「往返」档 → 设去/返日期 → 查询 → 解析左列。
+
+        一个 `dates` 元素 + 一个 `ret_date` 产出一行（与浏览器渠道的
+        往返口径一致：价格=往返总价）。
+        """
+        from .app_zhixing_roundtrip import parse_round_trip_rows
+        import time as _t
+
+        started = _t.time()
+        dep_date = (dates or [""])[0]
+        # 智行没有 `_ensure_home`（那是去哪儿的分页概念）：它的首页判据是
+        # 「机票查询」按钮在场，用 `_park_at_home` 退栈回去即可。
+        xml = dev.dump() or ""
+        if "机票查询" not in xml:
+            if not self._park_at_home(dev):
+                self.path_note("app-dump", "timeout",
+                               detail="没能回到机票首页")
+                return []
+        ok, detail = self._set_round_trip_form(dev, from_city, to_city,
+                                               dep_date, ret_date)
+        if not ok:
+            self.path_note("app-route", "blocked", detail=detail,
+                           ms=int((_t.time() - started) * 1000))
+            self.logger.warning("[%s] 往返导航失败：%s", self.name, detail)
+            return []
+        rows: List[dict] = []
+        deadline = _t.time() + 60
+        while _t.time() < deadline:
+            _t.sleep(4)
+            page = dev.dump() or ""
+            if self.is_login_wall(page):
+                self.login_suspect = True
+                self.path_note("app-login", "login", detail="往返查询后要求登录")
+                return []
+            rows = parse_round_trip_rows(page)
+            if rows:
+                break
+        if not rows:
+            self.path_note("往返", "timeout",
+                           detail="往返页没有带总价的去程行")
+            return []
+        best = min(rows, key=lambda r: r["price"])
+        flights = [{
+            "price": float(r["price"]),
+            "code": r["flight_no"] or "",
+            "name": r["flight_no"] or "",
+            "depDate": dep_date,
+            "depTime": r.get("depart_time", ""),
+            "arrTime": r.get("arrive_time", ""),
+            "retDate": ret_date,
+            "retDepTime": r.get("ret_depart_time", ""),
+            "retArrTime": r.get("ret_arrive_time", ""),
+            "retCode": r.get("return_flight_no", ""),
+            "tripType": "RT",
+        } for r in rows]
+        best_item = min(flights, key=lambda x: x["price"])
+        self.path_note("往返", "ok", rows=len(rows),
+                       detail="%d 条往返组合（总价口径）" % len(rows),
+                       ms=int((_t.time() - started) * 1000))
+        return [FlightPrice(
+            platform=self.name, from_city=from_city, to_city=to_city,
+            depart_date=dep_date, price=float(best_item["price"]),
+            flight_no=best_item["code"], depart_time=best_item["depTime"],
+            arrive_time=best_item["arrTime"],
+            extra=json.dumps(flights, ensure_ascii=False),
+            prov=f"app:{_APP_PKG}:roundtrip",
+        )]
+
+    def _set_round_trip_form(self, dev, from_city: str, to_city: str,
+                             dep_date: str, ret_date: str):
+        """切到「往返」档并设好城市与去/返日期。返回 (ok, detail)。"""
+        from .app_zhixing_nav import nodes, find
+        xml = dev.dump() or ""
+        tab = find(nodes(xml), "往返")
+        if tab is None:
+            return False, "首页找不到「往返」"
+        dev.tap(tab.cx, tab.cy)
+        time.sleep(4)
+        xml = dev.dump() or ""
+        from_name = self._city_name(from_city)
+        to_name = self._city_name(to_city)
+        from .app_zhixing_nav import _pick_city, _city_row
+        ns = nodes(xml)
+        ok, d = _pick_city(dev, ns, from_name, side="from", log=self.logger)
+        if not ok:
+            return False, f"往返设出发地失败：{d}"
+        ok, d = _pick_city(dev, nodes(dev.dump() or ""), to_name,
+                           side="to", log=self.logger)
+        if not ok:
+            return False, f"往返设目的地失败：{d}"
+        # 往返档有两个日期位：先设去程、再设返程。
+        # 设完日期后日历弹层可能还开着（先程的设置会打开「选择日期」），
+        # 不关掉就拿不到首页的「机票查询」按钮（实测：往返导航恒失败）。
+        from .app_zhixing_nav import _pick_date, close_date_dialog
+        ok = _pick_date(dev, nodes(dev.dump() or ""), dep_date,
+                        log=self.logger)
+        if not ok:
+            self.logger.info("[%s] 往返去程日期未选中：%s", self.name, dep_date)
+        close_date_dialog(dev)
+        time.sleep(1.5)
+        ok = _pick_date(dev, nodes(dev.dump() or ""), ret_date,
+                        log=self.logger)
+        if not ok:
+            self.logger.info("[%s] 往返返程日期未选中：%s", self.name, ret_date)
+        close_date_dialog(dev)
+        time.sleep(1.5)
+        btn = find(nodes(dev.dump() or ""), "机票查询")
+        if btn is None:
+            # 弹层/子页没退干净时再退一级
+            dev.keyevent("KEYCODE_BACK")
+            time.sleep(2)
+            btn = find(nodes(dev.dump() or ""), "机票查询")
+        if btn is None:
+            return False, "找不到「机票查询」"
+        dev.tap(btn.cx, btn.cy)
+        return True, "已发起往返查询"
 
     # ---------- 内部 ----------
     def _fetch_locked(self, dev, from_city: str, to_city: str,
@@ -241,14 +371,36 @@ class AppZhixingCrawler(AppCrawler):
         收尾时退回到首页，下一轮就能走"航线未变"的快路径。
         """
         try:
+            from .app_zhixing_nav import nodes, find
+            # r724：**先试顶部「机票」Tab**，再退栈。
+            # 实测顺序反了就不灵：先连按 3 次 BACK 之后，同一次会话里再点
+            # 「机票」(552,263) 不再生效（42s 轮询后仍是酒店页）；而冷启动
+            # 直接点同一个坐标立刻切到机票首页。App 停在别的业务首页
+            # （用户手动切到「酒店」Tab，页面是「酒店查询 / 国内·港澳台」）时
+            # BACK 不触发应用内导航，只会退 App。
+            xml = dev.dump() or ""
+            if "机票查询" not in xml:
+                tab = find(nodes(xml), "机票")
+                if tab is not None and dev.tap(tab.cx, tab.cy):
+                    # 切 Tab 后首屏重绘 + 价格区拉取，实测 3–8s。
+                    for _ in range(8):
+                        time.sleep(2.5)
+                        if "机票查询" in (dev.dump() or ""):
+                            return True
             for _ in range(3):
                 xml = dev.dump()
                 if "机票查询" in xml and "Search_Calendar_Dialog" not in xml:
                     return True
                 dev.keyevent("KEYCODE_BACK")
                 time.sleep(1.5)
-        except Exception:
-            pass
+        except Exception as e:
+            # 必须留痕：这里曾因漏 import `nodes` 抛 NameError，被 `pass` 吞掉，
+            # 表现为「4 秒就返回 False」，看起来像点了没反应。
+            try:
+                self.logger.warning("[%s] 回首页失败：%s: %s",
+                                    self.name, type(e).__name__, e)
+            except Exception:
+                pass
         return False
 
     def _emit_from_dialog_by_xml(self, xml: str, from_city: str, to_city: str,
@@ -633,3 +785,402 @@ class AppZhixingCrawler(AppCrawler):
                                 self._city_name(to_city),
                                 target_date, log=self.logger,
                                 stop_before_search=True, intl=intl)
+
+    # ---------- 特价发现源（low_fare） ----------
+    # 「按请求驱动」用的 UI 动作：真机实测（2026-11-02）三处与单程首页
+    # 不同——出发/到达是上下两行、到达是多选弹层（底部 chip + 确认）、
+    # 日期是区间长日历（默认停在当前选择那个月，更早的月份要向下翻）。
+    def _lf_wait_for(self, dev, pred, timeout=12.0, step=1.5):
+        end = time.time() + timeout
+        xml = ""
+        while time.time() < end:
+            xml = dev.dump() or ""
+            if pred(xml):
+                return xml
+            time.sleep(step)
+        return xml
+
+    @staticmethod
+    def _lf_center(n):
+        return (n.x1 + n.x2) // 2, (n.y1 + n.y2) // 2
+
+    def _lf_tap(self, dev, n):
+        return dev.tap(*self._lf_center(n))
+
+    def _lf_tab(self, dev, xml, intl):
+        """把城市弹层切到国内/国际档；已经在该档就不动。"""
+        need = ("Intl_Nav_Side_Bar_Item_Text" if intl
+                else "City_Inland_Section_Header_Title")
+        if need in xml:
+            return xml
+        rid = ("Search_City_Tab_Text_International" if intl
+               else "Search_City_Tab_Text_Inland")
+        for n in _nodes_via(xml):
+            if rid in (n.rid or ""):
+                self._lf_tap(dev, n)
+                time.sleep(2)
+                return dev.dump() or ""
+        return xml
+
+    def _lf_pick_city(self, dev, name, intl, multi):
+        from .app_zhixing_nav import edit_box
+        title = "到达城市" if multi else "出发城市"
+        xml = dev.dump() or ""
+        if title not in xml or "EditText" not in xml:
+            return False, "没有打开「%s」选择页" % title
+        xml = self._lf_tab(dev, xml, intl)
+        box = edit_box(xml)
+        if box is None:
+            return False, "城市选择页没有搜索框"
+        # 弹层可能保留上一次的搜索词：先清掉，否则会拼成「广州guangzhou」
+        m = re.search(r'text="([^"]*)"[^>]*class="android.widget.EditText"',
+                      xml)
+        if m and m.group(1) and "请输入" not in m.group(1):
+            dev.tap(box.x2 + 28, box.cy)
+            time.sleep(1.2)
+            xml = dev.dump() or ""
+            box = edit_box(xml) or box
+        dev.tap(box.cx, box.cy)
+        time.sleep(0.8)
+        if not dev.input_text(name):
+            return False, "搜索框没接受「%s」的输入" % name
+        xml = self._lf_wait_for(
+            dev, lambda s: any(n.text == name and n.y1 >= box.y2
+                               for n in _nodes_via(s)), 12)
+        hits = [n for n in _nodes_via(xml)
+                if n.text == name and n.y1 >= box.y2]
+        if not hits:
+            return False, "城市列表里找不到「%s」" % name
+        hits.sort(key=lambda n: n.y1)
+        self._lf_tap(dev, hits[0])
+        time.sleep(1.5)
+        if multi:
+            xml = dev.dump() or ""
+            btn = [n for n in _nodes_via(xml) if n.text == "确认"]
+            if not btn:
+                return False, "多选城市页找不到「确认」"
+            self._lf_tap(dev, btn[0])
+            time.sleep(2.5)
+        xml = self._lf_wait_for(dev, lambda s: title not in s, 8)
+        if title in xml:
+            return False, "选完「%s」后 %s 没有关闭" % (name, title)
+        return True, ""
+
+    def _lf_set_route(self, dev, from_name, to_name, from_intl, to_intl):
+        from .app_zhixing_lowfare import form_city_rows, pending_cities
+        xml = dev.dump() or ""
+        rows = form_city_rows(xml)
+        if len(rows) < 2:
+            return False, "特价表单没识别出出发/到达两行"
+        if rows[0].text != from_name:
+            self._lf_tap(dev, rows[0])
+            self._lf_wait_for(
+                dev, lambda s: "出发城市" in s and "EditText" in s, 12)
+            ok, why = self._lf_pick_city(dev, from_name, from_intl, False)
+            if not ok:
+                return False, "设出发地失败：%s" % why
+            rows = form_city_rows(dev.dump() or "")
+            if len(rows) < 2:
+                return False, "设完出发地后表单结构不认识"
+        if rows[1].text != to_name:
+            self._lf_tap(dev, rows[1])
+            xml = self._lf_wait_for(
+                dev, lambda s: "到达城市" in s and "EditText" in s, 12)
+            if "到达城市" not in xml:
+                return False, "点了到达行但没打开「到达城市」"
+            # 多选弹层：不清掉旧 chip 就会搜成「新加坡，广州」两条航线
+            for _ in range(6):
+                chips = pending_cities(xml)
+                if not chips:
+                    break
+                _, cx2, cy = chips[0]
+                dev.tap(cx2 + 16, cy)
+                time.sleep(1.2)
+                xml = dev.dump() or ""
+            ok, why = self._lf_pick_city(dev, to_name, to_intl, True)
+            if not ok:
+                return False, "设目的地失败：%s" % why
+        rows = form_city_rows(dev.dump() or "")
+        if len(rows) < 2:
+            return False, "设完航线后表单结构不认识"
+        got = (rows[0].text, rows[1].text)
+        if got != (from_name, to_name):
+            return False, "表单航线仍是 %s-%s" % got
+        return True, ""
+
+    def _lf_set_band(self, dev, start, end):
+        from .app_zhixing_lowfare import (_BAND_TEXT_RE, calendar_cells,
+                                          calendar_months)
+        xml = dev.dump() or ""
+        band_node = next((n for n in _nodes_via(xml)
+                          if _BAND_TEXT_RE.match(n.text or "")), None)
+        if band_node is None:
+            return False, "特价表单找不到日期带"
+        self._lf_tap(dev, band_node)
+        xml = self._lf_wait_for(dev, lambda s: "选择日期" in s, 10)
+        if "选择日期" not in xml:
+            return False, "日期弹层没有打开"
+        ns = _nodes_via(xml)
+        screen_w = max([n.x2 for n in ns] or [900])
+        screen_h = max([n.y2 for n in ns] or [1600])
+        cx = screen_w // 2
+        y_top, y_bot = int(screen_h * 0.30), int(screen_h * 0.88)
+        want = (start.year, start.month, start.day)
+        cell = None
+        for _ in range(12):
+            cells = calendar_cells(xml)
+            hit = [c for c in cells if c[:3] == want]
+            if hit:
+                cell = hit[0]
+                break
+            same = [c for c in cells if c[:2] == (start.year, start.month)]
+            months = calendar_months(xml)
+            if same:
+                dmin = min(c[2] for c in same)
+                dmax = max(c[2] for c in same)
+                if start.day < dmin:
+                    dev.swipe(cx, y_top, cx, y_bot, 500)   # 更早：内容往下
+                elif start.day > dmax:
+                    dev.swipe(cx, y_bot, cx, y_top, 500)   # 更晚：内容往上
+                else:
+                    # 日号在已渲染范围内却缺格 = 当天**不可售**（真机：
+                    # 11-02 不渲染，最早 11-03）。取窗口内最近的可售日，
+                    # 少一天比整条记空更诚实；终点仍必须能选中。
+                    later = sorted(
+                        c for c in cells
+                        if want < c[:3] <= (end.year, end.month, end.day))
+                    if later:
+                        cell = later[0]
+                        self.logger.info(
+                            "[%s] 特价 %s 不可售，改用 %04d-%02d-%02d 起",
+                            self.name, start.isoformat(), *cell[:3])
+                        break
+                    return False, ("日历里 %s 不可售且窗口内没有更晚的可售日"
+                                   % start.isoformat())
+            elif months and (start.year, start.month) < months[0]:
+                dev.swipe(cx, y_top, cx, y_bot, 500)
+            elif months and (start.year, start.month) > months[-1]:
+                dev.swipe(cx, y_bot, cx, y_top, 500)
+            else:
+                dev.swipe(cx, y_bot, cx, y_top, 500)
+            time.sleep(2)
+            xml = dev.dump() or ""
+        if cell is None:
+            return False, "日历里找不到 %s" % start.isoformat()
+        dev.tap(cell[3], cell[4])
+        time.sleep(1.5)
+        xml = dev.dump() or ""
+        want_end = (end.year, end.month, end.day)
+        cell2 = None
+        for _ in range(4):
+            hit2 = [c for c in calendar_cells(xml) if c[:3] == want_end]
+            if hit2:
+                cell2 = hit2[0]
+                break
+            dev.swipe(cx, y_bot, cx, y_top, 500)
+            time.sleep(1.5)
+            xml = dev.dump() or ""
+        if cell2 is None:
+            return False, "日历里找不到 %s" % end.isoformat()
+        dev.tap(cell2[3], cell2[4])
+        time.sleep(1.5)
+        xml = dev.dump() or ""
+        btn = [n for n in _nodes_via(xml) if n.text == "确定"]
+        if not btn:
+            return False, "日期弹层找不到「确定」"
+        self._lf_tap(dev, btn[0])
+        time.sleep(2.5)
+        xml = dev.dump() or ""
+        m = re.search(r"\d{1,2}月\d{1,2}日\s*[-–—]\s*\d{1,2}月\d{1,2}日", xml)
+        if not m:
+            return False, "确定后日期带没有回写"
+        return True, m.group(0)
+
+    def _lf_set_form(self, dev, from_name, to_name, from_intl, to_intl,
+                     start, end):
+        """把特价表单改成请求的航线与日期区间。已就位则不动。"""
+        from .app_zhixing_lowfare import page_selection
+        route, band = page_selection(dev.dump() or "")
+        if route != (from_name, to_name):
+            ok, why = self._lf_set_route(dev, from_name, to_name,
+                                         from_intl, to_intl)
+            if not ok:
+                return False, why
+            # 换航线后 App 可能把日期带重置：必须以新页面为准再判断，
+            # 否则会拿「改航线前」的 band 当成已经覆盖而不设日期。
+            route, band = page_selection(dev.dump() or "")
+
+        def k(m, d):
+            return int(m) * 100 + int(d)
+
+        cover = bool(band) and (
+            k(band[0], band[1]) <= k(start.month, start.day)
+            and k(end.month, end.day) <= k(band[2], band[3]))
+        if not cover:
+            ok, why = self._lf_set_band(dev, start, end)
+            if not ok:
+                return False, why
+        return True, ""
+
+    def low_fare(self, from_city: str, to_city: str,
+                 days: int = 14, anchor_ymd: str = "") -> List[dict]:
+        """「特价」档：该航线逐天一条最低价，返回 [{date, weekday, price}]。
+
+        与去哪儿 App「低价机票」同一个契约（发现源，不是明细）。真机实测
+        （2026-10-31）：首页「特价」页签 → 设出发/到达 + 日期区间 →
+        「搜索特价」→ 结果页逐天列出 `02.16 周二 ¥1646`。
+
+        采不到一律返回空并用 `path_note` 写明卡点——发现源宁可空，
+        也不能拿错价冒充（下游会跨渠道核实价格）。
+        """
+        import datetime as _dt
+        from .app_zhixing_lowfare import (parse_low_fare_rows, to_ymd,
+                                          is_low_fare_page, find_entry)
+        rt = self.runtime()
+        ok, why = rt.ensure_ready()
+        if not ok:
+            self.path_note("android-runtime", "unsupported",
+                           detail=f"runtime not ready: {why}")
+            return []
+        dev = rt.device()
+        if dev is None:
+            self.path_note("android-device", "unsupported",
+                           detail="device unavailable")
+            return []
+        anchor = (anchor_ymd or _dt.date.today().isoformat())[:10]
+        with rt.device_lock():
+            self.prepare_device(dev)
+            started = time.time()
+            # 回到机票首页（特价入口只在首页）
+            xml = dev.dump() or ""
+            # 上一轮可能停在城市/日历弹层上：弹层页既没有「机票查询」
+            # 也没有「搜索特价」，会被误判成「不在特价页」而去退栈，
+            # 一退就把 App 退了。先按 BACK 把弹层收掉。
+            for _ in range(4):
+                if not any(k in xml for k in ("出发城市", "到达城市",
+                                              "选择日期")):
+                    break
+                dev.keyevent("KEYCODE_BACK")
+                time.sleep(2)
+                xml = dev.dump() or ""
+            # 上一轮可能停在特价**结果页**：它没有「机票查询」，交给
+            # `_park_at_home` 会一路退到 App 外。先 BACK 回特价表单，
+            # 表单本身就是 low_fare 的合法起点。
+            if "重新选择" in xml and "出发日期" in xml:
+                dev.keyevent("KEYCODE_BACK")
+                time.sleep(2)
+                xml = dev.dump() or ""
+            if "机票查询" not in xml and "搜索特价" not in xml:
+                if not self._park_at_home(dev):
+                    self.path_note("app-dump", "timeout",
+                                   detail="没能回到机票首页")
+                    return []
+            # ① 切到「特价」档
+            xml = dev.dump() or ""
+            if not is_low_fare_page(xml):
+                tab = find_entry(xml)
+                if tab is None:
+                    self.path_note("low-fare", "timeout",
+                                   detail="首页找不到「特价」页签")
+                    return []
+                dev.tap((tab.x1 + tab.x2) // 2, (tab.y1 + tab.y2) // 2)
+                deadline = time.time() + 25
+                while time.time() < deadline:
+                    time.sleep(2)
+                    page = dev.dump() or ""
+                    if is_low_fare_page(page):
+                        xml = page
+                        break
+                else:
+                    self.path_note("low-fare", "timeout",
+                                   detail="点了「特价」页签但没进入特价页")
+                    return []
+            if self.is_login_wall(xml):
+                self.login_suspect = True
+                self.path_note("app-login", "login", detail="特价页要求登录")
+                return []
+
+            # ①.5 把页面改成请求的航线/日期：页面会保留上次会话的选择，
+            # 只读页面报价就会把「上海-新加坡 2/14-16」当成请求的航线。
+            from core.intl import city_name_of as _cn, is_intl_city
+            from .app_zhixing_lowfare import selection_covers
+            _start = _dt.date.fromisoformat(anchor)
+            _end = _start + _dt.timedelta(days=max(1, days) - 1)
+            _ok, _why = self._lf_set_form(
+                dev, _cn(from_city), _cn(to_city),
+                is_intl_city(from_city), is_intl_city(to_city),
+                _start, _end)
+            if not _ok:
+                self.path_note("low-fare", "timeout",
+                               detail=("特价表单驱动失败：%s" % _why)[:140])
+                self.logger.warning("[%s] 特价表单驱动失败：%s",
+                                    self.name, _why)
+                return []
+            xml = dev.dump() or ""
+            _eff = None
+            _cover, _why = selection_covers(
+                xml, _cn(from_city), _cn(to_city), _start, _end)
+            if not _cover:
+                # 允许首日不可售（App 不渲染当天）：只要终点覆盖且起点
+                # 落在请求窗口内，就按实际带取数；少的那天如实没有价。
+                from .app_zhixing_lowfare import selection_within
+                _ok2, _eff, _why2 = selection_within(
+                    xml, _cn(from_city), _cn(to_city), _start, _end)
+                if not _ok2:
+                    self.path_note("low-fare", "empty", detail=_why2[:140])
+                    return []
+                self.logger.info(
+                    "[%s] 特价首日不可售：请求 %s 起，实际带 %d月%d日 起",
+                    self.name, _start.isoformat(), _eff[0], _eff[1])
+
+            # ② 结果页已经有逐天报价就直接读；否则点一次「搜索特价」
+            rows = parse_low_fare_rows(xml)
+            if not rows:
+                btn = None
+                for n in _nodes_via(xml):
+                    if n.text == "搜索特价":
+                        btn = n
+                        break
+                if btn is None:
+                    self.path_note("low-fare", "timeout",
+                                   detail="特价页找不到「搜索特价」")
+                    return []
+                # app_zhixing_parse.Node 只提供 cy（与 find_entry 同一约定），
+                # x 用边界取中；取 .cx 会 AttributeError，整条低价源崩掉。
+                dev.tap((btn.x1 + btn.x2) // 2, btn.cy)
+                deadline = time.time() + 40
+                while time.time() < deadline:
+                    time.sleep(3)
+                    page = dev.dump() or ""
+                    if self.is_login_wall(page):
+                        self.login_suspect = True
+                        self.path_note("app-login", "login",
+                                       detail="搜索特价后要求登录")
+                        return []
+                    rows = parse_low_fare_rows(page)
+                    if rows:
+                        break
+
+            if not rows:
+                self.path_note("low-fare", "empty",
+                               detail="特价页没有解析出逐天报价")
+                return []
+            out = []
+            for r in rows:
+                ymd = to_ymd(r["md"], anchor)
+                if not ymd:
+                    continue
+                out.append({"date": ymd, "weekday": r.get("weekday") or "",
+                            "price": r["price"]})
+            _note = f"{len(out)} 天有价"
+            if _eff and _eff != (_start.month, _start.day):
+                _note += ("（首日不可售，%d月%d日 起）" % _eff)
+            self.path_note("low-fare", "ok", rows=len(out),
+                           detail=_note,
+                           ms=int((time.time() - started) * 1000))
+            return out
+
+
+def _nodes_via(xml):
+    from .app_zhixing_parse import _nodes
+    return _nodes(xml)

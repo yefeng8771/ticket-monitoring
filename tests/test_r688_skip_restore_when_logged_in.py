@@ -16,6 +16,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from crawlers.app_qunar import AppQunarCrawler
 
+import itertools
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _fast_clock(monkeypatch):
+    """恢复前置探测是「等到 deadline」的循环：sleep 被置空后若 time 不前进，
+    整条用例会空转满 30 秒（实测一条 12s 还在转）。这里让时间每次调用 +10s。"""
+    import crawlers.app_base as base
+    tick = itertools.count(1)
+    monkeypatch.setattr(base.time, "sleep", lambda s: None)
+    monkeypatch.setattr(base.time, "time", lambda: float(next(tick)) * 10.0)
+
 HOME = ('<hierarchy>' + "".join(
     '<node text="x%d" bounds="[0,%d][100,%d]" />' % (i, i * 10, i * 10 + 8)
     for i in range(10)) + '</hierarchy>')
@@ -133,3 +147,61 @@ def test_restores_when_page_is_blank(monkeypatch):
     monkeypatch.setattr(c, "_snapshot_manager", lambda dev: Mgr())
     c.restore_login_snapshot(Dev(BLANK))
     assert calls == ["restore"], "白屏被当成已登录：%s" % calls
+
+def test_restore_failure_cold_starts_so_round_can_continue(monkeypatch):
+    """快照恢复因「拿不到 root」失败时，冷启一次，别把 App 留在半死状态。
+
+    现场（2026-11-01 19:20）：`snap-restore error 无法获取 root` 紧接着
+    `app-dump timeout 没能打开机票首页`——恢复失败后没有任何兜底。
+    """
+    import crawlers.app_base as base
+    monkeypatch.setattr(base.time, "sleep", lambda s: None)
+    # 时间必须往前走：恢复前置探测是「等到 deadline」的循环，冻结就出不来
+    import itertools
+    _tick = itertools.count(1)
+    monkeypatch.setattr(base.time, "time", lambda: float(next(_tick)) * 10)
+    c = _crawler()
+
+    class Mgr:
+        class store:
+            @staticmethod
+            def exists(name):
+                return True
+
+        @staticmethod
+        def restore(name):
+            return False, "无法获取 root"
+
+    monkeypatch.setattr(c, "_snapshot_manager", lambda dev: Mgr())
+    called = []
+    monkeypatch.setattr(c, "_cold_start_and_probe",
+                        lambda dev, wait_s=30: called.append("cold") or HOME)
+    dev = Dev(BLANK)
+    assert c.restore_login_snapshot(dev) is False
+    assert called == ["cold"], "恢复失败后没有冷启兜底"
+
+
+def test_cold_start_and_probe_returns_first_usable_page(monkeypatch):
+    import crawlers.app_base as base
+    monkeypatch.setattr(base.time, "sleep", lambda s: None)
+    c = _crawler()
+    dev = Dev(HOME)
+    assert c._cold_start_and_probe(dev) == HOME
+    assert ("stop", "com.Qunar") in dev.calls
+    assert any(k[0] == "deep" for k in dev.calls), "冷启应走深链回机票页"
+
+def test_ensure_app_fresh_cold_starts_once_per_round(monkeypatch):
+    """每条航线开始前冷启一次；快照恢复已冷启过则不重复。"""
+    import crawlers.app_base as base
+    monkeypatch.setattr(base.time, "sleep", lambda s: None)
+    c = _crawler()
+    calls = []
+    monkeypatch.setattr(c, "_cold_start_and_probe",
+                        lambda dev, wait_s=30: calls.append("cold") or HOME)
+    c._app_fresh = False
+    assert c._ensure_app_fresh(Dev(HOME)) is True
+    assert calls == ["cold"], calls
+    # 恢复阶段刚冷启过 → 本轮不再启
+    c._app_fresh = True
+    assert c._ensure_app_fresh(Dev(HOME)) is True
+    assert calls == ["cold"], "恢复已冷启过，采集前又启了一次"

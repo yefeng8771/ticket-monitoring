@@ -53,8 +53,13 @@ def test_icon_rows_keep_legible_tiles_and_explicit_gaps():
 
 
 def test_filter_summary_is_flat_and_airline_query_is_compact():
-    assert "#attrchips .attrq{width:92px}" in STYLE
-    assert "#attrchips .ag-wide{grid-column:1/-1;\n grid-template-columns:var(--flt-lab) 92px minmax(0,1fr)}" in STYLE
+    # r879：搜索框不再钉死 92px——1280 档 12 家长航司只差 8.4px 就折行，
+    # 把宽度还给芯片（窄档 76px）。这里守意图：搜索框在航司行里**有明确
+    # 的宽度格**（不是 auto）、不会溢出，且航司行仍是三列结构。
+    assert "#attrchips .attrq{width:100%;min-width:0}" in STYLE, (
+        "航司搜索框没有填满自己的格子（宽档会退化成 auto 撑不住）")
+    assert "grid-template-columns:var(--flt-lab) minmax(0,92px) minmax(0,1fr)" in STYLE, (
+        "航司行不是「标签 + 搜索框 + 芯片」三列结构")
     assert "border:1px solid transparent;border-radius:var(--r3);" in STYLE
     assert "#searchview .srx-abar .srx-chip .x{font-size:11px" in STYLE
 

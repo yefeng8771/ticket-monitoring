@@ -110,3 +110,52 @@ def test_name_column_left_edges_align(server):
     rows = _measure(server, 1440)
     lefts = {r["left"] for r in rows}
     assert len(lefts) == 1, lefts
+
+
+def test_rows_stay_aligned_in_every_status_combo(server):
+    """用户原话：「登录按钮看起来会飘，当状态不一致的时候，会显示不是同一行」。
+
+    上面几条都在**同一状态**下量（默认渲染）。但状态是逐渠道独立的：
+    saved / active / stale 会给卡片换描边、给槽位加圆点，一旦某个状态
+    改变行高或内衬，按钮就会在混合状态下错位。这条把四种状态逐一套到
+    全部 7 行上再量一遍几何——2026-11-01 实测四轮 heights=[52]、
+    rights=[1315]，各轮内 7 行 top 互不相同（正常纵向排列）。
+
+    **负控已验**：把第 4 行的操作列改成 `justify-self:start;width:62px`
+    （r412 的真实故障形态：按钮不再 end 对齐）后，本判据立刻报
+    「按钮右缘分裂 {1281, 1315}」；撤掉即绿。不注入时判据恒真不是空转
+    ——它读的是每行真实 `getBoundingClientRect().right`。
+    """
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        b = p.chromium.launch(headless=True)
+        pg = b.new_page(viewport={"width": 1440, "height": 1200})
+        pg.goto("http://127.0.0.1:%d/#cfg" % server,
+                wait_until="domcontentloaded", timeout=30000)
+        pg.wait_for_selector("#loginRows .lgcard", timeout=20000)
+        pg.wait_for_timeout(600)
+        try:
+            # 只切**某一行的**状态（其余六行保持默认），才能复现用户说的
+            # 「状态不一致时按钮不在同一行」。整表统一套同一状态是无效测法：
+            # 实测两轮负控（改 padding / 改列宽）都全绿，因为七行仍等值。
+            for cls in ("", "saved", "active", "stale"):
+                rows = pg.evaluate("""(cls)=>{
+                  const rs=[...document.querySelectorAll('#loginRows .lgcard')];
+                  rs.forEach((c,i)=>{
+                    c.className='lgcard'+(i===3&&cls?(' '+cls):'');
+                  });
+                  return rs.map(c=>{
+                    const b=c.getBoundingClientRect();
+                    const a=c.querySelector('.lgact')||c.querySelector('.btn2');
+                    const ab=a?a.getBoundingClientRect():null;
+                    return {ch:(c.dataset.channel||''),h:Math.round(b.height),
+                            right:ab?Math.round(ab.right):null};
+                  });
+                }""", cls)
+                assert len(rows) == 7, "登录卡应为 7 张，实测 %d" % len(rows)
+                hs = {r["h"] for r in rows}
+                rs = {r["right"] for r in rows if r["right"] is not None}
+                assert len(hs) == 1, "状态 %r 下行高分裂：%s" % (cls or "默认", hs)
+                assert len(rs) == 1, "状态 %r 下按钮右缘分裂：%s" % (cls or "默认", rs)
+        finally:
+            b.close()

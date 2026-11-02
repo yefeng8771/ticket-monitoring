@@ -109,3 +109,74 @@ def test_low_fare_prunes_to_window():
             {"date": (today - dt.timedelta(days=1)).isoformat(), "price": 4}]
     out = AppQunarCrawler._pick_window(rows, 14)
     assert [r["price"] for r in out] == [1, 2], out
+
+
+def test_low_fare_resets_to_home_after_collect():
+    """采完低价必须回首页，否则同进程紧接着查明细会整轮失败。
+
+    真机（2026-10-30）：先 low_fare 再 safe_fetch，明细两次都是
+    `pick-date-failed` / `set-city-dep`——低价页与首页是两条导航栈，
+    `_ensure_home` 的深链在低价页上会被 RN 吞掉。
+    """
+    import inspect
+    from crawlers.app_qunar import AppQunarCrawler
+    src = inspect.getsource(AppQunarCrawler._low_fare_locked)
+    assert "_back_to_home" in src, "低价采完没有复位到首页"
+
+
+def test_pick_date_rebuilds_home_when_date_row_missing():
+    """首页停在「搜索位」时日期行不在视图树，必须重建而不是盲滑。
+
+    真机：下拉手势会误触首页活动位、打开 HyWebActivity（活动 H5），
+    比原来更糟。所以判据是「找不到日期行 → force-stop 重建」。
+    """
+    import inspect
+    from crawlers.app_qunar import AppQunarCrawler
+    src = inspect.getsource(AppQunarCrawler._pick_date)
+    assert "_back_to_home" in src, "日期行缺失时没有重建首页"
+    # 日历**网格内部**的滚动是必要的（跨月要翻）；禁止的是在首页盲滑
+    # 找日期行——那会误触活动位。判据：swipe 只能出现在「选择日期」之后。
+    head = src.split("在月份网格里定位")[0]
+    assert "swipe" not in head, "日期行缺失时仍在首页盲滑"
+
+
+def test_h5_webview_activity_is_detected():
+    """r805cj：搜索后落到 H5 WebView ≠ 原生日期带（dump 里没有文本）。"""
+    from crawlers.app_qunar_lowfare import is_h5_low_fare_activity
+    assert is_h5_low_fare_activity(
+        "com.Qunar/com.mqunar.hy.browser.activity.HyWebActivity01") is True
+    assert is_h5_low_fare_activity(
+        "com.Qunar/com.mqunar.atom.flight.modules.home.TabHomeActivity"
+    ) is False
+
+
+def test_h5_low_fare_maps_to_not_connected(monkeypatch):
+    """通路接不上（H5）记 not_connected；真 timeout 仍是 error。
+
+    负控很重要：把所有空结果都改成 not_connected 会把「被拦/超时」
+    洗成「渠道没接」，读者就不去查风控了。
+    """
+    import datetime as dt
+    import logging
+
+    import crawlers.app_qunar as aq
+    from core.special_radar import RadarQuery, _app_qunar_deals
+
+    q = RadarQuery("", "BJS", "北京", "SHA", "上海",
+                   dt.date(2026, 11, 3), dt.date(2026, 11, 5),
+                   ["app_qunar"])
+
+    def _fake(status):
+        class Fake:
+            def __init__(self, cfg, logger):
+                self.paths = [{"path": "low-fare", "status": status,
+                               "detail": "低价机票结果页是 H5 WebView"}]
+            def low_fare(self, *a, **k):
+                return []
+        monkeypatch.setattr(aq, "AppQunarCrawler", Fake)
+        return _app_qunar_deals(q, logging.getLogger("t"))
+
+    rows, st = _fake("unsupported")
+    assert rows == [] and st["status"] == "not_connected", st
+    rows, st = _fake("timeout")
+    assert rows == [] and st["status"] == "error", st

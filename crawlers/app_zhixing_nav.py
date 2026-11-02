@@ -109,6 +109,30 @@ def is_intl_form(xml: str) -> bool:
     return _INTL_FORM_MARK in (xml or "")
 
 
+_HOME_MARK = "机票查询"
+
+
+def _await_home(dev, timeout_s: float = 30.0) -> tuple:
+    """等到一帧能看见首页表单（「机票查询」在）的页面。返回 (xml, ready)。
+
+    冷启动实测：`app_start` 之后头几帧 `dump()` 全是空串（uiautomator
+    服务还没起好），随后才出现首页。**空帧不等于"页面不是这样"**，
+    所有按「某标记在不在」下结论的判据都必须先过这一关，否则会把
+    「没取到页面」读成「功能不存在」——实测把档位判成了「已是国内档」，
+    接着在还没渲染的首页上找城市行，整轮记成「找不到城市行」。
+
+    同时也排除「停在别页」：城市选择页/日历弹层里也没有「机票查询」，
+    拿它们判档位同样会得到「没有国际档标记」的假结论。
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        xml = dev.dump() or ""
+        if _HOME_MARK in xml and "Search_Calendar_Dialog_Title" not in xml:
+            return xml, True
+        time.sleep(2.0)
+    return "", False
+
+
 def select_mode(dev, intl: bool, log=None) -> tuple:
     """切到国际/国内档。
 
@@ -118,9 +142,17 @@ def select_mode(dev, intl: bool, log=None) -> tuple:
     （未验证），空着就说明没人跑过。
 
     已是目标档就直接返回，避免多点一次把表单重置。
+
+    **空 dump 不能当"国内档"**：`is_intl_form("")` 是 False，而冷启动
+    头 4 帧 dump 实测全是空串（uiautomator 还没起来）。按空串判「已是
+    国内档」会直接跳过切档，接着去首页找城市行——而此时首页还没渲染，
+    整轮就记成「设出发地失败：找不到城市行」，把「没取到页面」说成了
+    「控件不存在」。所以先要求拿到首页，再判档位。
     """
     tag = "国际" if intl else "国内"
-    xml = dev.dump() or ""
+    xml, ready = _await_home(dev)
+    if not ready:
+        return False, "没取到首页（dump 连续为空），无法判断当前档位"
     if is_intl_form(xml) == bool(intl):
         return True, f"已是{tag}档"
     node = find(nodes(xml), tag)
@@ -131,7 +163,10 @@ def select_mode(dev, intl: bool, log=None) -> tuple:
     deadline = time.time() + 10
     while time.time() < deadline:
         time.sleep(1.5)
-        if is_intl_form(dev.dump() or "") == bool(intl):
+        page = dev.dump() or ""
+        if not page:
+            continue
+        if is_intl_form(page) == bool(intl):
             return True, f"已切到{tag}档"
     return False, f"切到{tag}档后表单未切换（{_INTL_FORM_MARK} 未出现/未消失）"
 
@@ -248,19 +283,27 @@ def set_flight_route(dev, from_name: str, to_name: str, date_ymd: str,
     if not ok:
         return False, f"切换{'国际' if intl else '国内'}档失败：{detail}"
     say(f"[nav] {detail}")
-    xml = dev.dump()
+    # 切档之后要重新读页面：空帧不能让 `_pick_city` 得出「找不到城市行」
+    xml, ready = _await_home(dev, timeout_s=20)
+    if not ready:
+        return False, "设出发地失败：切档后没取到首页（dump 连续为空）"
     ns = nodes(xml)
 
     ok, detail = _pick_city(dev, ns, from_name, side="from", log=say)
     if not ok:
         return False, f"设出发地失败：{detail}"
-    xml = dev.dump()
+    xml, ready = _await_home(dev, timeout_s=20)
+    if not ready:
+        return False, "设目的地失败：选完出发地后没取到首页（dump 连续为空）"
     ns = nodes(xml)
     ok, detail = _pick_city(dev, ns, to_name, side="to", log=say)
     if not ok:
         return False, f"设目的地失败：{detail}"
 
-    xml = dev.dump()
+    xml, ready = _await_home(dev, timeout_s=20)
+    if not ready:
+        # 日期设不上不算致命，但没有页面就没法继续，如实报出来
+        return False, "设日期失败：选完目的地后没取到首页（dump 连续为空）"
     ns = nodes(xml)
     ok, detail = _pick_date(dev, ns, date_ymd, log=say)
     if not ok:
@@ -273,7 +316,9 @@ def set_flight_route(dev, from_name: str, to_name: str, date_ymd: str,
         time.sleep(1)
         return True, "已设好航线（停在首页）"
 
-    xml = dev.dump()
+    xml, ready = _await_home(dev, timeout_s=20)
+    if not ready:
+        return False, "查找「机票查询」失败：没取到首页（dump 连续为空）"
     ns = nodes(xml)
     btn = find(ns, "机票查询")
     if not btn:
@@ -281,7 +326,9 @@ def set_flight_route(dev, from_name: str, to_name: str, date_ymd: str,
         # 一个透明 Activity）。退一级再找，仍没有才判失败。
         dev.keyevent("KEYCODE_BACK")
         time.sleep(2)
-        xml = dev.dump()
+        xml, ready = _await_home(dev, timeout_s=20)
+        if not ready:
+            return False, "查找「机票查询」失败：返回后仍没取到页面"
         ns = nodes(xml)
         btn = find(ns, "机票查询")
     if not btn:

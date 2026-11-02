@@ -180,6 +180,13 @@
 - 新浏览器可直接打开深链 `http://127.0.0.1:8765/#task=18e12cef48c7c758`：自动落 localStorage、切检索页并显示 4 张票据，页面溢出 -10；刷新后仍保持 `#search` 并从 localStorage 恢复同一任务。
 - 渠道入口普通点击改为弹窗打开（`srxOpenChannel`）：live 实测点击 H5 渠道 chip 弹出 `m.ctrip.com/html5/flight/`，主页面仍停在 `#search`，工作台不再被替换；Ctrl/Cmd/Shift 点击保留新标签页，弹窗被拦截时给出提示。特价雷达的“打开渠道”链接同用此行为。
 - 途牛保存 profile 已含 `connect.sid`/`tuniuuser_id`/`TUNIUmuser`，页面是登录态；但接口仍返回 710114（登录门）或浏览器内请求 169998（请求级校验）。已修复爬虫不再用合成值覆盖保存的 `_taca/_tacb/_tact` 等 cookie；票据提示明确“页面已登录仍失败时，请在该窗口重新发起一次真实查询生成请求校验令牌”，不绕过验证。
+- **2026-10-31 复核（排除三种猜测，勿再重查）**：本轮把「段数 / tokenKey / cookie 缺失」三种假设逐一证伪——
+  1. 页面自己发的 `listFlight` 是**两段**（第二段 `dCityIataCode=返程方向、departDate=""`，单程也是两段），而爬虫发一段；用**页面同款两段 payload** 请求，结果与单段**完全相同**（都 710114），故段数不是原因；
+  2. 用保存登录态打开列表页能抓到 **30 字符 tokenKey**（带日志「页面 tokenKey 长度=30」），把它放进请求仍 710114；
+  3. 浏览器上下文内取到 **49 条 tuniu cookie**（含 `tuniuuser_id=96225501`、`_taca`，有效期 400 天），进程外与页面内请求**都是 710114**，页面文案为「搜索超时或航线不存在」。
+  结论：不是代码构造错，而是**这份 profile 的会话在途牛服务端已不被承认**；本机 `user_data/tuniu` 也**没有 `surfaces/h5`**（历史修复依赖的那一面不存在，采集读 base）。处置：在控制台「渠道登录」重新登录途牛后复验，不绕过验证。
+  **同日再复核（补第 4 条证伪）**：`headed`（可见浏览器）与 `headless` 两条通路各打一次列表页，站点自己发出的 `listFlight` 响应**都是 710114**；同会话再换三个日期（今天+7 / 今天+30 / 2027-01-29）也全是 710114。所以既不是「无头被识别」，也不是「日期不在售票窗」——就是会话失效。页面给用户的文案是「搜索超时或航线不存在」，**不要**据此判成 empty：接口层已明确是登录门。
+  另：`_saved_page_token` 与 `_saved_session_cookies` 会互斥报「会话正在登录或采集」，同轮同时取两者会失败——复验时先取 token 再取 cookie 或接受缓存。
 - 截图/证据：`_scratch/r368_tuniu_tickets_1360.png`、`_scratch/probe-tuniu-4lines-tickets.json`、`_scratch/probe-cancel-1360.png`、`_scratch/probe-reconnect-1360.png`。
 
 ## 3.4 检索布局（P5）

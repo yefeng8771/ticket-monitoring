@@ -40,8 +40,15 @@ def test_ov03_mchip_jump_details_prefilter(page):
     """渠道片 mchip：真实点击 → 明细子栏 + FLT.plats 预置该渠道 +
     platchips 亮片 + 结果集收缩 + 教学 toast（含重置告知）。"""
     _goto(page)
-    name = page.evaluate(
-        "document.querySelector('.mchip').textContent.trim().split(/\\s+/)[0]")
+    # 渠道名别再按空格切词：r796 起 App 渠道显示「去哪儿 App」，
+    # `split(/\s+/)[0]` 会把「App」丢掉，于是 ['去哪儿 App'] != ['去哪儿'] 假红。
+    # FLT.plats 存的本来就是中文渠道名（见 webui 里 buildRouteChips 的注释：
+    # 英文键只有 pdot 类在用），所以这里取 chip 的文本主体、去掉末尾价格。
+    name = page.evaluate("""()=>{
+      const t=document.querySelector('.mchip').cloneNode(true);
+      t.querySelectorAll('b').forEach(b=>b.remove());
+      return t.textContent.trim();
+    }""")
     page.locator(".mchip").first.click()
     page.wait_for_timeout(400)
     assert page.evaluate("MONTAB") == "details"
@@ -100,8 +107,17 @@ def test_ov05_kpi_card_click_popup(page):
 
 def test_ov06_ovalert_sentinel_state(page):
     """ovAlert 哨：demo 推送连败在场 → 红帽可见 + aria/title 词面
-    （哨是显隐投影件无点击动作——audit W27 双源合成）。"""
+    （哨是显隐投影件无点击动作——audit W27 双源合成）。
+
+    红帽由 `/api/health` 返回的推送连败驱动，是一条**异步**链路：
+    只等 S/users 就断言，会在健康响应回来之前读到初始 display:none
+    （实测同树手动等 3s：`_ovPushStreak=4`、display 为空——产品是对的）。
+    这里先等「连败数据真的到了」，再断言显隐；数据没到就超时失败，
+    不会把异步未完成伪装成产品缺陷。
+    """
     _goto(page)
+    page.wait_for_function(
+        "() => (window._ovPushStreak || 0) > 0", timeout=8000)
     assert page.evaluate(
         "document.getElementById('ovAlert').style.display") == ""
     assert page.get_attribute("#ovAlert", "aria-label") == \

@@ -1,6 +1,6 @@
 # ✈️ ticket-monitoring
 
-> Self-hosted multi-channel flight price monitoring: 5-platform fare collection →
+> Self-hosted multi-channel flight price monitoring: fare collection →
 > rich DingTalk group reports → 4-layer urgent alerts when your target price hits.
 > Domestic and international routes (destinations across five continents) run
 > through the same collection → judging → push pipeline.
@@ -58,8 +58,10 @@
 
 ## What it does
 
-- **Collects** flight details (price, flight no., times, transfers, duration, terminals, cabin, aircraft, punctuality, baggage rules) from five Chinese travel platforms: Qunar, Fliggy, Ctrip, Tongcheng, Tuniu — each on its live path (Qunar H5 with login, since its PC web flight site retired on 2026-10-10; Fliggy PC SSR read, Ctrip PC international flight list with mobile H5 for domestic, Tongcheng mobile H5, Tuniu direct HTTP), zero browser overhead except where a channel demands it.
-- **Collection surface**: the H5 paths above *are* mobile web (390x844 viewport, mobile UA, touch fingerprint) — all five channels already collect on mobile. Channels without a web surface are out of scope: Zhixing ships App-only, and Meituan's H5 detail endpoint is currently broken (`paramError`) with only its low-price calendar still serving. Driving a real App would require a permanently attached device and is not part of the default deployment.
+- **Collects** flight details (price, flight no., times, transfers, duration, terminals, cabin, aircraft, punctuality, baggage rules) from five Chinese travel sites (Qunar, Fliggy, Ctrip, Tongcheng, Tuniu) plus two optional Android App channels (Zhixing, Qunar App; see below) — each on its live path (Qunar H5 with login, since its PC web flight site retired on 2026-10-10; Fliggy PC SSR read, Ctrip PC international flight list with mobile H5 for domestic, Tongcheng mobile H5, Tuniu direct HTTP), zero browser overhead except where a channel demands it.
+- **Collection surface**: the H5 paths above *are* mobile web (390x844 viewport, mobile UA, touch fingerprint) — the browser channels already collect on mobile. Channels without a web surface go through the optional App path instead: Zhixing (App-only) and Qunar App are driven on a local Android emulator over adb when enabled — off by default, and it needs a device attached to the host. Meituan stays out because its flight flow escalates to face verification, which this project does not automate.
+![Capability matrix: 7 channels × 7 dimensions, tri-state support, App gaps listed separately](docs/screenshots/console-dims.png)
+- **Capability matrix (Settings → Channel login)**: 7 channels × 7 dimensions (domestic / international / calendar / detail / round-trip / multi-city / low-fare) in one table; each cell is support / unsupported / unverified (unverified is never treated as support); App gaps versus the browser-side baseline are listed below (baseline = any browser channel supports it, not one peer). The matrix is read from the same declarations as the collectors.
 - **Qunar web retirement (Oct 2026)**: Qunar's PC flight search/booking page retired on 2026-10-10. Collection and user deep links now use its H5 (`m.flight`; the PC revival probe is off by default); the login window opens the unified account page (SMS code / QR) and the shared `.qunar.com` cookie is required for full H5 detail. App-only fares and auto-booking are out of scope; the other four channels are unaffected.
 - **Watches** your routes with per-route thresholds (direct / transfer), arrival-time constraints and departure-time windows. Each route can watch **multiple departure dates at once** through a range / specific-day mode switch — one editor at a time, both drafts retained, applied ranges merge and dedupe automatically; every date gets its own collection, push section, trend chart and calendar. **Cloning a route** copies the whole config in one click (the copy starts disabled: fix the cities, then switch on). Every route has an **enable/disable switch** — pausing keeps the whole config and exempts the route from scheduling, pushes and details everywhere; no more delete-to-stop. A **daily report** lands at your configured hour (default 09:00) with per-route KPIs and trend images.
 - **Pushes** one aggregated DingTalk message per round: per-route KPI sections in a **three-tier semantic layout** (price as a direct link / flight body / decision fields in a grey quote tier) with **semantic tier dots** (🎯 hit · 🟩 below line · 🟨 near — "above line" is the default state and carries no dot), one-line action advice, 7-day trend, smoothed price charts with **four-tier hit point rings** (● dark green = truly actionable hit / ○ fine green = market broke the line / ○ amber = near / ▼ red = fell back below line) speaking the same language as the push copy, the details table and the calendar, a merged detail table image (with cross-channel price comparison for the same flight — the table image is the single carrier, nothing truncated), and per-channel jump links on hit rows. Every text line is width-guarded for phone screens (degrades gracefully, always keeping price/flight/criteria). If the table image upload ever fails, a **text fallback** carries the full TOP5 details instead (same-price multi-channel rows merge into one line with a ×N badge — information never vanishes with the picture). Email delivery (163/QQ mail boxes, full-page screenshot and push charts inline — zero external image loading on the recipient side) can run alongside DingTalk; every send is archived for in-console replay. Quiet hours (e.g. 23:00–07:00) silence routine heartbeats/storms/phone calls while hit alerts still get through.
@@ -88,7 +90,7 @@ Run pulse: per-round per-channel row counts & latency in a ring buffer — a 4-c
 
 </details>
 
-![Active probe: city autocomplete, five-channel selector and realtime probe (never stored or pushed)](docs/screenshots/console-probe-probe.png)
+![Active probe: city autocomplete, channel selector (5 web + 2 opt-in App) and realtime probe (never stored or pushed)](docs/screenshots/console-probe-probe.png)
 
 ![Probe city autocomplete: Chinese / pinyin / IATA, keyboard selection, full domestic/international picker](docs/screenshots/console-probe-city.png)
 
@@ -97,7 +99,7 @@ Run pulse: per-round per-channel row counts & latency in a ring buffer — a 4-c
 <img src="docs/screenshots/console-probe-overview.png" width="300" alt="Demo console overview (synthetic data)">
 <img src="docs/screenshots/console-probe-monitor.png" width="300" alt="Demo search console, dark (synthetic data)">
 <img src="docs/screenshots/console-probe-workbench.png" width="300" alt="Demo parsed list and original-page mirror (synthetic data)">
-<img src="docs/screenshots/console-probe-health.png" width="300" alt="Demo five-platform calibration (synthetic data)">
+<img src="docs/screenshots/console-probe-health.png" width="300" alt="Demo channel calibration (synthetic data)">
 <img src="docs/screenshots/console-probe-probe-overview.png" width="300" alt="Demo active probe, one-line form and batch (synthetic data)">
 <img src="docs/screenshots/console-probe-probe-workbench.png" width="300" alt="Demo shared filters: common / processed-history / search-only (synthetic data)">
 
@@ -114,7 +116,7 @@ It chains **14-day fare band → five-channel source cards → filters → list 
 - **Filters and views**: direct/transfer, cabin, airline, time windows, price band, baggage/meal/LCC/share/cross-day/stop, has landing page/raw, hide calendar, missing-only, complete-only, risk-only; parsed list with 13 field ticks and risk badges; one-click expand; matrix cells open the detail.
 - **Mirror and evidence**: the mirror offers five channel tabs across list/detail/four-up, all projected from the same raw row, explicitly not a screenshot or iframe; detail shows parsed ⇄ mirror ⇄ raw, a 30-day trend, dual-axis calendar and same-flight price ladder.
 - **Five-platform calibration book**: five channels × list/detail/calendar/cross with the four sources on one screen; empty states are never back-filled with teaching samples.
-- **Probe**: full city autocomplete (Chinese / pinyin / IATA) with the same domestic + international panel as the config page; a probe runs real channels but **does not write the DB or push**; no threshold means “probe not evaluated”. Online demo, static site: the probe entry is disabled with a stated reason; run locally to probe for real.
+- **Probe**: full city autocomplete (Chinese / pinyin / IATA) with the same domestic + international panel as the config page; a probe runs real channels (the 5 web channels are checked by default; Zhixing App and Qunar App are opt-in and use the real-device path) but **does not write the DB or push**; no threshold means “probe not evaluated”. Online demo, static site: the probe entry is disabled with a stated reason; run locally to probe for real.
 - **Export**: CSV (parsed + raw + provenance), evidence JSON, single-row copy, `probe://srx` state strings, up to 12 snapshots.
 
 ![Triple alignment: parsed ⇄ mirror ⇄ raw, same-flight price ladder and field evidence](docs/screenshots/console-probe-detail.png)
@@ -146,9 +148,9 @@ The capability map follows **collect → push → visualize → configure**. Eac
 
 | Capability | What it does |
 |---|---|
-| **Five-channel detail** | Qunar / Fliggy / Ctrip / Tongcheng / Tuniu share one schema (price / flight no. / times / transfer / cross-day / duration); each channel uses its best path (Qunar H5 with login, Ctrip PC international list + mobile H5 domestically, Tongcheng H5, Fliggy SSR, Tuniu HTTP, session channels on demand). Eligibility/risk/lure fares carry ⚠ badges. |
+| **Browser five-channel detail** | Qunar / Fliggy / Ctrip / Tongcheng / Tuniu share one schema (price / flight no. / times / transfer / cross-day / duration); each channel uses its best path (Qunar H5 with login, Ctrip PC international list + mobile H5 domestically, Tongcheng H5, Fliggy SSR, Tuniu HTTP, session channels on demand). Eligibility/risk/lure fares carry ⚠ badges. |
 | **Multi-date monitoring** | One route can watch multiple departure dates via a **range / specific-day mode bar** (one editor open at a time, both drafts kept); future 7/30 days, a start–end range or single days merge and de-duplicate; each date is collected, pushed and charted independently; route cloning copies all settings. |
-| **Round-trip multi-return** | A round-trip switch with **multiple return dates** (7/8 days from the outbound, a range, or day-by-day); collection runs per pair and the price is the tax-inclusive round-trip total. **Per-channel honesty**: Fliggy and Tongcheng support it; Ctrip/Qunar/Zhixing App do not implement round-trip and report "unsupported" for those routes instead of fabricating a one-way price; the UI marks it unsupported per channel instead of inventing data. |
+| **Round-trip multi-return** | A round-trip switch with **multiple return dates** (7/8 days from the outbound, a range, or day-by-day); collection runs per pair and **the price is the channel's own round-trip total, never two one-way fares added together**. **Per-channel honesty**: Ctrip (domestic & international; the page's own "round-trip tax-inclusive" / "round-trip total" label), Qunar web (domestic only; the outbound card's round-trip total — the return card's "add ¥N" surcharge is ignored), Fliggy (international only), Tongcheng (domestic only; the `book1/roundtrips` combined total), Tuniu (domestic only; the two-segment response price is the total), Zhixing App (real outbound/return pair; the total comes from the outbound column, return surcharges are never passed off as the fare), and Qunar App (domestic only; single/round-trip/multi-city tabs, reads the footer round-trip total) support it; routes or ends not implemented report "unsupported" instead of fabricating a one-way price; the UI marks it unsupported per channel instead of inventing data. |
 | **Enable / pause** | Each route has an enable switch: pausing keeps every setting and exempts scheduling / push / details — pausing no longer means deleting. |
 | **Qualification** | Separate direct/transfer thresholds; route-level gates for airline whitelist (code / full name / short alias, `!` = exclude), no LCC, no stop/share, free baggage ≥N kg, wide-body, price ceiling, max total duration, no overnight, departure/arrival wrap-around windows, transfer connection limits, baggage-through and latest transfer arrival. Only current-round data qualifies. |
 | **Multi-user** | Each user has their own routes, thresholds and DingTalk group; identical routes are collected once with staggered queries. |
@@ -157,7 +159,7 @@ The capability map follows **collect → push → visualize → configure**. Eac
 
 | Capability | What it does |
 |---|---|
-| **Special-fare discovery** | Search five official sources by departure, destination and date range: Ctrip low-price calendar + national board, Qunar official H5 deals (page-generated signature), Fliggy cheapestCalendar (fallback board on soft refusal), Tongcheng low-price calendar, and Tuniu's domestic H5 calendar. Every price carries its tax basis. The radar persists each monitored date/range, shows a calendar and monitoring trend, and links the low-price date to already-collected real flights (or a one-click detail probe); calendar/board prices remain discovery only. |
+| **Special-fare discovery** | Search seven official sources (5 web + 2 apps) by departure, destination and date range: Ctrip low-price calendar + national board, Qunar official H5 deals (page-generated signature), Fliggy cheapestCalendar (fallback board on soft refusal), Tongcheng low-price calendar, Tuniu's domestic H5 calendar, Zhixing App's special-fare search (daily lowest), and Qunar App's low-fare calendar (14-day window). Every price carries its tax basis. The radar persists each monitored date/range, shows a calendar and monitoring trend, and links the low-price date to already-collected real flights (or a one-click detail probe); calendar/board prices remain discovery only. |
 | **International monitoring** | Still only IATA codes: any endpoint outside the mainland set switches to international automatically (five continents, zero config); price is always **tax-inclusive**, tax shown separately; cross-day allows 0–7 days and duration is timezone-corrected; the city panel has a 🌐 international tab grouped by region (272 cities / 33 hot) with three search paths. |
 | **Price guards** | Outlier/low-lure guards scale with the international range; calendar/thin rows never qualify or enter same-flight comparison. |
 
@@ -202,12 +204,13 @@ The capability map follows **collect → push → visualize → configure**. Eac
 3. Open `http://127.0.0.1:8765` → ⚙️ Settings: add routes (Chinese city names with autocomplete), target prices, and your DingTalk robot Webhook + signing secret. Hit 「🔔 测试推送」 to verify.
 4. Save — monitoring starts immediately.
 
-**All five channels require a login** (decided 2026-10-27): entry pages are mostly browsable anonymously, but **fares and detail only appear after signing in** — the vague "login recommended" wording is gone. Save a session from the console's "⚙️ Settings → 🔐 Channel login", or pass `--login <channel>` at startup. What differs between channels is the session slot, not whether you need one:
+**All channels require a login** (decided 2026-10-27; the two App channels follow the same rule): entry pages are mostly browsable anonymously, but **fares and detail only appear after signing in** — the vague "login recommended" wording is gone. Save a session from the console's "⚙️ Settings → 🔐 Channel login", or pass `--login <channel>` at startup. What differs between channels is the session slot, not whether you need one:
 > - **Ctrip**: both PC and H5 need a session before fares appear;
 > - **Qunar**: its web flight site retired on 2026-10-10; the login window opens the unified account page (SMS code / QR), and only the H5 returns full detail;
 > - **Fliggy**: PC and H5 are **two separate domains** (fliggy.com / taobao.com) with non-shared sessions — log in twice (two slots);
 > - **Tongcheng**: the `ly.com` parent-domain cookie covers www/m/tiflight, so **one slot suffices** and the international side needs no second login;
 > - **Tuniu**: the domestic list needs a login; collection-wise the international side works anonymously, though opening its PC international entry page asks for one.
+> - **Zhixing App / Qunar App**: sign in inside the "Channel login" embedded device view; the session is packed into a snapshot and restored before each collection run. An expired snapshot is shown as "session expired" in Settings instead of pretending everything is fine.
 
 ### Docker / NAS
 
@@ -257,9 +260,11 @@ configuration**: still just three-letter codes (SHA→NRT). When either end sits
 outside the mainland city set, the crawler **switches to the international
 endpoint automatically** — destinations across five continents, ready to watch:
 
-- **Five-channel international collection**: qunar / fliggy / ctrip /
+- **Browser five-channel international collection**: qunar / fliggy / ctrip /
   tongcheng / tuniu each walk their international surface (international list
-  pages / tax-inclusive calendars). Judging, digest push and the detail chain
+  pages / tax-inclusive calendars); the Zhixing and Qunar App channels cover
+  international as well (same matrix, marked supported). Judging, digest push
+  and the detail chain
   need no special-casing — domestic and international routes can be mixed
   freely in one config
 - **Tax transparency**: international prices are always the **tax-inclusive
@@ -306,8 +311,9 @@ Prefer a Q&A wizard for the first config? `python main.py --setup` (Chinese, Ent
 
 ```
 main.py            orchestration: route dedup → per-channel thread pool → multi-user aggregation → 4-layer alerts
-crawlers/          five channels: qunar(H5 primary + PC revival probe) / ctrip / tongcheng(XHR intercept)
+crawlers/          seven channels: qunar(H5 primary + PC revival probe) / ctrip / tongcheng(XHR intercept)
                    / fliggy(PC SSR read) / tuniu(httpx reverse)
+                   / app_base + app_zhixing + app_qunar (Android emulator + adb)
 core/alerter.py    one aggregated push per round; _digest_payload pure builder (reused by console preview)
 core/intl.py       international city dictionary / IANA tz offsets / route scope detection (mainland-code single source)
 core/pulse.py      scan pulse recorder: per-round rows/latency ring buffer → /api/pulse
@@ -364,8 +370,8 @@ while all other channels stay available. All assets attach to one Release and a
 
 ```bash
 python tools/test_all.py        # parallel full gate (default min(8, CPU)): syntax + pytest via xdist + UI self-check in profile-planned shards, side by side
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 5194 tests (tracked) — per-channel parsing units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate + docs/code contract
-python docs/uitest.py             # full UI self-test (668 assertions, self-hosted demo, zero-JS-error hard gate)
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # full suite: 5953 tests (tracked, measured 2026-11-02) — per-channel parsing/path units (placeholder guards / pass-through lenses / aggregation safeties) + push-pipeline dry runs + link-provenance gate + chart-vs-list consistency + version gate + docs/code contract
+python docs/uitest.py             # full UI self-test (670 assertions, self-hosted demo, zero-JS-error hard gate)
 python docs/screenshot.py         # regenerate README screenshots (start the demo first: python webui.py --demo --port 8799)
 python docs/demo_build.py         # rebake the static demo site (docs/site)
 ```

@@ -16,6 +16,7 @@ from core.intl import (INTL_CITY_HOT, INTL_CITY_NAME, INTL_CITY_SHORT,
                        airport_city_code)
 from core.models import PRICE_MAX
 from core.specials import (
+    SPECIAL_CAPABILITY,
     SpecialDeal,
     SpecialWatch,
     ctrip_calendar_deals,
@@ -35,10 +36,16 @@ from crawlers.special import (
 
 _IATA3 = re.compile(r"^[A-Z]{3}$")
 _RADAR_MAX_DAYS = 90
-# 发现源渠道。前五家是浏览器渠道；`app_qunar` 是 App 渠道里唯一
-# 有真实低价发现源的一方（App「低价机票」→ 每天一条最低价）。
-_CHANNELS = ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu",
-             "app_qunar")
+# 去哪儿 App 低价页日期带的实测宽度：今天起 14 天（r815a 真机 14 天）。
+_APP_QUNAR_STRIP_DAYS = 14
+# 可查询渠道 = **能力表里真有发现源**的渠道，由 SPECIAL_CAPABILITY 派生。
+# 手抄白名单曾漏掉 `app_zhixing`：r732 已把智行「特价」接成逐天报价源，
+# 但这里没跟上，于是请求里的智行被静默丢弃（勾得到、点了不算）。
+# 新增渠道时只改能力表；`test_r709` 会核对两边互为镜像。
+# 可查询渠道 = **能力表里声明过**的渠道。含 sources 为空的声明
+# （如 2026-11-02 起的 app_qunar）：保留查询能力，结果记 not_connected
+# 并带原因，不能让渠道从雷达界面消失（用户要求「统一监控」）。
+_CHANNELS = tuple(SPECIAL_CAPABILITY)
 
 # 发现层短时缓存/冷却：同一条件重复点「查低价」不重复打源
 _FLIGGY_CACHE = {}
@@ -612,7 +619,20 @@ def _app_qunar_deals(q: RadarQuery, logger) -> tuple:
     采不到要区分「被拦/要登录」与「确实没有低价」：前者 error，后者 empty。
     """
     from crawlers.app_qunar import AppQunarCrawler
-    days = max(1, min(_RADAR_MAX_DAYS, (q.end - q.start).days + 1))
+    # 低价页日期带从**今天**起算（14 天）。雷达的日期区间可以是未来任意
+    # 起点：只传区间长度会让 11-10..11-12 实际只抓 11-02..11-04，过滤后
+    # 变空且没有原因（2026-11-02 线上实测 176s / empty / dates=[]）。
+    today = date.today()
+    strip_end = today + timedelta(days=_APP_QUNAR_STRIP_DAYS - 1)
+    if q.end < today:
+        return [], _status("empty", "请求区间已过去；App 低价日期带从今天起算")
+    if q.start > strip_end:
+        return [], _status(
+            "empty", "App 低价日期带只覆盖今天起 %d 天（到 %s），请求区间 %s..%s 超出"
+            % (_APP_QUNAR_STRIP_DAYS, strip_end.isoformat(),
+               q.start.isoformat(), q.end.isoformat()))
+    days = max(1, min(_APP_QUNAR_STRIP_DAYS,
+                     (min(q.end, strip_end) - today).days + 1))
     crawler = AppQunarCrawler(
         {"user_data_dir": "user_data",
          "android": {"enabled": True}}, logger)
@@ -633,15 +653,77 @@ def _app_qunar_deals(q: RadarQuery, logger) -> tuple:
             link="", to_name=q.to_name, tax_included=None,
             price_basis="unknown",
             price_basis_label="口径未标注"))
+    if rows_d and not out:
+        _got = sorted(str(r.get("date") or "") for r in rows_d
+                      if r.get("date"))
+        return [], _status(
+            "empty", "App 返回日期带 %s..%s 未覆盖请求区间 %s..%s"
+            % (_got[0], _got[-1], q.start.isoformat(), q.end.isoformat()))
     # 采不到要区分「被拦/要登录」与「确实没有低价」：前者照实说，
     # 后者才是 empty。crawler 的账本里已经写明了卡点。
+    note = ""
+    pstatus = ""
+    for pth in getattr(crawler, "paths", []) or []:
+        if pth.get("path") == "low-fare" and pth.get("status") != "ok":
+            note = str(pth.get("detail") or pth.get("status") or "")
+            pstatus = str(pth.get("status") or "")
+            break
+    if not out and pstatus == "unsupported":
+        # 通路本身接不上（结果页变 WebView / 产品下线）：既不是网络错误，
+        # 也不是「当天没低价」。记 not_connected，前端按未接通展示原因。
+        return out, _status("not_connected", note)
+    if out and q.end > strip_end:
+        _tail = "App 低价日期带只到 %s，区间后半段未覆盖" % strip_end.isoformat()
+        note = (note + "；" if note else "") + _tail
+    st = _status("ok" if out else ("error" if note else "empty"),
+                 note, len(out))
+    return out, st
+
+
+def _app_zhixing_deals(q: RadarQuery, logger) -> tuple:
+    """智行 App「特价」：该航线逐天一条最低价（App 渠道的 low_fare 源）。
+
+    真机实测（2026-10-31）：首页「特价」页签 → 设出发/到达 + 日期区间 →
+    「搜索特价」→ 结果页逐天列出 `02.16 周二 ¥1646`。与去哪儿 App
+    「低价机票」同一个契约（发现源，不是明细）。
+
+    此前这里被记成"目的地低价榜、口径对不上"——那是把首页「省钱攻略」里
+    按目的地报价的推荐卡当成了「特价」档。**结论已更正**。
+
+    页面本身没写价格口径（dump 里没有含税/优惠前/到手字样），所以只能标
+    `tax_included=None` + 「口径未标注」，不假设含税。
+    """
+    from crawlers.app_zhixing import AppZhixingCrawler
+    days = max(1, min(_RADAR_MAX_DAYS, (q.end - q.start).days + 1))
+    crawler = AppZhixingCrawler(
+        {"user_data_dir": "user_data",
+         "android": {"enabled": True}}, logger)
+    rows_d = crawler.low_fare(q.from_code, q.to_code, days=days,
+                              anchor_ymd=q.start.isoformat()) or []
+    out = []
+    for r in rows_d:
+        date_s = str(r.get("date") or "")
+        if not _in_range(date_s, q):
+            continue
+        try:
+            price = float(r.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        out.append(SpecialDeal(
+            "app_zhixing", q.from_code, q.to_code, date_s, price,
+            link="", to_name=q.to_name, tax_included=None,
+            price_basis="unknown",
+            price_basis_label="口径未标注"))
     note = ""
     for pth in getattr(crawler, "paths", []) or []:
         if pth.get("path") == "low-fare" and pth.get("status") != "ok":
             note = str(pth.get("detail") or pth.get("status") or "")
             break
-    st = _status("ok" if out else ("error" if note else "empty"),
-                 note, len(out))
+    # 没出数也要带原因：页面停在别的航线/日期带是「没按请求取」，
+    # 不是抓取失败；旧写法把有 note 的情况记成 error，读者会去查风控。
+    st = _status("ok" if out else "empty", note, len(out))
     return out, st
 
 
@@ -724,6 +806,8 @@ def build_radar(payload: dict, logger, proxy: str = "",
                 rows, st = _qunar_deals(q, logger, proxy, user_data_dir)
             elif ch == "app_qunar":
                 rows, st = _app_qunar_deals(q, logger)
+            elif ch == "app_zhixing":
+                rows, st = _app_zhixing_deals(q, logger)
             else:
                 rows, st = [], _status(
                     "not_connected", "自定义航线低价日历尚未验证接入；可用明细探针")

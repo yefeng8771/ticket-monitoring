@@ -15,14 +15,66 @@
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from typing import List
 
 _NODE_RE = re.compile(r"<node\b([^>]*?)/?>")
 _ATTR_RE = r'%s="([^"]*)"'
 _DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})$")
 _PRICE_RE = re.compile(r"^[\u00a5\uffe5]\s*(\d{2,5})$")
+_DAY_CD_RE = re.compile(r"^q_flight_calendarDayItem#(\d{4}-\d{2}-\d{2})$")
 _WEEKDAY = ("今天", "明天", "后天", "周一", "周二", "周三", "周四",
             "周五", "周六", "周日")
+
+
+def parse_full_calendar(xml: str) -> List[dict]:
+    """整月日历 → [{date, price}]，按日期升序。
+
+    真机 2026-11-02（去哪儿 App，低价机票 → 日历）：
+    每个日格是
+        <node content-desc="q_flight_calendarDayItem#2027-01-10">
+          <node text="¥498"/>
+          <node text="10"/>
+        </node>
+    价格/日号在日格**子树**里，不依赖 bounds（RN 的 bounds 会退化成
+    相对值，按 y 配对会错）。同一格若有原价/优惠两个数，取最低展示价；
+    没有价（不可售/未加载）的日格跳过，绝不给 0。
+    """
+    if not xml:
+        return []
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return []
+    out = {}
+    for node in root.iter("node"):
+        m = _DAY_CD_RE.match(node.get("content-desc") or "")
+        if not m:
+            continue
+        prices = []
+        for sub in node.iter("node"):
+            mm = _PRICE_RE.match((sub.get("text") or "").strip())
+            if mm:
+                try:
+                    prices.append(int(mm.group(1)))
+                except ValueError:
+                    pass
+        if prices:
+            out[m.group(1)] = min(prices)
+    return [{"date": k, "price": v} for k, v in sorted(out.items())]
+
+
+def is_h5_low_fare_activity(activity: str) -> bool:
+    """「搜索低价机票」之后是否落到了 H5 WebView。
+
+    真机 2026-11-02：点搜索后 Activity 变成
+    `com.Qunar/com.mqunar.hy.browser.activity.HyWebActivity01`，页面是
+    WebView（uiautomator dump 里**没有任何 text 节点**），顶部是
+    「北京 → 上海」「旅行时段：未来半年」，正文「暂无航班」。
+    旧的原生日期条（2026-10-30 版）已不在这个入口上；解析器再等也读
+    不到东西，必须按「这条通路当前接不上」如实入账。
+    """
+    return "hywebactivity" in (activity or "").lower()
 
 
 def _nodes(xml: str):

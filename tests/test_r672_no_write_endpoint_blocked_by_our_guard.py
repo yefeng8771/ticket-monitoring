@@ -65,9 +65,16 @@ def live():
     cfg = os.path.join(tmp, "c.yaml")
     # 复制到临时目录：任何写配置的端点都不许碰仓库里的配置文件
     shutil.copyfile(os.path.join(ROOT, "config.example.yaml"), cfg)
+    # 强制回环监听；夹具退出时**必须**还原——直接赋值会永久改掉模块属性，
+    # 后续 test_r675 的「TM_WEB_HOST 生效」断言会读到替身而恒得 127.0.0.1。
+    old_bind = webui._bind_host
     webui._bind_host = lambda c: "127.0.0.1"
-    webui.start_web(cfg={"web": {"port": port, "host": "127.0.0.1"}},
-                    job=None, report_push=None, config_path=cfg)
+    try:
+        webui.start_web(cfg={"web": {"port": port, "host": "127.0.0.1"}},
+                        job=None, report_push=None, config_path=cfg)
+    except Exception:
+        webui._bind_host = old_bind
+        raise
     base = "http://127.0.0.1:%d" % port
     op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     up = False
@@ -82,6 +89,9 @@ def live():
         shutil.rmtree(tmp, ignore_errors=True)
         pytest.skip("控制台未在期限内起来")
     yield base
+    _w = sys.modules.get("webui")
+    if _w is not None:
+        _w._bind_host = old_bind
     shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -89,6 +99,18 @@ def test_no_endpoint_is_blocked_by_our_own_guard(live):
     from playwright.sync_api import sync_playwright
 
     eps = _endpoints()
+    # `/api/restart` 是**真的会杀进程**的端点：同源一打就 spawn 新实例并在
+    # 1s 后 `os._exit(0)`——那个 Timer 属于本测试进程（webui 是 in-process
+    # 起的），于是整跑 pytest 会在 61% 处静默消失（实测 3241/5242 处猝死，
+    # 无 traceback、无 FAILED 行，被误读成「跑完了/环境问题」）。这不是
+    # 可以靠「响应已经返回」规避的——Timer 在响应之后才触发。
+    # 它在闸门层面的覆盖由 test_r671 的跨站 403 与下方结构断言各守一半：
+    # 跨站被挡（不 spawn）、闸门位置在所有写分支之前。这里只排除它的**同源
+    # 调用**，其余端点仍逐个真打。
+    probed = [p for p in eps if p != "/api/restart"]
+    assert "/api/restart" in eps, (
+        "端点普查没扫到 /api/restart——排除规则会变成「把缺陷一起漏掉」")
+    assert len(probed) >= 15, "真打端点太少：%s" % probed
     if not os.path.exists(
             os.path.join(os.environ.get("LOCALAPPDATA", ""),
                          "ms-playwright")):
@@ -118,9 +140,10 @@ def test_no_endpoint_is_blocked_by_our_own_guard(live):
                   out[p+' #json']=r.status;
                 }catch(e){ out[p+' #json']='ERR'; }
               }
-              return out;}""", eps)
+              return out;}""", probed)
         finally:
             b.close()
     blocked = {p: s for p, s in res.items() if s in BLOCKED}
     assert not blocked, (
         "这些写端点被自家闸门拦掉了（同源请求不该 403/415）：%s" % blocked)
+    assert len(res) == len(probed) * 2, "有端点没真打到：%s" % res

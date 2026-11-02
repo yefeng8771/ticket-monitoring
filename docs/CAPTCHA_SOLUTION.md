@@ -56,7 +56,7 @@
 | 登录窗口 | 有头窗口 + 桌面视口；用户点“我已登录完成”后保存会话 | `crawlers/base.py::_login_window()`、`webui.py::renderLoginCards()` |
 | 登录态判定 | 保存时间、采集拒绝、明细成功三类证据；区分渠道与国内/国际 scope | `webui.py::channelAuthView()`、`tests/test_channel_status.py` |
 | 任务状态聚合 | `blocked -> challenge`、`login -> login_required`；有行但有失败路径记 `partial` | `webui.py` 任务状态聚合（`partial` 判定，见 `SPMON_RUN_LABEL.partial`） |
-| 登录卡片 | 五渠道“弹窗登录/我已登录完成/等待采集验证”；失败与过期有文案 | `webui.py::renderLoginCards()`、`webui.py::channelAuthView()` 的 `labels` 表 |
+| 登录卡片 | 浏览器五渠道“弹窗登录/我已登录完成/等待采集验证”；失败与过期有文案 | `webui.py::renderLoginCards()`、`webui.py::channelAuthView()` 的 `labels` 表 |
 | 挑战识别（分散） | 携程 whaleguard/验证码；去哪儿**国际** code 7/8/9/10004（国内仅 1999）；飞猪 baxia/滑块（国内不检测登录）；同程验证码/登录；途牛滑块 DOM/710114 | 见 §2 各渠道 |
 | 回归测试 | 认证状态不因空结果/旧失败/保存时间错乱而误判 | `tests/test_channel_status.py`、`tests/test_r338_login_state.py`、`tests/test_channel_ui_status.py` |
 

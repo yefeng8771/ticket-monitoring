@@ -59,9 +59,9 @@ def test_radar_chart_controls_match_trend_chart_capabilities():
         ".spmon-chartwrap{overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;overscroll-behavior-x:contain;touch-action:pan-x;-webkit-overflow-scrolling:touch}",
         "#spMonChart{max-width:none}",
         "const units=SPMON.mode==='kline'?candles.length:times.length",
-        # r374：点数多时才允许横向滚动，且上限 2.4 倍可视宽；
-        # 26 点 × 30px 仍落在可视宽内，不会撑出 1404px 屏外画布。
-        "const W=Math.max(baseW,Math.min(units*MINPX,baseW*2.4))",
+        # r850：上限改为 60000（原 2.4×可视宽会把密集采样压在同一像素）；
+        # 取大结构不变：点数多时可横向滚动，点数少时仍铺满可视宽。
+        "const W=Math.max(baseW,Math.min(units*MINPX,",
         "c.style.width=W+'px'",
         "p.p>0&&(!rangeMs||p.t>=cutoff)",
         "[mx>0?Math.max(0,mn-p):mn-p,mx+p]",

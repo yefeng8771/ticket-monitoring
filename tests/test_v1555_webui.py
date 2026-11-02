@@ -128,8 +128,10 @@ class TestWebuiV1555Pins:
     def test_body_open_div_single_ternary(self):
         """用户卡体开标签单标签三元：源码不再双计开标签（未来自动平衡
         扫描免误报）。"""
+        # r872：卡体内衬从内联 padding 收进类 `.ucbody`，开合只留 display 三元。
+        # 守意图：开标签只有一个、不再出现「三段拼接/双份」写法。
         src = self._src()
-        assert '''+'<div style="'+(open?'padding:4px 16px 14px':'display:none')+'">';''' in src
+        assert '''+'<div class="ucbody" style="'+(open?'':'display:none')+'">';''' in src
         assert """+'<div style="padding:4px 16px 14px">':'<div style="display:none">';"""not in src
 
     # ---- B1 Esc 关 toast ----------
@@ -177,7 +179,8 @@ class TestWebuiV1555Pins:
         # 统一承载，≥1920 封顶语义不变）
         assert ".wrap{max-width:1716px}" not in src
         assert ".wrap{max-width:min(1716px,max(1180px,92vw))}" in src
-        assert "header{margin-left:0;margin-right:0}}" in src  # ≥1920 停出血
+        # ≥1920 停出血（h1/nav 结构差归因在 r301）
+        assert "#hdcard{margin-left:0;margin-right:0}}" in src
         # r280 P3-1 定谳备案：停出血后 h1（卡内文字轴）与 nav（盒轴线）
         # 差 18px 属「盒内呼吸 vs 盒轴通线」的结构差，非齐线破口——
         # nav 必须留在盒轴（下方 all-of-1920 钉组锁通线），禁加缩进

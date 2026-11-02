@@ -39,8 +39,10 @@ def test_relative_paths_anchor_to_exe_dir(monkeypatch, tmp_path):
     got = paths.resolve("data/prices.db").replace("\\", "/")
     want = (str(tmp_path) + "/data/prices.db").replace("\\", "/")
     assert got == want, "%s != %s" % (got, want)
-    # 绝对路径原样
-    assert paths.resolve(r"D:\other\a.db") == r"D:\other\a.db"
+    # 绝对路径原样（用平台真实的绝对路径，别写死 Windows 盘符——
+    # `D:\...` 在 POSIX 上不是绝对路径，这条断言在 CI 上必红）
+    abs_path = os.path.join(os.sep, "other", "a.db")
+    assert paths.resolve(abs_path) == abs_path
 
 
 def test_main_and_crawlers_use_app_root_when_frozen():

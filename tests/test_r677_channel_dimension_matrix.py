@@ -77,51 +77,85 @@ def test_round_trip_declared_unsupported_matches_code():
 
 def test_unsupported_dims_is_derived_not_handwritten():
     """明确不支持的维度是**推导**出来的，不是手写清单。"""
-    assert "round_trip" in unsupported_dims("app_qunar"), \
+    # 两家 App 的往返都已真机跑通（2026-10-31），不再是 unsupported
+    assert "round_trip" not in unsupported_dims("app_qunar"), \
         unsupported_dims("app_qunar")
-    # 去哪儿浏览器渠道自己也不支持往返，App 与它一致
-    assert "round_trip" in unsupported_dims("qunar")
-    # 多程全渠道都没有实现，两家 App 都必须如实标注
-    assert "multi_city" in unsupported_dims("app_qunar")
-    assert "multi_city" in unsupported_dims("app_zhixing")
+    assert "round_trip" not in unsupported_dims("app_zhixing"), \
+        unsupported_dims("app_zhixing")
+    # 渠道产品有往返/多程，但本仓库采集端未实现/未出数 → 未验证（""），
+    # 不是“不支持”：矩阵的 n 只留给渠道真没有的能力。
+    assert "round_trip" not in unsupported_dims("qunar")
+    assert "multi_city" not in unsupported_dims("app_qunar")
+    assert "multi_city" not in unsupported_dims("app_zhixing")
 
 
 def test_alignment_gaps_are_enumerable_not_vague():
-    """缺口必须是可枚举的清单，能直接当待办用。"""
-    gaps = app_alignment_gaps("app_qunar")
-    # as of 2026-10-30 真机：国内/国际/日历/明细/低价机票全部跑通
-    # → 去哪儿 App 相对浏览器去哪儿**已无缺口**。
-    assert gaps == (), gaps
+    """缺口必须是可枚举的清单，能直接当待办用。
+
+    基准是「**任一**浏览器渠道已具备该维度」（用户原话：PC/H5 渠道拥有的
+    能力 App 都要对齐有），不是「某一家同源友商有」——按单个同行判会
+    自证：携程自己 round_trip 未验证，于是「智行 ↔ 携程」永远算不出往返
+    缺口，而网页端飞猪/同程明明支持。as of 2026-11-02 晚：智行与去哪儿
+    App 国内/国际/日历/明细/往返/低价机票**全部落地**；去哪儿 App 的
+    低价机票登录后落原生 RN 页，14 天真机出数；日历/低价均补齐。
+    """
+    assert app_alignment_gaps("app_qunar") == (), (
+        "去哪儿 App 的日历/低价机票已真机补齐，不应再有缺口：%r"
+        % (app_alignment_gaps("app_qunar"),))
+    assert app_alignment_gaps("app_zhixing") == ()
+    # 缺口是空集合时，上面的 all(...) 会恒真——所以下面另造一个非空场景
+    # 验证函数真的会报缺口（见 try 块），这里就不再写恒真式。
     # 函数本身不能因为「都对齐了」就退化成恒空：造一个「基准有、App 无」
     # 的临时场景，它必须把那一维报出来（否则这层门禁就成了摆设）。
     from core.channels import APP_BROWSER_PEER, CHANNEL_DIMENSIONS
-    saved = CHANNEL_DIMENSIONS["qunar"]["low_fare"]
+    # 造「浏览器端有、App 没有」的临时场景：浏览器 qunar 的 low_fare 置 y，
+    # app_qunar 置 ""（未验证），缺口必须出现；finally 里还原**保存值**。
+    saved = {p2: (CHANNEL_DIMENSIONS[p2] or {}).get("low_fare", "")
+             for p2 in CHANNEL_DIMENSIONS}
     try:
         CHANNEL_DIMENSIONS["qunar"]["low_fare"] = "y"
         CHANNEL_DIMENSIONS["app_qunar"]["low_fare"] = ""
-        assert app_alignment_gaps("app_qunar") == ("low_fare",)
+        gaps = app_alignment_gaps("app_qunar")
+        assert "low_fare" in gaps, gaps
     finally:
-        CHANNEL_DIMENSIONS["qunar"]["low_fare"] = saved
-        CHANNEL_DIMENSIONS["app_qunar"]["low_fare"] = "y"
+        for p2, val in saved.items():
+            CHANNEL_DIMENSIONS[p2]["low_fare"] = val
     assert APP_BROWSER_PEER["app_qunar"] == "qunar"
 
 
 def test_app_is_allowed_to_exceed_peer():
-    """App 比基准多出来的能力不算缺口（用户明确说 App 信息更全）。"""
+    """App 比浏览器端**多**出来的能力不算缺口（用户明确说 App 信息更全）。
+
+    判据方向：缺口只来自「浏览器端有 y、App 不是 y」，App 为 y 而浏览器
+    端没有的维度绝不能出现在缺口里（否则「更全」反被判成待办）。
+    """
     from core.channels import CHANNEL_DIMENSIONS as M
-    # 造一个「App 多一项」的临时场景，验证判定方向
-    peer = M["qunar"]
-    assert app_alignment_gaps("app_qunar") == tuple(
-        d for d in DIMENSIONS if peer.get(d) == "y"
-        and dim_state("app_qunar", d) != "y")
+    peer_union = {d for p in BROWSER_CHANNELS for d in DIMENSIONS
+                  if (M.get(p) or {}).get(d) == "y"}
+    for plat in APP_CHANNELS:
+        gaps = app_alignment_gaps(plat)
+        assert set(gaps) <= peer_union, (
+            "%s 的缺口里出现了浏览器端并不具备的维度：%s" % (plat, gaps))
+        extra = {d for d in DIMENSIONS
+                 if dim_state(plat, d) == "y" and d not in peer_union}
+        assert not (extra & set(gaps)), (
+            "%s 比浏览器端多出来的能力被算成了缺口：%s" % (plat, extra))
 
 
 def test_unknown_dimension_is_not_treated_as_supported():
-    """未验证（`""`）绝不能被读成「支持」。"""
-    # 智行的低价机票仍未接入：留空即「未验证」，绝不能被读成支持
-    assert dim_state("app_zhixing", "low_fare") == ""
+    """未验证（`""`）绝不能被读成「支持」。
+
+    注意别把**已接入**的维度写死成 `""` 来守这条：r732 把智行「特价」
+    接入后（真机确认它也是逐天报价），原来那句
+    `dim_state("app_zhixing","low_fare") == ""` 就变成了「守旧事实」，
+    红灯只说明接入成功而不是判据坏了。这里改用**真正没接过**的东西：
+    不存在的渠道 / 不存在的维度，必须一律返回 `""`。
+    """
+    assert dim_state("app_zhixing", "low_fare") == "y", (
+        "智行「特价」已按 low_fare 接入（r732）；若退回未接入请同步改这里")
     assert dim_state("no_such_plat", "domestic") == ""
     assert dim_state("app_qunar", "no_such_dim") == ""
+    assert dim_state("ctrip", "no_such_dim") == ""
 
 
 # ---------- 恢复快照的两种失败要分得开 ----------
@@ -174,13 +208,17 @@ def test_multi_city_has_no_implementation_anywhere():
         assert "multi_city" not in src and "多程查询" not in src, f
 
 
-def test_unsupported_round_trip_declared_only_where_code_says_so():
-    """声明 n 的浏览器渠道，代码里必须有「暂不支持」分支。"""
+def test_browser_round_trip_y_or_explicit_intl_gap():
+    """浏览器渠道国内往返已全部接通；国际未验证的必须有显式分支。"""
     import io
     import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for plat in ("ctrip", "qunar"):
-        assert dim_state(plat, "round_trip") == "n", plat
-        src = io.open(os.path.join(root, "crawlers", plat + ".py"),
-                      encoding="utf-8", newline="").read()
-        assert "往返明细暂不支持" in src,             "%s 声明不支持往返，但代码里没有对应的显式分支" % plat
+        assert dim_state(plat, "round_trip") == "y", plat
+    qsrc = io.open(os.path.join(root, "crawlers", "qunar.py"),
+                   encoding="utf-8", newline="").read()
+    assert "国际往返暂不支持" in qsrc, \
+        "qunar 国际往返未验证，必须在源码里显式拒绝"
+    csrc = io.open(os.path.join(root, "crawlers", "ctrip.py"),
+                   encoding="utf-8", newline="").read()
+    assert "_fetch_rt" in csrc and "containstax=1" in csrc
