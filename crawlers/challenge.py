@@ -18,6 +18,9 @@
 
     register_handler(MyHandler())
 
+现成的处理器：``crawlers.slider.SliderHandler``（只对**几何滑块**尝试，强人机
+不碰；需显式注册 + ``crawler.slider.auto`` 打开，默认不挂）。
+
 处理器在**页面渲染完成之后**接手（导航一返回就调用），面对的是已经渲染
 出来的挑战控件；它解完自行 reload，重载不会再触发本钩子。
 未注册处理器时，接缝是纯转发：行为与开销都与没有接缝时一致。
@@ -161,6 +164,48 @@ def unregister_handler():
 
 def current_handler():
     return _HANDLER
+
+
+def ensure_slider_handler(config=None, *, user_data_dir="user_data",
+                          profile: str = "", logger=None):
+    """按配置**自动**挂上滑块处理器（幂等，默认关）。
+
+    为什么需要这一层：``SliderHandler`` 写好了，但"谁去注册它"一直没人接——
+    ``crawler.slider.auto`` 配成 ``simple`` 也不会生效，功能等于死的
+    （2026-11-03 全仓搜过：``register_handler`` 只有在测试里被调用过）。
+
+    这里做成**幂等 + 失败静默**的引导函数，由 ``BaseCrawler.__init__`` 调用，
+    于是只要采集器启动就会按配置生效，不用改 main / webui：
+
+    * ``crawler.slider.auto`` 为假/未配 → **不注册**，保持"识别→记账→停手"；
+    * 为真 → 注册 ``SliderHandler``（内部仍会二次分级：强人机一律不碰）；
+    * 已经注册过同一个处理器 → 直接返回，不重复覆盖。
+
+    返回当前处理器（可能是 None）。
+    """
+    try:
+        from . import slider as slider_mod
+        cur = _HANDLER
+        want = slider_mod.should_attempt(
+            "probe", config, user_data_dir=user_data_dir, profile=profile)[0]
+        if not want:
+            return cur
+        # 优先挂**超集**处理器：它覆盖滑块 + 算数 + 文字（强人机一律不碰）。
+        # 挂不上时退回只处理滑块的旧实现，保证老行为可用。
+        try:
+            from . import captcha as captcha_mod
+            handler_cls = captcha_mod.SolverHandler
+            handler_name = "solver-handler"
+        except Exception:
+            handler_cls = slider_mod.SliderHandler
+            handler_name = "slider-handler"
+        if getattr(cur, "name", "") in ("solver-handler", "slider-handler"):
+            return cur
+        return register_handler(handler_cls(
+            config, user_data_dir=user_data_dir, profile=profile,
+            logger=logger))
+    except Exception:
+        return _HANDLER
 
 
 def _ctx_with(ctx, **kw):

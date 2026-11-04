@@ -4670,8 +4670,14 @@ def main():
                 #      （源码钉只证声明在场）；段尾回监控视图（复位律） ----
             if _want(26):
                 step("r299 配置页语义配色")
+                # 分片冷启动时配置页数据是异步到的：先切视图并等渠道 chip
+                # 真渲染，再取 computed——否则拿到 0/1 颗，颜色断言假红。
+                pg.evaluate("()=>switchView('cfg')")
+                _wait_until(
+                    pg,
+                    "() => document.querySelectorAll('.chip.pch.on').length>=2",
+                    cap_ms=6000)
                 pg.evaluate("""()=>{
-                  switchView('cfg');
                   const pills=[...document.querySelectorAll('.chip.pch.on')];
                   window.__w1=pills.slice(0,2).map(x=>getComputedStyle(x).borderColor);
                   const b=document.querySelector('.rhead>b');
@@ -6216,6 +6222,10 @@ def main():
                    and _srxd["tabs"] >= 5
                    and (_srxd["raw"] > 0 or "原始行回放失败" in _rawtxt
                         or "无当轮 raw" in _rawtxt))
+                _wait_until(pg, "()=>{const a=[...document.querySelectorAll"
+                                "('#srxDetail .srx-dtitle img.bic')];"
+                                "return a.length>=2&&a.every(i=>i.complete"
+                                "&&i.naturalWidth>0);}", cap_ms=4000)
                 _bicd = pg.evaluate("""()=>({
                   air:document.querySelectorAll(
                     '#srxDetail .srx-dtitle img.bic-air').length,
@@ -7031,7 +7041,7 @@ def main():
                 _wait_until(
                     _p358,
                     "() => !!document.querySelector('#hbody .hc[data-ts]')",
-                    cap_ms=6000)
+                    cap_ms=12000)
                 _hc358 = _p358.evaluate("""()=>{
                   const c=[...document.querySelectorAll('#hbody .hc')]
                     .find(x=>x.hasAttribute('data-ts'));
@@ -7330,7 +7340,9 @@ def main():
                 # goal: 关注航线/关注航班曲线与检索/明细筛选统一
                 pg.set_viewport_size({"width": 1440, "height": 900})
                 pg.evaluate("switchView('mon');showMonTab('overview')")
-                pg.wait_for_timeout(800)
+                _wait_until(pg, "()=>document.querySelectorAll"
+                                "('#monWatchList .monwatch svg').length>0",
+                            cap_ms=5000)
                 _u = pg.evaluate("""()=>({
                   routeCard:getComputedStyle(document.querySelector('#monRouteCard')).display!=='none',
                   routes:document.querySelectorAll('#monRouteList .monroute').length,

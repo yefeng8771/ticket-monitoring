@@ -36,6 +36,131 @@ else:
         os.path.dirname(os.path.abspath(__file__)))
 
 
+def wait_ready(dev, marker: str, *, exclude=(), frames: int = 14,
+               interval: float = 2.5, base_s: float = 90,
+               slow_s: float = 150, slow_frame_s: float = 6.0,
+               stable: int = 2) -> tuple:
+    """等页面就绪：**按帧数预算 + 自适应放宽**，返回 ``(ok, xml, why)``。
+
+    为什么不能只用固定秒数（2026-11-03 实测，14 次「首页未就绪」全是这个）：
+
+    * 空载时一帧 ``uiautomator dump`` ≈2–3s，60s 能取 20 帧；
+    * **整机跑着 5 个浏览器渠道时单帧能到 ~20s**，60s 只够 3 帧；
+    * 而"连续两帧都是首页"最少要 6 帧（中间任一帧是残留弹层就重置计数）。
+
+    于是慢机上"必然失败"，日志看起来却像"App 打不开"。改成帧数预算后，
+    慢机只是等得久一点，不会判错。
+
+    ``marker`` 是就绪标志文案（如「机票查询」）；``exclude`` 里的文案出现
+    则视为**未就绪**（如残留的日历弹层标题）。
+    """
+    ex = tuple(x for x in (exclude or ()) if x)
+    deadline = time.time() + float(base_s)
+    t0 = time.time()
+    hit = 0
+    xml = ""
+    for i in range(max(2, int(frames))):
+        time.sleep(float(interval))
+        xml = dev.dump() or ""
+        if i == 0 and (time.time() - t0) > float(slow_frame_s):
+            # 首帧就慢 → 整机被拖住，放宽总时长（仍然受帧数上限约束）
+            deadline = time.time() + float(slow_s)
+        ready = (str(marker) in xml) and not any(e in xml for e in ex)
+        if ready:
+            hit += 1
+            if hit >= max(1, int(stable)):
+                return True, xml, "ok"
+        else:
+            hit = 0
+        if time.time() > deadline:
+            break
+    return False, xml, ("未就绪：%d 帧 / 约 %ds 内没等到「%s」"
+                        % (i + 1, int(time.time() - t0), marker))
+
+
+def save_scene(tag: str, xml: str, *, prefix: str = "app", root: str = "",
+               limit: int = 150) -> str:
+    """把「屏幕上可读的节点」落一份到 ``debug/scene``，返回落盘路径。
+
+    为什么要有这个（2026-11-04）：App 渠道失败时账本只留一行状态
+    （`no-list-page` / `无法识别的页面状态`），**看不出当时停在哪一屏**。
+    这类"认不出页面"的失败最需要现场，而原来只有 qunar 自己写了一份
+    `_save_fail_scene`，其它渠道出问题时**完全没有证据**——
+    于是同一个失败连查几轮还在猜。
+
+    真机 dump 常 200KB 不宜整份保存：只留前 ``limit`` 条带
+    文案/id/content-desc 的节点（含坐标）。写文件失败不影响采集。
+
+    ``TICKET_SCENE_DIR`` 是测试隔离锚（`tests/conftest.py`）：替身设备
+    故意失败时按 CWD 写会把合成现场混进生产 ``debug/scene``（实测踩过）。
+    """
+    try:
+        import os as _os
+        import re as _re
+        import time as _t
+        d = (root or _os.environ.get("TICKET_SCENE_DIR")
+             or _os.path.join("debug", "scene"))
+        _os.makedirs(d, exist_ok=True)
+        p = _os.path.join(d, "%s_%s_%s.txt"
+                          % (prefix, _t.strftime("%Y%m%d_%H%M%S"), tag))
+        rows = []
+        for m in _re.finditer(r"<node\b([^>]*?)/?>", xml or ""):
+            seg = m.group(1)
+            txt = _re.search(r'text="([^"]*)"', seg)
+            rid = _re.search(r'resource-id="([^"]*)"', seg)
+            dsc = _re.search(r'content-desc="([^"]*)"', seg)
+            bnd = _re.search(
+                r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', seg)
+            t = (txt.group(1) if txt else "").strip()
+            i_ = (rid.group(1) if rid else "").strip()
+            c_ = (dsc.group(1) if dsc else "").strip()
+            if not (t or i_ or c_) or not bnd:
+                continue
+            rows.append("%s | %s | %s | %s,%s,%s,%s"
+                        % (i_.split("/")[-1] or c_[:40], t, c_[:60],
+                           bnd.group(1), bnd.group(2),
+                           bnd.group(3), bnd.group(4)))
+            if len(rows) >= max(1, int(limit)):
+                break
+        with open(p, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(rows) + "\n")
+        return p
+    except Exception:
+        return ""
+
+
+def dismiss_until_gone(dev, marker: str, *, tries: int = 2,
+                       wait_s: float = 1.5) -> tuple:
+    """弹层/页面标记还在时按 BACK 尝试关掉：返回 ``(gone, xml)``。
+
+    为什么需要（2026-11-03~04 实测 15 次）：App 里"点日期 → 日历弹层应自己关"，
+    但落点偶尔偏到弹层头部，于是弹层不关。原代码**直接判失败放弃**
+    （`点了日期但弹层没关` → 明细页没数据 → 整条航线白跑）。
+    而这类失败是**可恢复**的：按一次 BACK 关掉弹层，再点一次就成了。
+
+    ``marker`` 是"弹层还在"的标志文案（如 ``Search_Calendar_Dialog``）。
+    """
+    xml = ""
+    for _ in range(max(1, int(tries))):
+        try:
+            xml = dev.dump() or ""
+        except Exception:
+            # uiautomator 挂掉时 dump 会抛：不能让它把整条采集带崩
+            return False, xml
+        if str(marker) not in xml:
+            return True, xml
+        try:
+            dev.keyevent("KEYCODE_BACK")
+        except Exception:
+            return False, xml
+        time.sleep(max(0.2, float(wait_s)))
+    try:
+        xml = dev.dump() or ""
+    except Exception:
+        return False, xml
+    return (str(marker) not in xml), xml
+
+
 class AppCrawler:
     """Android App 渠道基类（单设备串行采集）。"""
 
@@ -46,7 +171,10 @@ class AppCrawler:
     # 它们必须能独立入账——把"被挡住"记成 empty 或 error，等于让账本说谎。
     PATH_STATUS = ("ok", "empty", "login", "blocked", "timeout",
                    "error", "parse_error", "unsupported", "calendar",
-                   "soft_reject", "ad", "captcha", "face")
+                   "soft_reject", "ad", "captcha", "face",
+                   # `paced` = 我方主动不发请求（配额让位/节流跳过），
+                   # 与浏览器基类同一语义：不算被拒绝，不进爬取率分母
+                   "paced")
     # 会话是否可疑（webui 登录卡分层用），实例级每轮复位
     login_suspect: bool = False
 
@@ -323,6 +451,17 @@ class AppCrawler:
         if getattr(self, "_app_fresh", False):
             self._app_fresh = False
             return True
+        # keep_alive（默认关）：上一轮成功且 App 已在前台时不再冷启。
+        # 冷启本身是一串设备校验 + 首屏风控埋点，频繁冷启更「像自动化」；
+        # 但残留界面会吞点击（见上：设城市连续失败），所以默认仍冷启。
+        if self._keep_alive() and getattr(self, "_last_round_ok", False):
+            try:
+                act = str(dev.current_activity() or "")
+            except Exception:
+                act = ""
+            if self.package and act.split("/")[0].strip() == self.package:
+                self.logger.info("[%s] 复用前台 App（keep_app_alive）", self.name)
+                return True
         page = self._cold_start_and_probe(dev)
         self._app_fresh = False
         return bool(page and not self._looks_blank(page))
@@ -404,6 +543,10 @@ class AppCrawler:
                    ret_date: str = "") -> List[FlightPrice]:
         self.path_reset()
         self.last_error = ""
+        # 统一策略闸门（与浏览器渠道同一份引擎）：只有 long-term 档会关。
+        self.policy_blocked = False
+        if not self._policy_gate():
+            return []
         try:
             if ret_date and not self.supports_round_trip:
                 self.logger.warning(
@@ -418,13 +561,216 @@ class AppCrawler:
                                  ret_date=ret_date) or []
             self.logger.info("[%s] 抓取完成，得到 %d 条记录",
                              self.name, len(results))
+            self._last_round_ok = bool(results)
             return results
         except Exception as e:  # 设备掉线/解析失败都走这里
+            self._last_round_ok = False
             self.last_error = f"{type(e).__name__}: {e}"
             self.logger.warning("[%s] 抓取失败: %s", self.name, self.last_error)
             if not any(p.get("status") == "error" for p in self.paths):
                 self.path_note("app-error", "error", detail=self.last_error)
             return []
+        finally:
+            # 登录账本与风险评分：**只记账、不改流程**（异常全吞）。
+            # 「连续登录失败后还按 30 分钟节奏重试」本身就是撞库特征，
+            # 是「越重登越登不上」的机制，所以必须跨进程记住连击数。
+            self._note_round_risk()
+            # 爬取率账本：与浏览器渠道同一口径（rows>0 才算 ok），
+            # 这样两端的成功率可以在同一张表里比。
+            self._note_round_yield()
+            self._policy_note_round()
+
+    # ---------- 统一策略 ----------
+    def _policy_engine(self):
+        """策略引擎（与 BaseCrawler 同一个 `core/policy.py`，判据不漂移）。"""
+        eng = getattr(self, "_policy_eng", None)
+        if eng is not None:
+            return eng
+        try:
+            from core.policy import default_engine
+            cfg = getattr(self, "config", None)
+            self._policy_eng = default_engine(
+                cfg if isinstance(cfg, dict) else {},
+                repo_root=_REPO_ROOT,
+                profile=str(getattr(self, "profile_name", "") or self.name))
+        except Exception:
+            self._policy_eng = None
+        return self._policy_eng
+
+    def _policy_enabled(self) -> bool:
+        """``crawler.policy_gate`` 总开关（与浏览器渠道同一把，默认开）。
+
+        用 ``getattr`` 取 config：单测里常用 ``__new__`` 造桩对象，没有走
+        ``__init__`` 就没有 config——这里不能因此抛异常（fail-soft 是本仓库
+        对这类辅助方法的一贯约定）。
+        """
+        cfg = getattr(self, "config", None)
+        raw = cfg.get("policy_gate") if isinstance(cfg, dict) else None
+        if isinstance(raw, str):
+            return raw.strip().lower() not in ("0", "false", "no", "off", "")
+        return True if raw is None else bool(raw)
+
+    def _policy_gate(self) -> bool:
+        """采集入口闸门。App 端补两条浏览器端没有的信号：
+
+        * 设备/隐藏自检分（来自 `runtime.status()` 的最近一次硬化报告）；
+        * 上一轮是否停在登录墙/验证码（`login_suspect` + 本轮账本）。
+
+        没有这些信号时 score 达不到 human/rotate 档，因此**默认全放行**，
+        既有的「登录墙照记照跑」语义不变。
+        """
+        if not self._policy_enabled():
+            return True
+        eng = self._policy_engine()
+        if eng is None:
+            return True
+        ident = self._identity_scores()
+        try:
+            pol = eng.decide(self.name, two_way=False,
+                             captcha=bool(self.login_suspect), **ident)
+        except Exception:
+            return True
+        self.last_policy = pol.as_dict()
+        if pol.allow:
+            return True
+        self.policy_blocked = True
+        log = getattr(self, "logger", None)
+        if log is not None:
+            log.warning(
+                "[%s] 策略暂停本轮（%s，%ds 后可试）：%s", self.name, pol.state,
+                pol.wait_s(), "／".join(pol.reasons)[:200])
+        return False
+
+    def _identity_scores(self) -> dict:
+        """从 runtime 的硬化报告里取身份/隐藏自检分（取不到就不传）。"""
+        out = {}
+        try:
+            rt = self.runtime()
+            st = rt.status() if rt is not None else {}
+            ip = (st.get("identity") or {}).get("audit") or {}
+            if isinstance(ip.get("score"), (int, float)):
+                out["identity_score"] = ip["score"]
+            sp = ((st.get("stealth") or {}).get("detect") or {})
+            if isinstance(sp.get("score"), (int, float)):
+                out["stealth_score"] = sp["score"]
+        except Exception:
+            pass
+        return out
+
+    def _policy_note_round(self) -> None:
+        """把本轮事实喂回策略层（推进状态机）。全吞异常，绝不改流程。"""
+        eng = self._policy_engine()
+        if eng is None:
+            return
+        try:
+            statuses = [p.get("status") for p in (self.paths or [])]
+            eng.decide(self.name, two_way=False,
+                       captcha=any(s in ("captcha", "face") for s in statuses),
+                       login_wall=("login" in statuses) or self.login_suspect,
+                       soft=("soft_reject" in statuses),
+                       **self._identity_scores())
+            self._policy_cache = None
+        except Exception:
+            pass
+
+    def _note_round_yield(self) -> dict:
+        try:
+            from core.yield_stats import default_ledger, statuses_ok, is_paced
+            cfg = getattr(self, "config", None) or {}
+            root = str(cfg.get("user_data_dir") or "user_data") \
+                if isinstance(cfg, dict) else "user_data"
+            profile = str(getattr(self, "profile_name", "") or self.name)
+            led = default_ledger(os.path.join(_REPO_ROOT, root), profile)
+            # 主动让位（配额/节流）**不算样本**：既不是成功也不是失败。
+            # 记进去会把"我方克制"读成"渠道不行"。
+            if is_paced(self.paths):
+                return {"ok": None, "rows": 0, "path": "paced", "skipped": True}
+            ok, rows, path = statuses_ok(self.paths)
+            if not ok and getattr(self, "_last_round_ok", False):
+                ok, rows = True, rows or 1
+                path = path or (self.last_path or "unknown")
+            led.note(self.name, path or "unknown", ok, rows=rows)
+            return {"ok": ok, "rows": rows, "path": path}
+        except Exception:
+            return {}
+
+    # ---------- 登录账本 / 风险评分 ----------
+    def _ledger(self):
+        """登录账本（懒加载；user_data 找不到/写入失败都当没有）。"""
+        led = getattr(self, "_login_ledger", None)
+        if led is not None:
+            return led
+        try:
+            from core.riskscore import default_ledger
+            root = str(self.config.get("user_data_dir") or "user_data")
+            # AppCrawler 没有 profile_name（那是浏览器基类的），用 getattr 取：
+            # 直接 self.profile_name 会抛 AttributeError，被这里吞掉后账本
+            # 静默失效——正是「记了但没记上」那类最难查的坑。
+            profile = str(getattr(self, "profile_name", "") or self.name)
+            self._login_ledger = default_ledger(os.path.join(
+                _REPO_ROOT, root), profile)
+        except Exception:
+            self._login_ledger = None
+        return self._login_ledger
+
+    def _round_signals(self) -> dict:
+        """从本轮账本里抽风控信号（全部是**已发生的事实**）。"""
+        statuses = [p.get("status") for p in (self.paths or [])]
+        return {
+            "login_wall": ("login" in statuses) or bool(self.login_suspect),
+            "captcha": any(s in ("captcha", "face") for s in statuses),
+            "soft": "soft_reject" in statuses,
+            "blocked": "blocked" in statuses,
+        }
+
+    def _note_round_risk(self) -> dict:
+        """把本轮结果写进登录账本，并按风险分给出「下一步该怎么办」。
+
+        App 渠道没有 HTTP 状态码，403/429 那一路信号取不到；这里只喂
+        能观测到的三类：登录墙、验证码/人脸、软拒。**不喂猜测值**。
+        """
+        try:
+            sig = self._round_signals()
+            led = self._ledger()
+            if led is None:
+                return {}
+            # **只记「登录相关」的结果**。这里不是「每轮成功/失败」的计数器：
+            # 超时、解析失败、真无票都跟登录无关，若也记成失败，几轮之后
+            # 退避会涨到 2 小时，把用户正常的重登窗口一起堵死。
+            login_hit = bool(sig["login_wall"] or sig["captcha"])
+            if login_hit:
+                led.note_result(self.name, False, device_risk=True)
+            elif getattr(self, "_last_round_ok", False):
+                led.note_result(self.name, True)
+            else:
+                return {}      # 与登录无关的失败：不给账本添噪声
+            from core.riskscore import assess
+            got = assess(self.name, ledger=led,
+                         captcha=sig["captcha"], login_wall=sig["login_wall"],
+                         soft=sig["soft"], blocked=sig["blocked"])
+            if got.get("level") not in ("calm",):
+                self.logger.warning(
+                    "[%s] 风控评分 %.0f（%s）：%s；建议 %s",
+                    self.name, got.get("score", 0), got.get("level"),
+                    got.get("advice", {}).get("text", ""),
+                    "／".join(got.get("reasons") or [])[:200])
+            return got
+        except Exception:
+            return {}
+
+    def _keep_alive(self) -> bool:
+        """是否复用「上一轮就在前台」的 App（``android.keep_app_alive``）。
+
+        默认关：仓库里已实证「复用上一轮界面」会让后续航线卡在设城市
+        （残留广告/子页吞点击），所以冷启是更稳的默认。开着它的唯一理由
+        是**降低 App 冷启次数**（每次冷启都会重跑设备校验与首屏风控埋点），
+        换来的是偶发点不动的风险——由操作员按现场权衡。
+        """
+        try:
+            return bool((self.config.get("android") or {}).get(
+                "keep_app_alive", False))
+        except Exception:
+            return False
 
     # ---------- 航线 / 城市名 / 逐日期记账（所有 App 渠道同一套语义） ----------
     #
@@ -503,6 +849,37 @@ class AppCrawler:
                                   detail="该日被要求登录")
         return self.path_note(path, "timeout", date=date,
                               detail="未取到可用结果：%s" % (why or "unknown"))
+
+    def date_guard(self, date: str, fn, *args, _default=None, **kwargs):
+        """**单日隔离**：某一天抛异常只死这一天，不许拖垮整段。
+
+        为什么需要：App 渠道的日期循环原本是
+
+            for date in dates:
+                got = self._one_date(dev, ..., date)   # ← 一抛异常，整个 fetch 结束
+                if got: out.append(got)
+
+        ``_one_date`` 里任何一处异常（设备掉线、uiautomator 卡死、弹层没关掉、
+        解析越界）都会让**后面所有日期**一起丢掉——账本上表现为整条航线
+        「timeout」，而实际可能只有 1 天有问题。按日期隔离之后，失败被压缩成
+        「这一天没采到」，其余日期照常出数，爬取率按天而不是按航线计。
+
+        ``_default``：返回多值元组的渠道（如智行返回 ``(rows, blocked)``）
+        传它自己的空值，保持调用方解包不变。
+
+        记账口径沿用 ``note_date``：异常日一律记 timeout 并写明卡点，
+        **绝不记 empty**（"没采到" ≠ "没票"，这是账本红线）。
+        """
+        t0 = time.time()
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            why = "%s: %s" % (type(e).__name__, str(e)[:100])
+            self.logger.warning("[%s] 日期 %s 单独失败（其余日期继续）：%s",
+                                self.name, date, why)
+            self.note_date(date, [], why, ms=int((time.time() - t0) * 1000))
+            # 单值渠道拿 []（与 _one_date 的空值同形）；元组渠道传自己的空值。
+            return [] if _default is None else _default
 
     # ---------- 子类必须实现 ----------
     def fetch(self, from_city: str, to_city: str, dates: List[str],

@@ -204,7 +204,7 @@ class AppTongchengCrawler(AppCrawler):
             self.path_note("android-device", "unsupported",
                            detail="device unavailable")
             return []
-        with rt.device_lock():
+        with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
             form = self._ensure_form(dev)
             if form is None:
@@ -218,7 +218,9 @@ class AppTongchengCrawler(AppCrawler):
                 return []
             out = []
             for date in dates:
-                got = self._one_date(dev, from_city, to_city, date)
+                # 单日隔离：一天抛异常不再拖垮整段
+                got = self.date_guard(
+                    date, self._one_date, dev, from_city, to_city, date)
                 if got:
                     out.append(got)
             return out
@@ -922,7 +924,7 @@ class AppTongchengCrawler(AppCrawler):
             self.path_note("android-device", "unsupported",
                            detail="device unavailable")
             return []
-        with rt.device_lock():
+        with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
             form = self._ensure_form(dev)
             if form is None:

@@ -19,6 +19,7 @@ from core.intl import tz_offset_min
 from core.pacing import parse_retry_after, should_watch_response
 
 from .challenge import ChallengeContext, install_navigation_guard
+from . import stealth_ext
 
 
 # 冻结态用 exe 所在目录：否则 user_data（登录态）会落进 _internal，
@@ -492,7 +493,12 @@ class BaseCrawler:
     # 只记代码真实走过的尝试，不按结果反推路径；探针面板与渠道状态共用。
     PATH_STATUS = ("ok", "empty", "login", "blocked", "timeout",
                    "error", "parse_error", "unsupported", "calendar",
-                   "soft_reject")
+                   "soft_reject",
+                   # `paced` = **我方主动不发请求**（配额让位/节流跳过）。
+                   # 它不是「被对方拒绝」，不该算进爬取率分母——否则
+                   # 「主动让步」会被读成「渠道不行」（qunar 国际航线就是因为
+                   # 让位被记成 soft_reject，成功率看起来只有 50%）。
+                   "paced")
 
     def path_reset(self):
         self.paths = []
@@ -530,7 +536,14 @@ class BaseCrawler:
         # 会漏掉最常见的人机验证。path_note 是各渠道确认"这条路过不去"
         # 的统一落点，在这里补页面 URL（调用方没显式给 url 时才用页面
         # 兜底），截图仍由上下文收尾统一落盘。
-        if rec["status"] in ("blocked", "login", "soft_reject"):
+        #
+        # **`soft_reject` 不算"被拦"**（2026-11-04）：它是"发了、对方软拒/
+        # 限流"（去哪儿 1999 就是这一类），不是风控拦截。原来看起来一并
+        # 记进 `last_block_url` → `debug/scene/*_block.txt` 越堆越多，
+        # 实测 62 份里 **57 份其实是 1999 限流**，读起来像"被风控拦了 62 次"，
+        # 把真拦截（人机验证）淹掉了。账本里 status 已经区分了两者，
+        # 现场留证也该区分。
+        if rec["status"] in ("blocked", "login"):
             try:
                 page = getattr(self, "_last_page", None)
                 purl = str(getattr(page, "url", "") or "") if page else ""
@@ -587,6 +600,17 @@ class BaseCrawler:
         # login_desktop 才强制桌面（手机 profile 上滑块更难拖时的退路，
         # 代价是登录与采集指纹不一致）。
         self.login_desktop: bool = bool(config.get("login_desktop", False))
+        # 挑战处置引导：`crawler.slider.auto` 开了就自动挂上滑块处理器。
+        # 放在这里而不是 main/webui——只要采集器被创建就生效，不用每个入口
+        # 各写一遍（之前就是因为没人注册，配置开了也不生效）。
+        try:
+            from .challenge import ensure_slider_handler
+            ensure_slider_handler(
+                config, user_data_dir=self.user_data_root,
+                profile=str(self.profile_name or self.name),
+                logger=getattr(self, "logger", None))
+        except Exception:
+            pass
 
     # ---------- 浏览器 ----------
     @property
@@ -783,6 +807,38 @@ class BaseCrawler:
             return {"width": 390, "height": 844}
         return {"width": 1366, "height": 900}
 
+    def _geo(self) -> tuple:
+        """(locale, timezone)：与出口 IP 的地理一致（可选，默认 zh-CN/上海）。
+
+        为什么需要：挂着境外/异地出口，而页面报 `Asia/Shanghai` + `zh-CN`，
+        「IP 在 A 地、时区在 B 地」是风控里最便宜的一条矛盾判定。仓库既有
+        结论也是这个方向（国内站 + 境外出口 = 风控升档）。
+
+        配置（默认不写 = 完全保持原行为）::
+
+            crawler:
+              geo:
+                locale: zh-CN
+                timezone: Asia/Shanghai
+                # 也可按渠道覆盖：qunar: {locale: zh-CN, timezone: Asia/Shanghai}
+
+        时区非法时退回 Asia/Shanghai（宁可少一次适配，也不要启动失败）。
+        """
+        cfg = self.config.get("geo") if isinstance(self.config, dict) else None
+        cfg = cfg if isinstance(cfg, dict) else {}
+        per = cfg.get(self.name) if isinstance(cfg.get(self.name), dict) else {}
+        loc = str(per.get("locale") or cfg.get("locale") or "zh-CN").strip()
+        tz = str(per.get("timezone") or cfg.get("timezone")
+                 or "Asia/Shanghai").strip()
+        if not loc:
+            loc = "zh-CN"
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(tz)          # 不合法会抛，交给下面兜底
+        except Exception:
+            tz = "Asia/Shanghai"
+        return loc, tz
+
     def fingerprint(self) -> dict:
         """采集/预热/自检/验证窗口共用的浏览器身份参数（单一来源）。
 
@@ -790,12 +846,16 @@ class BaseCrawler:
         标记、locale/timezone、出口代理与 canvas 种子必须一致——同一
         profile 在采集和人工验证里呈现两套身份，本身就会被风控当成
         会话被接管。
+
+        locale/timezone 可由 ``crawler.geo`` 覆盖（默认不变），用于让
+        「时区/语言」与出口 IP 的地理对上；**键集固定 9 个**，不新增。
         """
+        loc, tz = self._geo()
         return {
             "ua": self._ua(),
             "viewport": self._viewport(),
-            "locale": "zh-CN",
-            "timezone": "Asia/Shanghai",
+            "locale": loc,
+            "timezone": tz,
             "is_mobile": bool(self.use_mobile),
             "has_touch": bool(self.use_mobile),
             "proxy": self.proxy,
@@ -803,6 +863,20 @@ class BaseCrawler:
             "seed": zlib.crc32(
                 (self.profile_name or self.name).encode("utf-8")) % 997,
         }
+
+    def _profile_wait_s(self) -> float:
+        """``crawler.profile_wait_s``：拿不到会话锁时最多等多久（默认 0=不等）。
+
+        默认 0 保持现行语义（立刻抛 SessionBusyError 让位）。设成 15–30 秒
+        的意义：登录窗口/探针只占锁几十秒，让采集**等一会儿**比丢一整轮更
+        划算——历史上 SessionBusyError 占了失败样本的 38.9%，全是这种「抢
+        不到就整轮放弃」。
+        """
+        try:
+            v = float(self.config.get("profile_wait_s", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(120.0, v))
 
     @contextmanager
     def browser(self, headless: Optional[bool] = None,
@@ -813,8 +887,12 @@ class BaseCrawler:
         with _PROFILE_LOCKS_GUARD:
             lock = _PROFILE_LOCKS.setdefault(path, threading.Lock())
         if not lock.acquire(blocking=False):
-            raise SessionBusyError(
-                "[%s] 会话正在登录或采集，请完成当前操作后重试" % self.name)
+            wait_s = self._profile_wait_s()
+            if wait_s <= 0 or not lock.acquire(timeout=wait_s):
+                raise SessionBusyError(
+                    "[%s] 会话正在登录或采集，请完成当前操作后重试" % self.name)
+            self.logger.info("[%s] 会话被占用，等待 %.0fs 后取得（profile_wait_s）",
+                             self.name, wait_s)
         try:
             with self._browser_context(headless, window_front, window_idx,
                                        save_session) as ctx:
@@ -832,6 +910,18 @@ class BaseCrawler:
             if window_front:
                 launch_args += [f"--window-size=1180,760",
                                 f"--window-position={x},{y}"]
+            # 旁路关闭（WebRTC 内网 IP 泄漏等）：不改页面行为，只掐泄漏面。
+            # 与 STEALTH_JS 同一条开关，stealth=false 时零干预。
+            launch_args += stealth_ext.launch_args(fp)
+            # 可选启动参数（当前只有 channel）：单独走 `**_kw`；代理那行必须
+            # 保持原字面量——test_r319_proxy 用源码钉住它，防止有人顺手把
+            # 「出口统一」删掉（那是 IP 级限流的唯一开关）。
+            _kw = {}
+            # 可选：用系统真 Chrome（crawler.browser_channel: chrome）。
+            # 默认空=沿用自带 Chromium，不改变任何既有行为。
+            _chan = stealth_ext.channel(self.config)
+            if _chan:
+                _kw["channel"] = _chan
             ctx = p.chromium.launch_persistent_context(
                 user_data_dir=self.user_data_dir,
                 headless=hl,
@@ -848,6 +938,7 @@ class BaseCrawler:
                     "--disable-dev-shm-usage",
                 ] + (["--disable-blink-features=AutomationControlled"]
                      if fp["stealth"] else []),
+                **_kw,
             )
             if fp["stealth"]:
                 try:
@@ -857,6 +948,12 @@ class BaseCrawler:
                     _js = STEALTH_JS
                     for _k, _v in _rep.items():
                         _js = _js.replace(_k, _v)
+                    # 补齐层（WebRTC/音频/设备枚举/chrome 子对象/外框尺寸）：
+                    # **拼进同一个 init script**，不上第二个 add_init_script——
+                    # 「stealth 开时恰好 1 个脚本」是既有测试钉住的契约。
+                    _ext = stealth_ext.extra_js(fp)
+                    if _ext:
+                        _js = _js + "\n" + _ext
                     ctx.add_init_script(_js)
                 except Exception:
                     pass
@@ -1070,6 +1167,23 @@ class BaseCrawler:
                 page = self.new_page(ctx)
                 page.goto(url, wait_until="domcontentloaded")
                 page.wait_for_timeout(1200)
+                # 拟人化养熟（crawler.humanize，默认开）：让这次预热看起来是
+                # 「打开首页 → 扫一眼 → 滚两屏」而不是「打开首页 → 立刻走」。
+                # 只在预热这一段做——采集主路径不插多余动作（会点错控件）。
+                try:
+                    _h = self._humanize()
+                    if _h[0]:
+                        from .human import warm as _human_warm
+                        _rep = _human_warm(page, self.profile_name or self.name,
+                                           rounds=_h[1])
+                        self.logger.info(
+                            "[%s] 预热拟人化：移动 %d / 滚动 %d / %.1fs",
+                            self.name, _rep.get("moves", 0),
+                            _rep.get("scrolls", 0), _rep.get("seconds", 0))
+                except Exception as _he:
+                    self.logger.warning(
+                        "[%s] 预热拟人化失败（不阻断预热）: %s",
+                        self.name, _he)
                 # 预热是否真的生效：看风控 cookie 有没有落下来。
                 # 只看"访问过首页"等于没验证——深链仍会被当新会话。
                 want = tuple(getattr(self, "RISK_COOKIES", ()) or ())
@@ -1096,9 +1210,168 @@ class BaseCrawler:
             self.logger.warning("[%s] 预热失败: %s", self.name, e)
             return False
 
+    # ---------- 预热时序（日历/深链前置） ----------
+    def wait_risk_cookies(self, ctx, names=None, timeout_s: float = 12.0,
+                          poll_s: float = 0.8) -> list:
+        """等**风控 cookie 真的落下**再继续，而不是死等固定秒数。
+
+        为什么不能靠 ``page.wait_for_timeout(4000)``：预热的价值不在"停留了
+        几秒"，而在"服务端把会话 cookie 发下来了"。固定等待有两个失败模式：
+
+        * 快了 → cookie 还没下来就去打深链/日历，服务端当新会话 → 444/202 软拒
+          （仓库既有归因里 444 占 23.8%，很大一部分就是这种时序错）；
+        * 慢了 → 白等，且下一轮并不会因此更稳。
+
+        这里改成**轮询到 cookie 出现即返回**：命中就立刻走（比固定等待快），
+        没命中就等满超时并如实返回空列表（调用方据此记"预热未生效"，
+        而不是假装成功）。
+
+        ``names`` 省略时用渠道自己的 ``RISK_COOKIES``。
+        """
+        want = tuple(names or getattr(self, "RISK_COOKIES", ()) or ())
+        if not want:
+            return []
+        end = time.time() + max(0.0, float(timeout_s))
+        hit = []
+        while True:
+            try:
+                names_now = {c.get("name") for c in ctx.cookies()}
+            except Exception:
+                names_now = set()
+            hit = [n for n in want if n in names_now]
+            if hit:
+                return hit
+            if time.time() >= end:
+                break
+            time.sleep(max(0.1, float(poll_s)))
+        return hit
+
     # ---------- 工具 ----------
+    def _humanize(self) -> tuple:
+        """(是否启用, 轮数)：``crawler.humanize`` / ``crawler.humanize_rounds``。
+
+        默认开、2 轮（约 4–8s）。关掉只影响预热时的那段「扫一眼」动作，
+        不影响任何采集路径——这也是它敢默认开的原因。
+        """
+        raw = self.config.get("humanize") if isinstance(self.config, dict) else None
+        if isinstance(raw, str):
+            v = raw.strip().lower()
+            on = v not in ("0", "false", "no", "off", "")
+        elif raw is None:
+            on = True
+        else:
+            on = bool(raw)
+        try:
+            rounds = int(self.config.get("humanize_rounds", 2) or 2)
+        except (TypeError, ValueError):
+            rounds = 2
+        return on, max(1, min(6, rounds))
+
+    # ---------- 统一策略 ----------
+    def _policy(self):
+        """策略引擎（懒加载；拿不到就返回 None = 全放行）。"""
+        eng = getattr(self, "_policy_engine", None)
+        if eng is not None:
+            return eng
+        try:
+            from core.policy import default_engine
+            self._policy_engine = default_engine(
+                self.config, repo_root=_REPO_ROOT,
+                profile=str(getattr(self, "profile_name", "") or self.name))
+        except Exception:
+            self._policy_engine = None
+        return self._policy_engine
+
+    def _policy_now(self, *, two_way: bool = True, statuses=None,
+                    soft: bool = False, captcha: bool = False,
+                    login_wall: bool = False):
+        """拿一份决定。默认 `two_way=True` = 只查询、不推进状态机。"""
+        eng = self._policy()
+        if eng is None:
+            return None
+        try:
+            return eng.decide(self.name, two_way=two_way, statuses=statuses,
+                              soft=soft, captcha=captcha,
+                              login_wall=login_wall)
+        except Exception:
+            return None
+
+    def _policy_cached(self, ttl: float = 30.0, now: float = None):
+        """带 TTL 的决定缓存：`_sleep` 一次采集里会被调几十次。
+
+        不做缓存等于每次停顿都去读两份 JSON（产量 1 份 + 登录 1 份），
+        纯白花 IO；而倍率 30 秒内不会变。
+        """
+        ts = float(now if now is not None else time.time())
+        cache = getattr(self, "_policy_cache", None)
+        if cache and ts - cache[0] <= ttl:
+            return cache[1]
+        pol = self._policy_now(two_way=True)
+        self._policy_cache = (ts, pol)
+        return pol
+
+    def _policy_enabled(self) -> bool:
+        """``crawler.policy_gate``：统一策略的**总开关**（默认开）。
+
+        关掉它只影响「闸门 + 倍率」，账本照记、报表照出——这样排障时能一键
+        回到「各部件各自为政」的旧行为，而不会把度量也一起丢掉。
+        """
+        raw = self.config.get("policy_gate") if isinstance(self.config, dict) \
+            else None
+        if isinstance(raw, str):
+            return raw.strip().lower() not in ("0", "false", "no", "off", "")
+        return True if raw is None else bool(raw)
+
+    def _policy_gate(self) -> bool:
+        """采集入口的统一闸门。返回 False = 本轮不发请求。
+
+        只有 `riskscore` 到 `pause`/`human`/`rotate` 档才会关闸；**登录退避
+        不关闸**（登录墙要如实记 `login` 并继续跑，由人过完再采），产量差也
+        不关闸（真无票与风控无关）。关闸轮次**不计入爬取率**——它不是渠道
+        的失败，是我们自己选择不打。
+        """
+        if not self._policy_enabled():
+            return True
+        pol = self._policy_now(two_way=False)
+        if pol is None:
+            return True
+        self._policy_cache = (time.time(), pol)
+        if pol.allow:
+            self.last_policy = pol.as_dict()
+            return True
+        self.last_policy = pol.as_dict()
+        self.policy_blocked = True
+        log = getattr(self, "logger", None)
+        if log is not None:
+            log.warning("[%s] 策略暂停本轮（%s，%ds 后可试）：%s", self.name,
+                        pol.state, pol.wait_s(),
+                        "／".join(pol.reasons)[:200])
+        return False
+
     def _sleep(self):
-        time.sleep(random.uniform(self.delay_min, self.delay_max))
+        """页内停顿：**对数正态** + **按策略倍率放大**。
+
+        均匀分布的间隔本身就是一条机器特征（机器人喜欢均匀），所以用
+        对数正态（区间仍是 `delay_min..delay_max`）。在此基础上乘策略层给的
+        `pace_factor`：降档时上限抬高（1.5×/2.5×），有余量时允许压到 0.8×
+        但**不低于配置的 delay_min**——配置是人定的地板，不替人做决定。
+        """
+        try:
+            pol = self._policy_cached()
+            scale = float(getattr(pol, "pace_factor", 1.0) or 1.0) \
+                if pol is not None else 1.0
+        except Exception:
+            scale = 1.0
+        lo = float(self.delay_min)
+        hi = float(self.delay_max) * max(1.0, scale)
+        if hi < lo:
+            hi = lo
+        try:
+            from .human import human_delay
+            d = human_delay(lo, hi)
+        except Exception:
+            d = random.uniform(lo, hi)
+        time.sleep(d)
 
     def _debug_snapshot(self, page: Page, tag: str, extra_text: str = None):
         """extra_text 在场时另落 {base}.txt——存「解析器实际吃的文本流」
@@ -1249,6 +1522,12 @@ class BaseCrawler:
         # 上一条查询的 page 不能留给本次截图/URL 兜底：httpx 直连路径
         # 不会 new_page，若不清空会把上一页截进本轮现场。
         self._last_page = None
+        # 统一策略闸门：只有 riskscore 到 human/rotate 档才关（长期姿态），
+        # 短时冷却仍归 ChannelBreaker（它拿得到 Retry-After）。关闸轮次
+        # 不发请求、也不计入爬取率——那是我们选择不打，不是渠道失败。
+        self.policy_blocked = False
+        if not self._policy_gate():
+            return []
         try:
             # 域标记入日志（r415）：健康面板此前只能按厂商聚合，同一家
             # 的国内与国际混成一个数——实报同程 13%，而它国际窗历当天
@@ -1267,15 +1546,102 @@ class BaseCrawler:
             self.logger.info("[%s] 抓取完成，得到 %d 条记录%s",
                              self.name, len(results),
                              (" · " + _scope) if _scope else "")
+            self._yield_note(results)
+            self._policy_note_round()
             return results
         except SessionBusyError as e:
             # 让位：不记异常栈（这是预期内的排队，不是故障），也不重试
             self.last_busy = True
             self.logger.warning("[%s] %s", self.name, e)
+            # **不记成功率**：抢不到自家锁不是渠道的问题。把它记成失败，
+            # 等于用自家冲突去惩罚对方站点（仓库里已记为双重错误）。
             return []
         except Exception as e:
             self.logger.exception("[%s] 抓取失败: %s", self.name, e)
+            self._yield_note([])
+            self._policy_note_round()
             return []
+
+    def _policy_note_round(self) -> None:
+        """把本轮**已发生的事实**喂回策略层（推进状态机，不改本轮流程）。
+
+        喂的是路径账本里真实记下的东西：HTTP 状态、软拒、挑战、登录墙。
+        不喂猜测值——策略层据此决定下一轮的姿态（停/降速/换身份）。
+        """
+        try:
+            codes = [int(p.get("http") or 0) for p in (self.paths or [])]
+            self._policy_now(
+                two_way=False, statuses=codes,
+                soft=bool(self.last_soft_reject),
+                captcha=any(p.get("status") == "blocked"
+                            for p in (self.paths or [])),
+                login_wall=any(p.get("status") == "login"
+                               for p in (self.paths or [])))
+            self._policy_cache = None      # 下轮重新判
+        except Exception:
+            pass
+
+    # ---------- 爬取率账本 ----------
+    def _yield_ledger(self):
+        """成功率账本（懒加载；拿不到就当没有，绝不阻断采集）。"""
+        led = getattr(self, "_yield_led", None)
+        if led is not None:
+            return led
+        try:
+            from core.yield_stats import default_ledger
+            root = str(self.config.get("user_data_dir") or "user_data")
+            profile = str(getattr(self, "profile_name", "") or self.name)
+            self._yield_led = default_ledger(
+                os.path.join(_REPO_ROOT, root), profile)
+        except Exception:
+            self._yield_led = None
+        return self._yield_led
+
+    def _yield_note(self, results) -> dict:
+        """记一次「这轮到底取没取到数」，并按需打一条建议。
+
+        口径：**只有 rows>0 才算成功**；`ok` 的判据从本轮的 `paths` 账本
+        里取（`core.yield_stats.statuses_ok`），不看返回列表长度——两者
+        不一致时（解析出 0 行但路径标 ok）以路径账本为准，因为那是采集
+        链路的原生事实。
+        """
+        try:
+            led = self._yield_ledger()
+            if led is None:
+                return {}
+            from core.yield_stats import statuses_ok, is_paced
+            # 主动让位（配额/节流）**不算样本**：既不是成功也不是失败。
+            # qunar 国际航线的配额让位原先被记成 soft_reject，账面成功率
+            # 只有 50%，看起来像被风控，实际是在守配额（2026-11-04）。
+            if is_paced(self.paths):
+                return {"minutes": int(self.config.get("interval_minutes", 30)
+                                       or 30), "factor": 1.0, "paced": True}
+            ok, rows, path = statuses_ok(self.paths)
+            if not ok and results:
+                # 路径账本没标 ok 但确实拿到行：仍算成功，路径归到 last_path
+                ok, rows = True, len(results)
+                path = path or (self.last_path or "unknown")
+            led.note(self.name, path or "unknown", ok, rows=rows)
+            rec = led.recommend_interval(
+                self.name, int(self.config.get("interval_minutes", 30)
+                               or 30))
+            if rec.get("factor", 1.0) != 1.0:
+                self.logger.info(
+                    "[%s] 爬取率建议：间隔 %.0f→%d 分钟（%s）",
+                    self.name, float(self.config.get("interval_minutes", 30)
+                                     or 30),
+                    rec["minutes"], rec.get("why", ""))
+            return rec
+        except Exception:
+            return {}
+
+    def yield_snapshot(self) -> dict:
+        """给面板/日志的整体爬取率视图（拿不到返回空）。"""
+        try:
+            led = self._yield_ledger()
+            return led.snapshot() if led is not None else {}
+        except Exception:
+            return {}
 
     # ---------- 登录模式 ----------
     def interactive_login(self):

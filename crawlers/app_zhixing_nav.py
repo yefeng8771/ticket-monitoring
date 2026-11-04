@@ -112,7 +112,7 @@ def is_intl_form(xml: str) -> bool:
 _HOME_MARK = "机票查询"
 
 
-def _await_home(dev, timeout_s: float = 30.0) -> tuple:
+def _await_home(dev, timeout_s: float = 30.0, frames: int = 10) -> tuple:
     """等到一帧能看见首页表单（「机票查询」在）的页面。返回 (xml, ready)。
 
     冷启动实测：`app_start` 之后头几帧 `dump()` 全是空串（uiautomator
@@ -123,12 +123,18 @@ def _await_home(dev, timeout_s: float = 30.0) -> tuple:
 
     同时也排除「停在别页」：城市选择页/日历弹层里也没有「机票查询」，
     拿它们判档位同样会得到「没有国际档标记」的假结论。
+
+    **按帧数预算**（与 `set_flight_route` 同一策略，2026-11-04）：
+    纯秒数在"整机被 5 个浏览器渠道拖住"时一帧要 ~20s，30s 只够 1–2 帧，
+    会判「dump 连续为空」——看着像 uiautomator 挂了，其实只是慢。
     """
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    deadline = time.time() + max(5.0, float(timeout_s))
+    for _ in range(max(2, int(frames))):
         xml = dev.dump() or ""
         if _HOME_MARK in xml and "Search_Calendar_Dialog_Title" not in xml:
             return xml, True
+        if time.time() > deadline:
+            break
         time.sleep(2.0)
     return "", False
 
@@ -190,12 +196,24 @@ def open_date_dialog(dev, log=None) -> tuple:
         return True, "已打开"
 
     trigger = None
+    # 日期入口的文案有**两种格式**（2026-11-04 实测 fixtures）：
+    #   中文：`11月16日`（首页日期行，更像"入口"）
+    #   横线：`10-29` / `11-16`（日历条格子，fixture 里全是这种）
+    # 原来只认中文格式，于是国际档首页只显示 `11-16` 时判「找不到日期入口」，
+    # 长窗口日历打不开 → `明细页解析不出带价航班` → 整条国际航线没明细。
+    # 优先取中文格式（它是"打开日历"的那一行）；没有才用横线格子。
+    dash = None
     for n in nodes(xml):
-        if re.fullmatch(r"\d{1,2}月\d{1,2}日", n.text or ""):
+        t = (n.text or "").strip()
+        if re.fullmatch(r"\d{1,2}月\d{1,2}日", t):
             trigger = n
             break
+        if dash is None and re.fullmatch(r"\d{1,2}-\d{1,2}", t):
+            dash = n
     if trigger is None:
-        return False, "找不到日期入口"
+        trigger = dash
+    if trigger is None:
+        return False, "找不到日期入口（无 `N月N日` / `N-N` 文案）"
     if not dev.tap(trigger.cx, trigger.cy):
         return False, "点击日期失败"
 
@@ -248,17 +266,29 @@ def set_flight_route(dev, from_name: str, to_name: str, date_ymd: str,
     if not dev.app_start("cn.suanya.zhixing"):
         return False, "启动 App 失败"
 
-    # 轮询等首页，而不是固定 sleep。实测两个坑：
+    # 轮询等首页，而不是固定 sleep。实测三个坑：
     #   ① 冷启动到首页可交互在 10–20s 波动（固定 8s 必失败）；
     #   ② 启动后**第一帧是上次残留的弹层**（124KB 日历层），
     #      第二帧才回到首页（63KB）——所以必须连续两帧都是首页
     #      才算稳定，否则会把残留弹层当成首页继续操作。
+    #   ③ **整机被浏览器渠道拖慢时单帧 dump 能到 ~20s**（2026-11-03 实测：
+    #      `app_qunar`/`app_zhixing` 同秒起跑，6 条航线并行，5 个浏览器
+    #      渠道同时占 CPU）。60s 只够 3 帧，而"连续两帧首页"最少要 6 帧 →
+    #      必然判失败。日志里 14 次「首页未就绪」全是这个形态。
+    #
+    # 所以预算改成**按帧数 + 自适应放宽**（与 qunar 城市页同一套办法）：
+    # 最少 12 帧；若首帧耗时 >6s（说明整机很慢），总时长放宽到 150s。
     xml = ""
-    deadline = time.time() + 60
+    deadline = time.time() + 90
+    frames = 0
+    _t_first = time.time()
     stable = 0
-    while time.time() < deadline:
+    while time.time() < deadline and frames < 14:
+        frames += 1
         time.sleep(2.5)
         xml = dev.dump()
+        if frames == 1 and (time.time() - _t_first) > 6:
+            deadline = time.time() + 150      # 整机被拖慢：放宽总时长
         if "机票查询" in xml and "Search_Calendar_Dialog_Title" not in xml:
             stable += 1
             if stable >= 2:
@@ -268,14 +298,16 @@ def set_flight_route(dev, from_name: str, to_name: str, date_ymd: str,
     if stable < 2:
         # App 会恢复到上次停留的弹层/子页（实测：卡在「选择日期」透明
         # Activity）。按返回键退出去比反复重启有效——实测一次返回即可。
-        for _ in range(4):
+        # 退到 6 级：重载弹层可能是两层（日历 + 城市），4 级会差一步。
+        for _ in range(6):
             dev.keyevent("KEYCODE_BACK")
             time.sleep(2)
             xml = dev.dump()
             if "机票查询" in xml:
                 break
         else:
-            return False, "首页未就绪（等待 60s 并回退 4 级仍找不到「机票查询」）"
+            return False, ("首页未就绪（等 %d 帧 / 约 %ds 并回退 6 级仍找不到"
+                           "「机票查询」）" % (frames, int(time.time() - _t_first)))
 
     # 国际/国内是两个不同的表单：不切档就设国际城市，输入框里搜得到但
     # 首页城市位与结果页仍是国内那套，整轮白跑。切档放在设城市之前。
@@ -520,7 +552,28 @@ def _tap_calendar_cell(dev, xml: str, ymd: str) -> tuple:
         time.sleep(2)
         left = dev.dump() or ""
         if "Search_Calendar_Dialog" in left:
-            return False, "点了日期但弹层没关"
+            # **弹层没关是可恢复的**（2026-11-03~04 实测 15 次）：
+            # 落点偶尔偏到弹层头部，日历不关；原代码直接判失败放弃，
+            # 于是「明细页没解析出带价航班」整条航线白跑。
+            #
+            # 关键：BACK **把弹层关掉了**，所以重试不能就地找格子
+            # （2026-11-04 实测报「重试时找不到格子」——弹层都没了当然找不到）。
+            # 重试必须**重新打开弹层**，再走一遍滚动查找 + 点击。
+            try:
+                from .app_base import dismiss_until_gone
+                gone, _ = dismiss_until_gone(
+                    dev, "Search_Calendar_Dialog", tries=1)
+            except Exception:
+                gone = "Search_Calendar_Dialog" not in (dev.dump() or "")
+            if not gone:
+                return False, "点了日期但弹层没关"
+            if attempt >= 4:
+                return False, "点了日期但弹层没关"
+            # 重新打开弹层，再递归地走一次本函数（次数由 attempt 上限兜住）
+            reopened, why = open_date_dialog(dev)
+            if not reopened:
+                return False, "点了日期但弹层没关（重开弹层失败：%s）" % why
+            return _tap_calendar_cell(dev, dev.dump() or "", ymd)
         # 点完必须核对首页日期行真的换了：没换时点「机票查询」会重查上一日，
         # 结果被打上目标日期——价格错配而看不出任何异常。
         shown = home_date_text(left)

@@ -16,11 +16,22 @@ import io
 import os
 import re
 import sys
+import threading
 
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_lock(monkeypatch):
+    """换成本文件专用锁：同进程若有别的采集线程持着模块锁，这里会真的
+    等满 600s（或把 ``take`` 的超时判成失败），隔离后互不影响。"""
+    from core.android import runtime as rt_mod
+    monkeypatch.setattr(rt_mod, "_DEVICE_LOCK", threading.Lock())
+    monkeypatch.setattr(rt_mod, "_LOCK_STATE", {"owner": "", "since": 0.0})
+    yield
 
 
 def _app_channels():
@@ -32,11 +43,13 @@ def _app_channels():
 def test_every_app_channel_holds_the_device_lock(plat):
     src = io.open(os.path.join(ROOT, "crawlers", plat + ".py"),
                   encoding="utf-8", newline="").read()
-    assert "device_lock()" in src, (
+    # 允许带参数（`device_lock(owner=self.name)`，2026-11-04 起用于定位
+    # 「谁占着锁」）；不变量仍然是"必须拿独占锁"。
+    assert "device_lock(" in src, (
         "%s 的采集没有拿设备独占锁：两个 App 渠道共用一台模拟器时会互相"
         "打断（channel_slot 是按渠道分锁的，挡不住）" % plat)
     # 必须真的把取数段包进锁里，而不是拿到锁对象就丢
-    assert re.search(r"with\s+rt\.device_lock\(\)\s*:", src), (
+    assert re.search(r"with\s+rt\.device_lock\([^)]*\)\s*:", src), (
         "%s 只是提到了 device_lock，但没有把它当上下文管理器包住采集段"
         % plat)
 

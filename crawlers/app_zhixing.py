@@ -103,7 +103,7 @@ class AppZhixingCrawler(AppCrawler):
         # 异常逃逸不在这里写：调用方统一走 `AppBaseCrawler.safe_fetch()`，
         # 它已 try/except 并记 `app-error`（含本段抛出的一切）。此处再包一层
         # 只是重复防御，且会抢在 safe_fetch 的去重判断之前多记一条。
-        with rt.device_lock():
+        with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
             if ret_date:
                 return self._fetch_round_trip_locked(
@@ -361,6 +361,27 @@ class AppZhixingCrawler(AppCrawler):
             # 记 timeout 而不是 blocked：`blocked` 在 pacing 里归 captcha
             # （300s 阶梯熔断），而"页面结构不认识"重试也不会变好，
             # 更不该让整个 App 渠道停摆——这是解析器要修，不是要躲。
+            #
+            # **必须留现场**（2026-11-04）：这条分支原来只记一行账就返回，
+            # 而"页面认不出"正是最需要 dump 的时刻。没有 dump 就只能看到
+            # 「可能是 App 改版」这种等于没说的结论，下一轮还得猜。
+            try:
+                from .app_base import save_scene
+                save_scene("unknown-page", xml, prefix="zhixing_app")
+            except Exception:
+                pass
+            try:
+                # 一行说清命中了哪些已知标记，比打开整份 dump 快得多
+                _hits = [lab for lab, mk in
+                         (("首页", "机票查询"), ("城市页", "搜索国家/城市"),
+                          ("城市页", "选择城市"), ("日历", "选择日期"),
+                          ("登录", "登录"), ("列表", "航班"))
+                         if mk in (xml or "")]
+                self.logger.info(
+                    "[%s] 页面状态认不出（%d 字，命中：%s），已落现场 unknown-page",
+                    self.name, len(xml or ""), "/".join(_hits) or "无已知标记")
+            except Exception:
+                pass
             self.path_note("app-list", "timeout",
                            detail="无法识别的页面状态（可能是 App 改版）")
             return []
@@ -528,8 +549,11 @@ class AppZhixingCrawler(AppCrawler):
             return [], False
         got: List[FlightPrice] = []
         for i, target in enumerate(targets):
-            rows, block = self._one_date_detail(dev, from_city, to_city,
-                                                target, first=(i == 0))
+            # 单日隔离：某天抛异常不再拖垮整段（保持 (rows, blocked) 契约）
+            rows, block = self.date_guard(
+                target, self._one_date_detail,
+                dev, from_city, to_city, target, first=(i == 0),
+                _default=([], None))
             if block is not None and block.blocking:
                 # 拦截要如实入账，且不强当「这天没票」继续跑完：
                 # 广告可以关，验证码/人脸只能等人，继续跑只会连环误报。
@@ -1057,7 +1081,7 @@ class AppZhixingCrawler(AppCrawler):
                            detail="device unavailable")
             return []
         anchor = (anchor_ymd or _dt.date.today().isoformat())[:10]
-        with rt.device_lock():
+        with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
             started = time.time()
             # 回到机票首页（特价入口只在首页）

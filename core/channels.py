@@ -70,8 +70,13 @@ CHANNEL_DIMENSIONS = {
     #               国内 atp 组合总价；国际登录后 book1 RT 页的
     #               `ts/list` 直出 tp 含税总价（2026-11-03 实测）。
     #               三家都只采渠道总价，未做两段单程相加。
-    #   multi_city: 十家都未验证（"")：渠道/App 都有多程入口，采集端
-    #               未实现——不把"我们没做"伪装成"渠道没有"。
+    #   multi_city: ctrip PC **2 段已验证出数**（y，scope=仅 2 段）：配置卡/
+    #               轮尾采集/概览整单卡/整单提醒/整单历史/CSV 导出，页面自报
+    #               整单含税价，生产行 ¥1476（IJ004+MM304）；3+ 段实测无组合
+    #               卡；缺口程 2 段实测有整单（¥2184，9C8515+MM079），慢页
+    #               以「多程含税价」为就绪锚轮询。其余九家仍 ""（入口在、
+    #               采集端未接）。
+    #               不把"我们没做"伪装成"渠道没有"，也不把"仅 2 段"写成"全段支持"。
     #   low_fare:   **九家都有发现源**（10 家中飞猪 App 明确暂无可用源；
     #               r805z 三方对照 + 后续渠道核过）——来源以
     #               `core/specials.py::SPECIAL_CAPABILITY` 为单一事实源：
@@ -83,7 +88,7 @@ CHANNEL_DIMENSIONS = {
     #               旧注释写「只有 qunar 与 fliggy」是过期结论（该表当时
     #               还没收敛），与矩阵取值自相矛盾。
     "ctrip":     {"domestic": "y", "intl": "y", "calendar": "y", "detail": "y",
-                  "round_trip": "y", "multi_city": "", "low_fare": "y"},
+                  "round_trip": "y", "multi_city": "y", "low_fare": "y"},
     "qunar":     {"domestic": "y", "intl": "y", "calendar": "y", "detail": "y",
                   "round_trip": "y", "multi_city": "", "low_fare": "y"},
     "fliggy":    {"domestic": "y", "intl": "y", "calendar": "y", "detail": "y",
@@ -94,13 +99,17 @@ CHANNEL_DIMENSIONS = {
     #              r769 实测发现国内**接口原生支持**往返（两段 segment 的
     #              返回价即往返总价，判据见上），已接线 → 国内 y。
     #              国际 productList 是单段结构、未做两段实测 → 国际 unsupported。
-    #   calendar: 途牛**没有**独立日历通路（r805z 三方对照查出）——
-    #             它的 `_hoop`/`_hoop_intl` 只按单日打 listFlight，
-    #             源码里没有任何 calendar/日历 端点；账本侧 48h 内
-    #             也只有 `H5/API` 一种 entry_path，从无 `日历`。
-    #             此前记 y 是过度声明（其余四家各有独立日历通路名：
-    #             ctrip 日历 / fliggy 日历 / tongcheng 窗历 / qunar 内嵌）。
-    "tuniu":     {"domestic": "y", "intl": "y", "calendar": "n", "detail": "y",
+    #   calendar: 途牛**有**官方 H5 单航线日历（r916 纠偏）——
+    #             `crawlers/special.py::fetch_tuniu_calendar` 调
+    #             `flight-api.tuniu.com/query/flight/v1/calendar`（type=1），
+    #             与页面点日期控件同一 XHR；2026-11-03 真实 H5 搜索流
+    #             点「查询/日历」后返回 125 个逐日价
+    #             （2026-11-03..2027-08-25，¥360–1790，11-05 ¥420，裸价
+    #             不含税）。r805z 只扫了 `crawlers/tuniu.py` 才误记 n；
+    #             现在 `TuniuCrawler.calendar()` 复用同一接口并写
+    #             `日历/calendar` 账本，特价雷达 `tuniucal` 源同源。
+    #             国际该接口无日历，`DIMENSION_SCOPE` 记「仅国内」。
+    "tuniu":     {"domestic": "y", "intl": "y", "calendar": "y", "detail": "y",
                   "round_trip": "y", "multi_city": "", "low_fare": "y"},
     # App 渠道（同 APP_PLAT_NAME 里的名字；与对应浏览器渠道逐项可比）
     #   intl: 两个 App 都有独立的国际档（智行「国际」标签页 / 去哪儿城市页
@@ -281,7 +290,12 @@ SURFACE_NOTES = {
                       "不是渠道没有",
     ("tongcheng", "pc"): "www.ly.com 列表页的 getflightlist（需切桌面身份）；"
                          "2026-11-01 17:45 生产首条 PC 出数（SHA→HAK 5 条/¥2110）",
-    ("tongcheng", "h5"): "m.ly.com/ft/touch/book1，XHR 拦截",
+    ("tongcheng", "h5"): "m.ly.com/ft/touch/book1，XHR 拦截；"
+                         "2026-10-31~11-01 生产 35 次 ok / 1224 行，"
+                         "最近一次 11-01 17:07；2026-11-03 手工 UI 复验"
+                         "国内/国际价格日历可用；定时任务近期走 PC/窗历，"
+                         "H5 不按天跑，端面记已验证（近 30 天账本口径），"
+                         "不是渠道没有",
     ("tuniu", "pc"): "flight.tuniu.com/domestic/list 的 SSR 列表；通路已实现，"
                      "不是没有做。2026-11-01 20:42/20:46 生产被滑块拦住"
                      "（账本 blocked）；2026-11-02 03:55 窗口显示已登录列表、"
@@ -314,6 +328,10 @@ def surface_state(plat: str, surface: str) -> str:
 DIMENSION_NOTES = {
     ("tongcheng", "intl"): "国际只走「窗历」（日历族）：出的是逐日最低价，"
                            "没有航班号/机型/时刻（日历本身不含航班级信息）",
+    ("tuniu", "intl"): "国际走 H5/API（`m.tuniu.com/flight/` 页内切国际）："
+                       "2026-11-01 账本 H5/API 32 次 ok、2985 行；PC 有实现但"
+                       "被滑块拦住，按「测不出」记空，不记 n。远期日期查询受限，"
+                       ">30 天优先走 H5/API",
     ("app_qunar", "intl"): "国际列表卡带航班号/时刻/价格（2026-11-01 实测 "
                            "CA847 ¥3305 / MU213 / BA168）；国际没有独立日历通路",
     ("app_qunar", "round_trip"): "国内往返真机跑通（左右两列去/返 + 页脚往返"
@@ -350,8 +368,11 @@ DIMENSION_NOTES = {
     # 多程同理：浏览器站点**产品上都有**多程入口，是采集端没做（选多段 →
     # 逐段出价 → 合并口径是一整条独立链路）。写 n 不解释，读者会以为
     # 渠道没有多程产品。
-    ("ctrip", "multi_city"): "站点有多程入口；采集端未实现（选多段→逐段"
-                             "出价→合并口径），矩阵记未验证，不是渠道没有",
+    ("ctrip", "multi_city"): "站点有多程入口；2 段已生产验证（¥1476，"
+                             "IJ004+MM304）——配置卡/轮尾采集/概览/来源/提醒/"
+                             "历史/CSV 齐全，矩阵 ✓ 仅 2 段；缺口程 2 段已实测"
+                             "整单 ¥2184（9C8515+MM079）；3+ 段实测无组合卡，"
+                             "不是渠道没有",
     ("qunar", "multi_city"): "站点有多程入口；采集端未实现，矩阵记未验证，"
                              "不是渠道没有",
     ("fliggy", "multi_city"): "站点有多程入口；采集端未实现，矩阵记未验证，"
@@ -364,8 +385,26 @@ DIMENSION_NOTES = {
                                    "不是渠道没有",
     ("app_qunar", "multi_city"): "App 有「单程/往返/多程」三档入口；采集端"
                                  "只接了前两档，矩阵记未验证，不是渠道没有",
-    ("tuniu", "calendar"): "途牛没有独立日历通路（r805z 三方对照）；日历价"
-                           "不单独落库",
+    ("tuniu", "calendar"): "官方 H5 单航线日历（与页面点日期控件同一 "
+                           "`query/flight/v1/calendar` XHR）；2026-11-03 "
+                           "H5 选上海→北京后点 `.date-selector`，页面真实 "
+                           "XHR 即此端点（type=1），弹层逐日价 11-03 ¥1680 / "
+                           "11-04 ¥420 / 11-05 ¥430 / 11-06 ¥699 / "
+                           "11-07 ¥410…；另一次搜索流实测 125 个逐日价"
+                           "（2026-11-03..2027-08-25，¥360–1790，11-05 ¥420），"
+                           "裸价不含税；特价雷达 `tuniucal` 同源。PC 入口"
+                           "2026-11-03 探针弹滑块（未绕过），故日历证据"
+                           "取 H5 官方接口，PC 端面仍记未验证；国际该接口"
+                           "无日历，矩阵 y 指国内",
+    ("tongcheng", "calendar"): "窗历 `queryCalendarLowestPrice`（一次 90/180 天，"
+                               "含税总价）；2026-11-03 H5 点日期控件复验："
+                               "页面 XHR `mihawkapi/calendar/lowestPrice` 与"
+                               "采集端窗历返回同一批 180 天逐日价（11-03 ¥520 /"
+                               "11-04 ¥350 / 11-05 ¥360…），同源可溯源；"
+                               "国际同样：SHA→BKK 11-04 ¥1102 / 11-05 ¥1156 /"
+                               "11-06 ¥1169 / 11-07 ¥883 / 11-08 ¥715，与采集端"
+                               " 90 天窗历逐日一致；`ts/calendar` 需页内签名，"
+                               "仅作详情/国际备选",
     ("qunar", "detail"): "有航班号/时刻/价格；机型与舱位覆盖率低"
                          "（机型 17%、舱位 1%），不是每家都带",
     ("fliggy", "detail"): "PC 列表有完整航班号/时刻；国际日历行无航班号"
@@ -503,10 +542,12 @@ DIMENSION_NOTES = {
 # 拼在渠道名后读作「飞猪仅国际」）。与 DIMENSION_NOTES 同源：改一端必须
 # 改另一端，`test_r805ae` 把「有 scope 必有 note」钉住。
 DIMENSION_SCOPE = {
+    ("ctrip", "multi_city"): "仅 2 段",
     ("fliggy", "round_trip"): "仅国际",
     ("qunar", "round_trip"): "仅国内",
     ("app_qunar", "round_trip"): "仅国内",
     ("app_tongcheng", "round_trip"): "仅国际",
+    ("tuniu", "calendar"): "仅国内",
 }
 
 
@@ -566,6 +607,7 @@ PATH_CN = {
     "日历": "日历",
     "窗历": "窗历",
     "往返": "往返",
+    "多程": "多程",
     "航班明细": "航班明细",
     "PC可见": "PC 可见",
     # 其余散落在单个 crawler 里的通路名（r658 门禁扫 path_note 字面量
@@ -583,6 +625,8 @@ PATH_CN = {
     # 点「搜索」这一步单独记一段（r691/r694：点下去没反应时，健康卡要
     # 说得出是「搜索没响应」而不是笼统的 App 错误）
     "app-search": "App 点搜索",
+    # 搜索前发现表单停在多程档（r941：App 会记住上次搜索模式）
+    "app-mode": "App 搜索档位",
     # 登录是 App 渠道的硬前置（去哪儿尤其）
     "app-login": "App 登录",
     # 往返档切换与双日期选择是独立的一段（r923+ 同程 App 往返接入）

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from contextlib import contextmanager
 from typing import List, Optional
 
-from .models import CAL_PATH_FAMILY, FlightPrice
+from .models import CAL_PATH_FAMILY, PRICE_MIN, FlightPrice
 
 
 SCHEMA = """
@@ -164,6 +164,33 @@ CREATE TABLE IF NOT EXISTS flight_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_flight_daily_key
     ON flight_daily (from_city, to_city, depart_date, flight_key, cabin, day);
+CREATE TABLE IF NOT EXISTS itinerary_daily (
+    platform TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    segments_key TEXT NOT NULL,
+    depart_date TEXT NOT NULL,
+    total_price REAL NOT NULL,
+    legs_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (platform, route_id, segments_key, depart_date)
+);
+CREATE INDEX IF NOT EXISTS idx_itinerary_route
+    ON itinerary_daily (route_id, segments_key, depart_date);
+CREATE TABLE IF NOT EXISTS itinerary_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    segments_key TEXT NOT NULL,
+    depart_date TEXT NOT NULL,
+    total_price REAL NOT NULL,
+    legs_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_itinerary_hist_uniq
+    ON itinerary_history (platform, route_id, segments_key,
+                          depart_date, fetched_at);
+CREATE INDEX IF NOT EXISTS idx_itinerary_hist_key
+    ON itinerary_history (segments_key, fetched_at);
 """
 
 
@@ -1284,6 +1311,10 @@ class PriceStorage:
                     price = float(raw_price)
                 except (TypeError, ValueError):
                     continue   # 元素缺合法 price 不参与聚合（宁缺勿错）
+                # 价格带下限是聚合层的硬边界：优惠券/占位价（如 app_qunar
+                # ¥20）不得成为日桶 lo/close，把整段走势拉成假低价。
+                if price < PRICE_MIN:
+                    continue
                 # truthy 门（NULL 与 "" 同归直飞）：生产元素两态并存
                 # ——键缺席（无值不落键构造器）与恒写空串键（62,413
                 # 元素实证），空串绝不可能是真中转城市
@@ -1381,6 +1412,108 @@ class PriceStorage:
             # 航班日桶长期留存（400 天），避免只增不减
             c.execute("DELETE FROM flight_daily WHERE day < "
                       "date('now','localtime','-400 days')")
+
+    def save_itinerary(self, platform, route_id, segments, total_price,
+                       legs, depart_date="", fetched_at="", prov=None):
+        """落一条多程整单总价；只接受渠道页面自报总价，段价不得进 legs。
+
+        prov 只保留来源页的 path/url/totalBasis（可溯源）；旧行没有该键时
+        概览不显示来源链接，不伪造。
+        """
+        from .multicity import (build_mc_extra, normalize_segments,
+                                segments_key)
+        segs = normalize_segments(segments)
+        key = segments_key(segs)
+        try:
+            price = float(total_price)
+        except (TypeError, ValueError):
+            raise ValueError("多程总价必须是数字")
+        if price <= 0:
+            raise ValueError("多程总价必须为正数（只接受渠道整单总价）")
+        extra = build_mc_extra(legs)
+        if prov:
+            if isinstance(prov, str):
+                try:
+                    prov = json.loads(prov or "null")
+                except ValueError:
+                    prov = None
+            if isinstance(prov, dict):
+                clean = {k: str(prov[k]) for k in ("path", "url")
+                         if str(prov.get(k) or "").strip()}
+                if str(prov.get("totalBasis") or "").strip():
+                    clean["totalBasis"] = str(prov["totalBasis"])
+                if clean:
+                    extra["prov"] = clean
+        if len(extra["legs"]) != len(segs):
+            raise ValueError("legs 段数与 segments 不一致：%d vs %d"
+                             % (len(extra["legs"]), len(segs)))
+        for i, (leg, seg) in enumerate(zip(extra["legs"], segs)):
+            for field in ("from", "to", "date"):
+                if str(leg.get(field) or "").upper() != seg[field]:
+                    raise ValueError(
+                        "第 %d 段 %s 与 segments 不一致：%r vs %r"
+                        % (i + 1, field, leg.get(field), seg[field]))
+        dep = depart_date or segs[0]["date"]
+        if dep != segs[0]["date"]:
+            raise ValueError("depart_date 必须等于第一段日期")
+        datetime.strptime(dep, "%Y-%m-%d")
+        ts = fetched_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._conn() as c:
+            c.execute(
+                """INSERT OR REPLACE INTO itinerary_daily
+                   (platform,route_id,segments_key,depart_date,total_price,
+                    legs_json,fetched_at) VALUES (?,?,?,?,?,?,?)""",
+                (str(platform), str(route_id or key), key, dep, price,
+                 json.dumps(extra, ensure_ascii=False), ts))
+            # 历史表只追加：itinerary_daily 保最新一条，走势读这里。
+            # 同一秒重复保存用唯一索引去重，轮询重建不会灌重复点。
+            c.execute(
+                """INSERT OR IGNORE INTO itinerary_history
+                   (platform,route_id,segments_key,depart_date,total_price,
+                    legs_json,fetched_at) VALUES (?,?,?,?,?,?,?)""",
+                (str(platform), str(route_id or key), key, dep, price,
+                 json.dumps(extra, ensure_ascii=False), ts))
+            c.execute("DELETE FROM itinerary_history WHERE fetched_at < "
+                      "datetime('now','localtime','-90 days')")
+        return key
+
+    def itineraries(self, route_id="", segments_key="", limit=200):
+        """按行程键读多程行；legs 以 extra 对象返回。"""
+        sql = ("SELECT platform,route_id,segments_key,depart_date,"
+               "total_price,legs_json,fetched_at FROM itinerary_daily")
+        where, args = [], []
+        if route_id:
+            where.append("route_id=?")
+            args.append(str(route_id))
+        if segments_key:
+            where.append("segments_key=?")
+            args.append(str(segments_key))
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY depart_date DESC, fetched_at DESC LIMIT ?"
+        args.append(max(1, int(limit)))
+        with self._conn() as c:
+            rows = [dict(r) for r in c.execute(sql, args).fetchall()]
+        for r in rows:
+            try:
+                r["extra"] = json.loads(r.pop("legs_json") or "{}")
+            except ValueError:
+                r["extra"] = {}
+        return rows
+
+    def itinerary_history(self, segments_key, limit=96):
+        """按行程键读整单历史点（升序）：[[ISO 时刻, 总价], ...]。
+
+        只返回真实落过库的整单总价；没有历史就是空，不补点。
+        """
+        lim = max(1, min(500, int(limit)))
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT fetched_at,total_price FROM itinerary_history "
+                "WHERE segments_key=? ORDER BY fetched_at DESC LIMIT ?",
+                (str(segments_key), lim)).fetchall()
+        return [[str(r[0]).replace(" ", "T"), float(r[1])]
+                for r in reversed(rows)]
 
     def flight_history(self, from_city: str, to_city: str, depart_date: str,
                        flight_key: str, cabin: str, channels: list,

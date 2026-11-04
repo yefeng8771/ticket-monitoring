@@ -302,14 +302,18 @@ def tier_of(age_min, near, fast_ttl, slow_ttl):
     return "skip"
 
 
-def stagger_offset(plat, base_seconds):
-    """渠道起跑偏移：按固定顺序均分，保证 5 家不挤在同一秒。
+def stagger_offset(plat, base_seconds, channels=None):
+    """渠道起跑偏移：按给定渠道顺序均分（默认浏览器渠道表）。
+
+    调用方应传本轮实际渠道集（含启用的 App）；不传时保留旧行为。
     固定（非随机）是刻意的——同一渠道每轮偏移一致，便于复现与对账；
     周期本身的随机性由调度层的 jitter 负责。"""
     base = float(base_seconds or 0)
     if base <= 0:
         return 0.0
-    order = list(PLATFORMS)
+    order = list(channels) if channels else list(PLATFORMS)
+    if not order:
+        order = list(PLATFORMS)
     step = base / len(order)
     if plat in order:
         return round(order.index(plat) * step, 1)
@@ -368,6 +372,36 @@ def classify_failure(statuses, note=""):
     if any(k in str(note or "") for k in _LOGIN_MARKS):
         return "login"
     return ""
+
+
+def classify_evidence(statuses, note="") -> str:
+    """给 ``classify_failure`` 的结论**留证**：说清是哪一条证据判的。
+
+    为什么需要：2026-11-04 翻日志发现「智行 22 次命中captcha」里绝大多数
+    根本没有验证码——是"设置航线失败/没取到首页"被归成了验证挑战。但日志
+    只打「命中captcha」，**看不到是哪一条证据**，于是根因查不动、只能靠猜。
+
+    这里返回一句话证据（写进日志/案发现场），例如：
+
+    * ``status=blocked``            → 采集器自己判的拦截
+    * ``note~=安全验证``            → 文本关键词命中（可能是误判来源）
+    * ``soft_reject``               → 软拒
+    """
+    sts = [str(s or "") for s in (statuses or [])]
+    low = str(note or "").lower()
+    if "soft_reject" in sts:
+        return "status=soft_reject"
+    if "login" in sts:
+        return "status=login"
+    if "blocked" in sts:
+        return "status=blocked"
+    for k in _CAPTCHA_MARKS:
+        if k.lower() in low:
+            return "note~=%s" % k
+    for k in _LOGIN_MARKS:
+        if k in str(note or ""):
+            return "note~=%s" % k
+    return "status=%s" % (",".join(sorted(set(sts))) or "none")
 
 
 class ChannelBreaker:
@@ -1280,6 +1314,17 @@ class Pacing:
                    for s in (statuses or [])):
                 self.reset(plat)
             return "", 0
+        # 留证（2026-11-04）：把"是哪一条证据判的"记下来。原来只打「命中captcha」，
+        # 而日志里智行 22 次 captcha 大多是"设置航线失败"被归错——没有证据串
+        # 就查不动根因。这条只写内存/快照，不改任何冷却决策。
+        with self._lock:
+            self._last_evidence = getattr(self, "_last_evidence", {})
+            self._last_evidence[str(plat)] = {
+                "kind": kind,
+                "evidence": classify_evidence(statuses, note),
+                "statuses": [str(s or "") for s in (statuses or [])][:6],
+                "note": str(note or "")[:160],
+            }
         if not self.cfg["breaker_enabled"] and kind not in ("soft", "login"):
             # 未熔断，但把归因留在 Pacing 上（可见性不因开关而消失）：
             # 面板仍能说「这次是被验证码拦的」，只是不再宣称已熔断。

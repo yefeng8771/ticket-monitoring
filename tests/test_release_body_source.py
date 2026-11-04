@@ -132,8 +132,16 @@ def _multi_city_errors(body):
     errs = []
     if "多程" not in body:
         errs.append("正文没写多程")
-    if "采集端尚未实现" not in body:
-        errs.append("多程必须写采集端未实现")
+    # 携程 PC 2 段已生产验证（矩阵 ✓ 仅 2 段），缺口程 2 段已实测，
+    # 3+ 段未验；正文必须写清 scope，不能把「2 段已验证」写成「全段已支持」。
+    if "已有 2 段生产整单行" not in body:
+        errs.append("多程必须写明已有 2 段生产整单行")
+    if "仅 2 段" not in body:
+        errs.append("多程矩阵必须写明「仅 2 段」scope")
+    if "缺口程 2 段已实测" not in body:
+        errs.append("多程必须写明缺口程 2 段已实测（不得再写未验）")
+    if "3+ 段" not in body and "3+段" not in body:
+        errs.append("多程必须写明 3+ 段未验")
     if '`""`' not in body:
         errs.append("多程矩阵必须写未验证空值")
     matrix = body.split("## 能力矩阵", 1)[-1].split("## 快速开始", 1)[0]
@@ -180,8 +188,8 @@ def test_body_names_every_channel_and_scope():
 def test_body_keeps_multi_city_honest():
     body = _read()
     assert _multi_city_errors(body) == [], _multi_city_errors(body)
-    # 负控：把「采集端尚未实现」改成「已支持」必须报错
-    bad = body.replace("采集端尚未实现", "已支持", 1)
+    # 负控：把「仅 2 段」改成「全段已支持」必须报错
+    bad = body.replace("仅 2 段", "全段已支持")
     assert _multi_city_errors(bad), "负控失败：多程不实表述没被拦"
 
 

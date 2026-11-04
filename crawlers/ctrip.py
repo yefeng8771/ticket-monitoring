@@ -24,6 +24,15 @@ from .challenge import classify_text
 
 _LOG = logging.getLogger(__name__)
 
+
+def _multi_text_with_total(page, text, extra_s=12.0, step_ms=500):
+    """多程组合卡异步渲染：以「多程含税价」总价标签为就绪锚轮询。"""
+    deadline = time.time() + max(0.0, float(extra_s))
+    while "多程含税价" not in text and time.time() < deadline:
+        page.wait_for_timeout(step_ms)
+        text = page.inner_text("body")
+    return text
+
 # pid zstd 解码依赖（fltitem[].pid=`__Zstd__|`+base64 的政策载荷）：
 # 缺失时行李额采集整体跳过（爬虫其余功能不受影响），打包漏装不至于炸
 try:
@@ -667,6 +676,58 @@ class CtripCrawler(BaseCrawler):
                 boundary = i + 2
         return rows
 
+    def fetch_multi(self, segments: List[dict],
+                    wait_ms: int = 9000) -> List[FlightPrice]:
+        """多程采集（Ctrip PC）：只搬「多程超低价」组合卡的总价。
+
+        总价必须是页面自报「多程含税价」；legs 只进 extra，不做两段相加。
+        已接轮尾调度（main.collect_multicity）与配置/概览/提醒面；落库由
+        core.storage.save_itinerary 负责。
+        """
+        from core.multicity import MultiCityError, normalize_segments
+        from .ctrip_multicity import build_multi_url, parse_multi_text
+        try:
+            segs = normalize_segments(segments)
+        except MultiCityError as e:
+            self.path_note("多程", "error", detail=str(e))
+            return []
+        url = build_multi_url(segs)
+        self.path_reset()
+        try:
+            with self.browser() as ctx:
+                page = self.new_page(ctx)
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_timeout(wait_ms)
+                text = page.inner_text("body")
+                # 组合卡异步渲染：固定等 9s 在慢页会假空（开口程实测
+                # 12s 才出「多程含税价 ¥2184」）。以总价标签为就绪锚
+                # 再等最多 12s，出现即走；被拦页没有该标签，只多等这一段。
+                if "多程含税价" not in text:
+                    text = _multi_text_with_total(page, text)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("[ctrip][多程] 页面不可用: %s", e)
+            self.path_note("多程", "error", detail=str(e)[:160], url=url)
+            return []
+        try:
+            got = parse_multi_text(text, segs)
+        except MultiCityError as e:
+            status = "empty" if "多程超低价" in text else "error"
+            self.logger.warning("[ctrip][多程] %s", e)
+            self.path_note("多程", status, detail=str(e)[:160], url=url)
+            return []
+        self.path_note("多程", "ok", rows=1,
+                       detail="页面自报多程含税价", url=url)
+        return [FlightPrice(
+            platform=self.name,
+            from_city=segs[0]["from"], to_city=segs[-1]["to"],
+            depart_date=segs[0]["date"], price=got["price"],
+            airline=got["legs"][0].get("airline", ""),
+            extra=json.dumps(got["extra"], ensure_ascii=False),
+            prov=json.dumps({"path": "多程", "url": url,
+                             "totalBasis": got["total_basis"]},
+                            ensure_ascii=False),
+        )]
+
     def _fetch_rt(self, from_city: str, to_city: str,
                   dates: List[str], ret_date: str) -> List[FlightPrice]:
         """PC 往返列表：只落产品往返总价（r815i）。
@@ -1082,9 +1143,21 @@ class CtripCrawler(BaseCrawler):
             try:
                 page.goto("https://m.ctrip.com/html5/",
                           wait_until="domcontentloaded")
-                page.wait_for_timeout(4000)
+                # 预热时序：等风控 cookie（cticket/_bfa/MKT_CKID）真的落下再打
+                # 日历接口。原来是死等 4s——cookie 没下来就去打 = 服务端当新
+                # 会话，日历返回空/软拒，账本却记成"该日无价"。
+                hit = self.wait_risk_cookies(ctx, timeout_s=12.0)
+                warm_ok = bool(hit)
+                if hit:
+                    self.logger.info("[ctrip] 日历预热就绪：%s", "/".join(hit))
+                else:
+                    self.logger.warning(
+                        "[ctrip] 日历预热未拿到风控 cookie（%s 均无），"
+                        "日历大概率仍被软拒",
+                        "/".join(getattr(self, "RISK_COOKIES", ()) or ("",)))
             except Exception as e:
                 self.logger.warning("[ctrip] 预热失败: %s", e)
+                warm_ok = False
             for date in dates:
                 url = self._entry_url(fc, tc, date)
                 self.logger.info("[ctrip][intl] GET %s", url)
@@ -1122,11 +1195,19 @@ class CtripCrawler(BaseCrawler):
                     if not flights:
                         self.logger.warning(
                             "[ctrip][intl] %s 未拿到日历价", date)
-                        self.path_note(
-                            "日历", _cal_status, date=date,
-                            detail=("登录/验证页，非空结果"
+                        # 预热没把风控 cookie 养下来时，"没价"更可能是软拒
+                        # 而不是"该日无票"——如实记 soft_reject，别把
+                        # 会话没养熟写成"没有航班"（账本红线）。
+                        if _cal_status == "empty" and not warm_ok:
+                            _status, _why = ("soft_reject",
+                                             "预热未落下风控 cookie，按软拒记")
+                        else:
+                            _status = _cal_status
+                            _why = ("登录/验证页，非空结果"
                                     if _cal_status != "empty" else
-                                    "国际日历未返回该日报价"),
+                                    "国际日历未返回该日报价")
+                        self.path_note(
+                            "日历", _status, date=date, detail=_why,
                             ms=int((time.time() - t_cal) * 1000))
                         self._sleep()
                         continue

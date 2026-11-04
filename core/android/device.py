@@ -54,12 +54,58 @@ class AdbDevice:
         self.last_error = ""
         # CLI dump 撞上 u2 已注册的 UiAutomation 后，本进程改用 u2
         self._prefer_u2 = False
+        # 设计坐标系（默认 None = 不做任何换算，行为与改造前逐字一致）。
+        # 只有在 ``display.spoof()`` 真改了 wm size 之后才该设置它：那时脚本
+        # 里写死的常量属于「设计坐标」，而 UI 树 bounds 属于「设备坐标」。
+        self.design = None
+        self._size_cache = None
+        # 协作式截止时间（2026-11-04）：为 0 表示不限制。
+        # 为什么需要：路由级超时只是"不再等 future"，worker **仍在跑**并继续
+        # 占着设备锁——实测导致 apscheduler 连续 10 小时全部 skipped。
+        # 截止时间让 worker 在**下一个 adb 调用**处主动放弃，从而真正释放锁。
+        self._deadline = 0.0
+        self.deadline_hits = 0
+
+    # ---------- 协作式截止 ----------
+    def set_deadline(self, budget_s: float = 0, now: float = None) -> float:
+        """arm 一个"从现在起 budget_s 秒后过期"的截止时间；0=解除。
+
+        返回绝对过期时间戳（0 表示不限制）。所有 adb 指令在发出前都会检查，
+        过期就当场返回 None（调用方本来就按 None 处理失败），于是整条
+        采集链路会在**几毫秒内**退回、释放设备锁，而不是挂到天荒地老。
+        """
+        try:
+            b = float(budget_s or 0)
+        except (TypeError, ValueError):
+            b = 0.0
+        if b <= 0:
+            self._deadline = 0.0
+            return 0.0
+        base = float(now if now is not None else time.time())
+        self._deadline = base + b
+        return self._deadline
+
+    def deadline_left(self, now: float = None) -> float:
+        """剩余预算秒数（0=不限或不剩）。"""
+        if not self._deadline:
+            return 0.0
+        return max(0.0, self._deadline - float(
+            now if now is not None else time.time()))
+
+    def _expired(self, now: float = None) -> bool:
+        return bool(self._deadline) and self.deadline_left(now) <= 0
 
     # ---------- 基础 ----------
     def _base(self):
         return [self.adb_path, "-s", self.serial]
 
     def _sh(self, *args, timeout=None):
+        # 截止时间守卫放在**最前面**：卡死都发生在 adb 上，这里拦住就等于
+        # 把"挂 900s"压缩成"立刻放弃 + 释放锁"。
+        if self._expired():
+            self.deadline_hits += 1
+            self.last_error = "deadline exceeded"
+            return None
         proc = _run(self._base() + list(args), timeout or self.timeout)
         if proc is None:
             self.last_error = "timeout or spawn failure"
@@ -193,19 +239,64 @@ class AdbDevice:
         return m.group(1) if m else ""
 
     # ---------- 交互 ----------
+    def set_design(self, width, height) -> tuple:
+        """开启「设计坐标系 → 设备坐标系」换算；``(0,0)/None`` = 关闭。
+
+        什么时候需要：``display.spoof()`` 改过 ``wm size`` 之后。这时脚本里
+        **写死的常量**是设计坐标（按 900×1600 写的），而点击要的是设备坐标。
+        不改屏幕就别开这个——开了会给每条坐标多乘一个比例。
+        """
+        try:
+            w, h = int(width or 0), int(height or 0)
+        except (TypeError, ValueError):
+            w = h = 0
+        self.design = (w, h) if (w > 0 and h > 0) else None
+        self._size_cache = None
+        return self.design
+
+    def _scale(self) -> tuple:
+        """(sx, sy)：设备像素 / 设计像素。读不到真实尺寸时退回 1.0。"""
+        if not self.design:
+            return (1.0, 1.0)
+        if self._size_cache is None:
+            try:
+                self._size_cache = self.window_size() or (0, 0)
+            except Exception:
+                self._size_cache = (0, 0)
+        w, h = self._size_cache
+        dw, dh = self.design
+        if min(int(w), int(h), int(dw), int(dh)) <= 0:
+            return (1.0, 1.0)
+        return (w / float(dw), h / float(dh))
+
+    def to_device(self, x, y) -> tuple:
+        """设计坐标 → 设备坐标（未开启换算时原样返回）。"""
+        sx, sy = self._scale()
+        return int(round(float(x) * sx)), int(round(float(y) * sy))
+
+    def to_design(self, x, y) -> tuple:
+        """设备坐标 → 设计坐标：UI 树 ``bounds`` 读出来的点要走这一层，
+        再与写死的设计坐标比较/运算，否则会算错两倍。"""
+        sx, sy = self._scale()
+        return (int(round(float(x) / sx)),
+                int(round(float(y) / sy)))
+
     def tap(self, x: int, y: int) -> bool:
         if not self._coord_ok(x) or not self._coord_ok(y):
             return False
-        out = self._sh("shell", "input", "tap", str(int(x)), str(int(y)))
+        dx, dy = self.to_device(x, y)
+        out = self._sh("shell", "input", "tap", str(dx), str(dy))
         return out is not None
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
               duration_ms: int = 300) -> bool:
         if not all(self._coord_ok(v) for v in (x1, y1, x2, y2)):
             return False
+        ax, ay = self.to_device(x1, y1)
+        bx, by = self.to_device(x2, y2)
         out = self._sh("shell", "input", "swipe",
-                       str(int(x1)), str(int(y1)),
-                       str(int(x2)), str(int(y2)), str(int(duration_ms)))
+                       str(ax), str(ay), str(bx), str(by),
+                       str(int(duration_ms)))
         return out is not None
 
     def input_text(self, text: str) -> bool:
@@ -311,9 +402,20 @@ class AdbDevice:
                    for line in out.splitlines())
 
     def window_size(self) -> tuple:
-        """(w, h)；解析失败返回 (0, 0)。"""
+        """当前**生效的**屏幕 (w, h)；解析失败返回 (0, 0)。
+
+        ⚠ 必须优先取 ``Override size``：``wm size`` 的输出有两行
+        （``Physical size: 900x1600`` + ``Override size: 1080x1920``），
+        取第一个匹配会永远拿到**物理**尺寸——屏幕被 ``wm size`` 改过之后，
+        坐标换算比例就恒等于 1.0，写死的坐标会按比例全偏，而账本上只表现成
+        「设城市失败 / 页面认不出」，极难追（2026-11-03 实机验证时踩到）。
+        """
         out = self._sh("shell", "wm", "size") or ""
-        m = re.search(r"(\d+)\s*x\s*(\d+)", out)
+        m = re.search(r"Override size:\s*(\d+)x(\d+)", out)
+        if not m:
+            m = re.search(r"Physical size:\s*(\d+)x(\d+)", out)
+        if not m:
+            m = re.search(r"(\d+)\s*x\s*(\d+)", out)
         return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
     def root(self) -> bool:

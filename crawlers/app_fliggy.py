@@ -408,7 +408,7 @@ class AppFliggyCrawler(AppCrawler):
             self.path_note("android-device", "unsupported",
                            detail="device unavailable")
             return []
-        with rt.device_lock():
+        with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
             if self._ensure_form(dev) is None:
                 return []
@@ -418,7 +418,9 @@ class AppFliggyCrawler(AppCrawler):
                 return []
             out = []
             for target in dates:
-                got = self._one_date(dev, from_city, to_city, target)
+                # 单日隔离：一天抛异常不再拖垮整段
+                got = self.date_guard(
+                    target, self._one_date, dev, from_city, to_city, target)
                 if got:
                     out.append(got)
                 # 回表单，供下一个日期继续

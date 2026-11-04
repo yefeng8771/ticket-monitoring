@@ -40,13 +40,17 @@
 > r908 文档摘要/携程 App 往返口径、r909 320 档 pacing 行高、r910 同程国际
 > 往返 API 负结论；能力矩阵截图与静态站已按 10 渠道 + 携程 App 国内/国际
 > 往返重烘（当时站戳 `3a7ea543ba18`；当前站戳见下），`release_align_check --local` **25/25**；
-> 在线发布树 0d4b058（v1.5.307）复核为 tag/正文/资产/CI/Pages/ghcr 同源；
-> 工作树仍未提交，live 8765 仍旧 7 渠道副本。
+> Release 当前 `v1.0` → `e65cee1`（09:54 由 `ab04c22` 重指，正文/四资产/tag 同源）；ghcr `latest` = `sha-e65cee1` digest `5fb025bb3488…`（同 digest），`sha-ab04c22` 单独存在（digest `9b72acb1a6b9…`）；
+> Release `v1.0` 当前 → `e65cee1`（首发 `ab04c22`，10 渠道正文，资产 4/4）；live 8765 已于
+> 2026-11-03 08:58 切到 `_release_ab04`（PID 47952）。r933–r953 已入库（至 `80c63eb`），
+> live 树仍停在 ab04c22；多程采集/配置卡/概览整单卡/来源页/整单历史与日桶下限守卫见
+> SPEC r941–r951。
 > **2026-11-03 03:30 补（同程 App 国际往返 + 最终树）**：同程 App 国际往返真机接通
 > （上海⇌东京 11-16/19，7 条去程、最低 9C8515 ¥2209 含税总价；返程 `+¥N` 为加价），
 > `round_trip=y`（仅国际）；`PATH_CN` 补 `app-roundtrip`（r658 门禁曾点红）。
-> 全量非 UI **6149 passed / 19 skipped / 0 failed**（07:41，workers 8，当前代码树；App 采集代码/测试指纹
-> 前后一致）；UI **670/670**（05:54 全量复跑，零 JS 错误）；能力矩阵截图
+> tracked collect **6214**；全量非 UI **6236 passed / 19 skipped / 0 failed**
+> （14:46，workers 8，683.41s，共 6255，含未跟踪并行 WIP 测试）；矩阵升 y、
+> r958 配置控件与门禁修复均在其内；UI **670/670**（15:15 全量复跑，零 JS 错误，含矩阵 y 与 9 个新控件）；能力矩阵截图
 > `docs/screenshots/console-dims.png` 已按 10 渠道 + RT 状态重烘，
 > 静态站同步；`release_align_check --local` **25/25**。
 > **2026-11-03 05:18 补（r927 途牛 H5 国际往返）**：`m.tuniu.com/flight/` 往返档
@@ -119,7 +123,7 @@
 > 「多程超低价」卡两段并排（9C8515 + MM304），价 **¥1298** 明写
 > **「多程含税价」**，下方第一程候选也逐条写「¥N 起 · 多程含税价」。
 > 携程多程整单总价口径坐实；采集端因单 O-D 模型/多段配置未接，矩阵
-> `multi_city` 仍 `""`；3+ 段/缺口程未验。
+> `ctrip.multi_city` = **y（scope 仅 2 段，生产行 ¥1476）**；其余九家仍 `""`；3+ 段/缺口程未验。
 > 另对齐 r922 文档口径：`docs/APP_CHANNELS.md` 同程 App「未接」行、装机结论与
 > `app_tongcheng.detail` 说明统一为「国内明细已覆盖；国际只走日历」（后由 r923 推翻：
 > 国际明细已真机 6 条 ¥875）；r903/r822/docs/EOL **104 passed**、
@@ -242,18 +246,18 @@
 ```
 dims: ('domestic','intl','calendar','detail','round_trip','multi_city','low_fare')
 
-ctrip        domestic=y intl=y calendar=y detail=y round_trip=y  multi_city="" low_fare=y
+ctrip        domestic=y intl=y calendar=y detail=y round_trip=y  multi_city=y low_fare=y
 qunar        domestic=y intl=y calendar=y detail=y round_trip=y  multi_city="" low_fare=y
 fliggy       domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 tongcheng    domestic=y intl=y calendar=y detail=y round_trip=y  multi_city="" low_fare=y
-tuniu        domestic=y intl=y calendar=n detail=y round_trip=y multi_city="" low_fare=y
+tuniu        domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_zhixing  domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_qunar    domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_fliggy  domestic=y intl="" calendar="" detail=y round_trip="" multi_city="" low_fare=""
 app_ctrip    domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_tongcheng domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 
-App 缺口：app_zhixing=()   app_qunar=()   app_fliggy=(intl,calendar,round_trip,low_fare)   app_ctrip=()   app_tongcheng=()
+App 缺口：app_zhixing=(multi_city)   app_qunar=(multi_city)   app_fliggy=(intl,calendar,round_trip,multi_city,low_fare)   app_ctrip=(multi_city)   app_tongcheng=(multi_city)
 ```
 
 **稳定基线 7 家**：浏览器 5（携程/去哪儿/飞猪/同程/途牛）+ App 2（**智行 App / 去哪儿 App**）。
@@ -388,12 +392,12 @@ md5sum webui.py | cut -c1-32 | diff - _scratch/_h1.txt && echo HASH-STABLE
 |---|---|---|
 | **已补齐** | `app_qunar.calendar/low_fare` | 2026-11-02 真机、已登录：低价机票落原生 RN 页（QReactNativeActivity1），low_fare 41.2s 出 14 天；整月日历也带逐日价。已改 y，并写 `path_note("日历","calendar")`。 |
 | 中 | 浏览器往返：携程 PC（国内/国际）、去哪儿 touch（仅国内）、同程（国内 + 登录后 PC 国际 `ts/list`）、途牛（国内 `listFlight` + 国际 H5 `queryFlight` `avgTotalPrice`，SHA→NRT 35 条 ¥3010）。去哪儿国际仍待通路恢复（表单可提交，`touchInterList` 1999 软频控）；飞猪仅国际、去哪儿仅国内 | 绝不能两段单程相加 |
-| 中 | `multi_city` 全 ""（产品有入口，采集端未实现） | 需做"选多段→逐段出价→合并口径"整条链路，属独立特性 |
+| 中 | `multi_city` 全 ""；携程 PC 已有 `fetch_multi` + 轮尾采集 + 只读 `/api/multicity`，缺配置入口/结果面/推送 | 其余渠道仍缺整条链路；矩阵解锁前先做结果面与配置入口 |
 | 低 | 能力对照卡 320 档 | 目前只验了 430/900/1512 |
 
 ## P3 · 收尾
 
-- 19 个未跟踪测试文件要**随发版一起提交**（否则门禁在别人机器上不存在）。
+- 发版前跑 `release_align_check --local`；README/EN 的 tracked 计数必须与干净树实收一致，未跟踪测试不得计入。
 - `docs/HANDOFF_GUIDE.md` §0「当前差距」段已过期，发版后更新。
 - 清理 `_scratch/` 中间产物（不进仓库）。
 

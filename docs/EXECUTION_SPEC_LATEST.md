@@ -1,5 +1,6 @@
 # 机票监控台 · 完整执行提示词（v1.5.307）
 
+最后更新：2026-11-04
 生成时间：2026-10-26
 工作目录：`D:\idea_project\ticket-monitoring`
 真实验收地址：`http://127.0.0.1:8765`
@@ -26,19 +27,41 @@
 
 ## 1. 项目事实与当前状态（开工必核验）
 
-### 1.0 当前状态快照（2026-11-03 00:17，先核验再干活）
+### 1.0 当前状态快照（2026-11-04 12:25，先核验再干活）
 
-- **代码树**：HEAD `0d4b058`；工作树含 **10 渠道（5 浏览器 + 5 App）+ 国际往返/日历/多程解析等** 未提交改动；
-  live 8765 仍是 **7 渠道旧副本**（`_release_final_72d`），工作树 10 渠道尚未部署。
-- **门禁**：全量非 UI **6149 passed / 19 skipped / 0 failed**（2026-11-03 07:41，workers 8，产品代码指纹前后一致；含 r926/r927 国际往返、r929 正文源门禁（8 条，含采集面/往返范围逐行）、r930 多程解析器与 r931 矩阵窄档门禁）；
-  UI **670/670**（2026-11-03 05:54 全量复跑，零 JS 错误；矩阵含携程 App round_trip=国内/国际、同程 App intl=日历/明细、同程 App round_trip=国际；r905 新增的行内自检按钮另由
-  `test_r905` 真渲染 + `test_r640` 三档行高覆盖）；能力线 9 文件 **63 passed**；`channel_contract --strict`
-  **10 家 × 11 轴无缺口**；`release_align_check --local` **25/25**；站点戳 `code:b7b27668ea4d`。
+- **代码树**：HEAD `1c0b8c4`（r925–r939 + r959 已入库）：设备锁 owner/预算观测上健康页、
+  `fetch_budget_s` 配置控件、qunar 城市档位自愈/¥ 价与中转航班号归一、`paced` 主动让位、
+  App 帧预算/弹层 BACK 重试、智行日期入口兼容横线格式、失败现场落盘。
+- **门禁**（2026-11-04 当时快照）：tracked collect **6673**；tracked 口径全量 **6673 passed / 0 skipped /
+  0 failed**（2026-11-04 14:31；qunar 等待预算 7 条用例已入库）；干净克隆 `13aba7e` 为 **6665 passed / 0 skipped /
+  0 failed**（450.65s；真机样本/账本已入 `tests/fixtures`，无环境 skip），UI **670/670**；
+  CI 4 测试片 + 2 UI 片在 `5b66f44` 上重跑；`channel_contract --strict` 10 家 × 11 轴无缺口；
+  `release_align_check --local` 25/25；静态站戳 `code:f479ecf59efd` = 当前 `webui.py`。
+- **发布**：Release 本轮从 `532072e` 再对齐到本次文档提交（代码 `1c0b8c4`）：四平台资产重建、
+  初版式正文更新、tag 最后重指；内容含 App 图标精修与 r935–r939 健壮性修复。
+- **多程开口程（2026-11-03 16:41 实测）**：profile 副本 + 临时库跑
+  SHA→TYO 11-20 / OSA→SHA 11-26，页面「多程超低价」组合卡自报
+  **「多程含税价 ¥2184」**（legs 9C8515 + MM079），`tripType=MC`、
+  `totalBasis=page_multicity_total`、来源 URL 落库；固定等 9s 会假空
+  （实测 12s 才出总价），`fetch_multi` 改为以「多程含税价」为就绪锚最多
+  再等 12s。矩阵 scope 仍「仅 2 段」（含缺口程）；3+ 段仍无组合卡。
+  配置卡/概览/CSV/提醒标题统一按断点显示 `SHA→TYO / OSA→SHA`，
+  不再画成 `SHA→TYO→SHA`。
+- **画中画工作台（2026-11-03 19:30）**：App 登录从 520px 弹窗改为近全屏工作台
+  （`min(1180px,96vw) × min(92dvh,1000px)`，设备按 9:16 顶满），可切专注、可缩成
+  可拖动浮窗继续轮询；内联文字输入、返回/桌面/最近/退格、长按/滚轮；只读
+  `GET /api/app-login/info` 返回分辨率/前台 App/会话统计。共享 `lgCloseModal`
+  现在按 `data-kind=app` 路由到 `appLoginClose`，遮罩/Esc 不会只藏窗继续轮询。
+  真渲染门禁：1512/390 尺寸、浮窗拖拽/恢复、专注进出、浏览器弹窗仍 520px、
+  输入/tap/swipe、零 pageerror；UI **670/670**。App 图标独立 `.bic-app`
+  squircle（顶高光/底收影），智行字标已去原图促销横幅，PiP 标题带 22px 官方图标；
+  像素门禁 `test_app_zhixing_icon_has_no_promo_banner`。
 - **唯一声明源**：`core/channels.py`。新增渠道/维度先跑 `python -m core.channel_contract --strict`
   与 `test_r903/r904/r905`；声明字典禁止重复键，hint 承诺的按钮必须真实渲染。
-- **发布状态**：在线发布树 `0d4b058`（v1.5.307）的 tag/正文/四资产/CI/Pages/ghcr 已同源；
-  工作树未提交/未发布，推送、tag、Release、Pages、live 切换均需明确授权。
-  live 切换的可执行步骤与回滚见 `docs/LIVE_PROMOTION_RUNBOOK.md`。
+- **发布状态**：Release `v1.0` 本轮从 `e65cee1` 刷新到本次文档提交（代码 `0103b4f`）：
+  四平台包按最终 `requirements.txt` 重建、正文初版式重写、tag 最后重指；旧 `e65cee1`
+  资产（早于 numpy）作废。live 8765 仍 `_release_ab04`，切换需明确授权；
+  步骤与回滚见 `docs/LIVE_PROMOTION_RUNBOOK.md`。
 - **本文结构**：§1–§12 是执行口径；§12 之后是历次门禁与时序台账，**不是当前状态**；
   当前状态以本块与 §1 前段为准。
 
@@ -280,9 +303,15 @@
 | `parse_error` | 拿到了响应但解析失败 | 报文结构变化 |
 | `error` | 其他未归类失败（也是未知状态的兜底） | 兜底 |
 | `unsupported` | 该端/该产品本身不提供（如携程单程不售），非错误 | 业务边界 |
+| `paced` | **我方主动不发请求**：配额让位、节流跳过。既不是成功也不是失败，**不进爬取率分母** | 国际列表配额让位 |
 
 纪律：
 - **`empty` 与 `soft_reject`/`error` 不可互相冒充**：前者是业务结论，后者是没拿到结论。
+- **`paced` 与 `soft_reject` 不可互相冒充**：`paced` 是"我方为了守配额主动不发"，
+  `soft_reject` 是"发了、对方拒答"。混用会让**克制**看起来像**被风控**——
+  qunar 国际航线的配额让位原记 `soft_reject`，账面成功率只有 50%，
+  看着像渠道不行，实际它一直在守国际列表配额（2026-11-04 复盘）。
+  纯 `paced` 的一轮由 `core.yield_stats.is_paced()` 识别，直接跳过不记账。
 - 登录墙记 `login` 而不是 `error`（"该重登"与"该重试"是两回事）；门拒不触发退避与"会话失效"判定。
 - 新增状态必须先加进 `PATH_STATUS`，否则会被静默改写成 `error`，账本失真且无报错。
 - 每条账同时记 `http` 状态码与 `url`：200 空、202 软拒、444 关连接、403/429 的处置完全不同，只有原始码能事后区分。
@@ -2567,7 +2596,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · 负控已验：注入 `<div><img class="bic" data-plat="ctrip"><b>智行 App</b></div>` 后判据立刻报 `智行 App / got=ctrip`。
   · 顺带核实两处「看着像缺陷、其实不是」：关注页的 App 名字出现在 `<select><option>` 里（原生控件放不了图标，且收起时尺寸为 0，按可见性已被排除）；特价雷达的「携程」在 `div.chband-name` 里、旁边就有 `data-plat=ctrip` 的官方图标。
   · 另外确认：特价雷达生产库 `special_deals`/`radar_snapshots`/`radar_runs` **全为空**——`low_fare=y` 的口径是「有发现源」（`SPECIAL_CAPABILITY` 7 家齐全、`_app_zhixing_deals`/`_app_qunar_deals` 已接进雷达分发 772/774 行），不是「已出数」；UI 空态也如实写「还没有监控记录」。
-- r805aw 又一处过度声明：`app_qunar.calendar = "y"` → **n**。判据与当初把 `tuniu.calendar` 从 y 降为 n 完全同型：去哪儿 App **有**日历页（登录后 6 天真实价），但采集只把它当「选日」用、随后进列表取明细，源码里 **0 处** `path_note("日历", ...)`（智行是 4 处、账本 49 行），账本全历史也只有 `航班明细` 一种 entry_path。按「calendar = 独立日历通路」的定义不能记 y。同时补 `DIMENSION_NOTES[("app_qunar","calendar")]`，悬停里讲清「App 有日历页，但只用于选日」。
+- r805aw 又一处过度声明：`app_qunar.calendar = "y"` → **n**。判据与当初把 `tuniu.calendar` 从 y 降为 n 完全同型：去哪儿 App **有**日历页（登录后 6 天真实价），但采集只把它当「选日」用、随后进列表取明细，源码里 **0 处** `path_note("日历", ...)`（智行是 4 处、账本 49 行），账本全历史也只有 `航班明细` 一种 entry_path。按「calendar = 独立日历通路」的定义不能记 y。同时补 `DIMENSION_NOTES[("app_qunar","calendar")]`，悬停里讲清「App 有日历页，但只用于选日」。**（r916 纠偏：途牛官方 H5 日历在 `crawlers/special.py`，r805z 只扫了 `crawlers/tuniu.py`；`tuniu.calendar` 已升 y/仅国内）**
   · **漏检根因**：r805z 的日历判据只覆盖浏览器四家，注释却写着「App 渠道由 r700/r701 覆盖」——**那两条是往返门禁，不覆盖 calendar**。已改正注释并新增 `test_app_calendar_is_backed_by_a_real_path`（双向：y 必须真有 `path_note("日历")`；n 必须确实没有且配了悬停说明）。负控把声明改回 y 立刻红。
   · 连带修正两处旧期望（缺口清单从此不再「为空」）：`test_r677` 与 `test_r683` 现在都断言 `app_alignment_gaps("app_qunar") == ("calendar",)`——缺口如实出现在界面的「App 渠道相对浏览器端仍缺：日历」里。
   · 判据教训：**注释里的「由 X 门禁覆盖」也要被验证**。一句想当然的覆盖声明，让一个过度声明躲过了所有门禁；写「已覆盖」时至少要指出覆盖它的用例名并确认它真的测这一维。
@@ -2682,7 +2711,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · 门禁两道：`test_r805ae::test_every_unsupported_round_trip_is_explained`（每个 `round_trip=n` 必须有说明）+ `test_r901::test_unsupported_round_trip_says_why_on_hover`（**真渲染**：往返行每列内层 `.cell` 的 title 里读得到该说明，防「写了但读不到」）。r901 扩展了探针，额外收集维度行每格 title。
   · 复跑：`test_r901` 7 passed（含新用例）、`test_r805ae` 全绿、`test_r805aj`（飞猪弹窗等待期进度，r805aj 已把「慢」定位到同步 `/api/login` 并加了排队/秒数反馈）+ 文档/EOL/维度矩阵 **117 passed**。
 - r813o 全量 pytest 第二轮（最终哈希前）：`tools/test_all.py --no-ui --workers 8` → **5839 passed / 16 skipped / 1 failed（411.9s）**，唯一红是探针 aria-label 的旧字面量断言（`test_v284_batch_probe::test_probe_ui_priority_order_source`）；且跑测期间产品代码被并行会话改写，工具判本轮**作废**。已把 aria 保留「优先级 5 家 + App 需勾选」两层语义并同步该断言，定向 **11 passed**。随后在最终哈希 `c8773dd` 上再跑一轮（日志 `_scratch/test_all_final.log`），以跑前/跑后哈希一致为准。
-- r805bx 能力矩阵「写 n 就必须解释」推广到所有维度：补齐 7 家 `multi_city` 与 `tuniu.calendar` 的悬停说明——浏览器站点**产品上都有多程入口**、去哪儿 App 有「单程/往返/多程」三档，只是采集端没接；只显示「不支持」会被读成「渠道没有这个产品」，正是用户「为啥不都实现」的来源。措辞按事实分两类：浏览器「站点有多程入口，采集端未实现」 / App「采集端未接多程」 / 途牛日历「没有独立日历通路（r805z）」。
+- r805bx 能力矩阵「写 n 就必须解释」推广到所有维度：补齐 7 家 `multi_city` 与 `tuniu.calendar` 的悬停说明——浏览器站点**产品上都有多程入口**、去哪儿 App 有「单程/往返/多程」三档，只是采集端没接；只显示「不支持」会被读成「渠道没有这个产品」，正是用户「为啥不都实现」的来源。措辞按事实分两类：浏览器「站点有多程入口，采集端未实现」 / App「采集端未接多程」 / 途牛日历「r805z 曾误记没有独立日历通路；r916 纠偏为官方 H5 日历（仅国内）」。
   · 门禁升级：`test_r805ae::test_every_unsupported_cell_is_explained` 从只查 `round_trip` 扩到**所有维度**（当前 0 个漏写）；`test_r901::test_unsupported_cells_say_why_on_hover` 在真渲染里遍历每个维度行的每列 `.cell` title，断言 n 格都读得到说明（≥10 格）。
   · 复跑：`test_r805ae + test_r901` 与全量跑里报红的 `test_v284_batch_probe::test_probe_ui_priority_order_source`、`test_r660_pacing_reading_not_clipped`（3 档 + 负控）、`test_r805aj_login_wait_progress` 一起钉哈希复跑 **17 passed**——那 5 条红是在 `webui.py` 被并行会话改写期间测到的（全量跑自己也打了「产品代码被改写，本次结果作废」）。当前 webui 哈希 `c8773ddddb` 前后一致。
   · 审计后仍为 `""` 的端面只有两格，说明均已写明事实：飞猪 H5（代码与解析实测可出数，但生产账本尚无记录）、途牛 PC（生产两次都被滑块拦住，需人工在登录窗口验证）；`qunar.pc=n` 有停服说明。7 面在场性普查 `test_r805ag`（含健康/检索/配置/登录/节流）与登录行对齐 `test_r412/r718/r477` 复跑 **35 passed**（哈希钉住）。
@@ -3014,6 +3043,31 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · 门禁 r903/r822/docs/EOL **104 passed**，`release_align_check --local` **25/25**；静态演示站已重烘。
   · r920–r922 只改能力说明与文档，未改采集逻辑；r919 候选 zip 的说明字符串已落后，发版前必须按最终树重建，不能直接当发布资产。
 
+- r923c 途牛 H5「选目的地→点日期」复验（2026-11-03 22:04）：
+  · 临时 mobile profile + 已保存 cookie 打开 `m.tuniu.com/flight`；点
+    「目的地」打开城市选择器，输入「北京」并选 `.city-name`；
+  · 点 `.date-selector` 打开日期弹层，页面真实 XHR 为
+    `flight-api.tuniu.com/query/flight/v1/calendar`（type=1，SHA→BJS，
+    departureDate=2026-11-05，serverMonth=12），弹层逐日价
+    11-03 ¥1680 / 11-04 ¥420 / 11-05 ¥430 / 11-06 ¥699 / 11-07 ¥410…
+  · 与 `TuniuCrawler.calendar()` / `fetch_tuniu_calendar` **同一端点**；
+    PC 入口仍弹滑块（未绕过），H5 为当前可信日历交互。
+
+- r923b 同程 H5 日期控件交互复验（2026-11-03 22:00）：
+  · 临时 mobile profile + 已保存 cookie 打开 `m.ly.com/ft/touch/index`，
+    点 `.date-choose` 真开「选择日期」弹层；页面 XHR
+    `wx.17u.cn/mihawkapi/calendar/lowestPrice` 返回 180 天逐日价
+    （11-03 ¥520 / 11-04 ¥350 / 11-05 ¥360 …）。
+  · 采集端 `fetch_tongcheng_calendar`（`queryCalendarLowestPrice`）同批
+    返回 **180 行且价格逐日完全一致**；两条端点并存，生产仍走窗历，
+    页面新端点留作漂移备选。
+  · 国际同样复验：切「国际」→上海/曼谷，点日期控件，页面
+    `mihawkapi/calendar/lowestPrice` 返回 11-04 ¥1102 / 11-05 ¥1156 /
+    11-06 ¥1169 / 11-07 ¥883 / 11-08 ¥715…；采集端 90 天窗历逐日
+    完全一致（11-04 1102 … 11-10 670）。
+  · 结论：H5 端面与采集日历同源，矩阵 `calendar=y`；不是“页面能用但
+    采集端没验证”。悬停已补这条证据。
+
 - r923 同程 App 国际单程明细复验与说明收敛（2026-11-03）：
   · 真机 SHA→NRT 2026-11-16 **6 条、最低 ¥875（7.9s，实付价取最低、保留划线列表价）**；`_scratch/tc_intl_result.xml` 内可见春秋 9C8515 / 捷星 GK036 / 乐桃 MM876 等，`app_tongcheng.intl` 已记录。
   · `detail=y` 现在国内/国际都有真机证据：`core/channels.py` 的 detail 说明、源码注释与 `docs/APP_CHANNELS.md` 装机结论统一为「国内/国际单程明细均已接；往返查询落到营销/示例页（6 月/廊曼），未接；多程未接」，清掉 r922 残留的「国际明细未接」。（r924 已推翻「往返未接」：国际往返当日晚些时候接通。）
@@ -3030,7 +3084,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · **端到端复验（2026-11-03 04:24）**：同程 App `fetch("SHA","NRT",["2026-11-17"],ret_date="2026-11-22")` 真机 **9 条组合、最低 ¥2420**（GK036 02:20→06:20；返程 MM877 02:15 +¥0；`retLoaded=true`，20.9s）；行级 `tripType=RT`、`backDate`、`totalBasis=page_roundtrip_total` 齐全，path `往返 ok rows=9`。真机页脚措辞有两种（`已选 21:10 出发 春秋航空` / `已选 02:20- 06:20 捷星航空`），且返程栏有 ~54px 宽的紧凑时刻副本；解析器按宽度≥80px 排除副本，并放宽页脚锁定。返程栏异步渲染，等待上限 30s；等不到仍按去程行总价落账但标 `retLoaded=false`。
   · 新增第二个真实夹具 `tongcheng_roundtrip_live.xml`（现网页 9 去程/8 返程）与 `retLoaded=false` 离线用例；App 解析/采集 **32 passed**。
   · **国内往返负结论（2026-11-03 真机）**：国内档可填返程位，点日期打开的也是同一范围日历（页脚 去程 11-17/返程 11-22/往返总价 ￥785），确认后表单双日期成立；但查询落**单程去程列表**（「已选 09:15」、南航 ¥774 起、无返程栏/无往返总价）。拿不到渠道自算总价 → 不产出、不把单程列表价当往返；`DIMENSION_SCOPE` 保持「仅国际」，采集端不接国内往返。
-  · 最终复验：全量非 UI **6149 passed / 19 skipped / 0 failed**（07:41，当前代码树，含 r926/r927、Release 正文源 8 条门禁、多程解析器与 r931 矩阵窄档门禁）；UI **670/670**（07:25，零 JS 错误；r901 含矩阵窄档真渲染）。
+  · 最终复验：全量非 UI **6165 passed / 19 skipped / 0 failed**（09:55，当前代码树，含 r926/r927、Release 正文源 8 条门禁、多程解析器/存储层/配置隔离、r931 矩阵窄档与 r932 实际渠道错峰）；UI **670/670**（07:51，零 JS 错误）。
 
 - r928 同程 App 多程可行性负结论（2026-11-03）：
   · 真机「多程」档是两段表单（1 上海→北京 / 2 北京→上海，11-17/11-20，提示「2程以上须包含国际/中国港澳台城市」）。
@@ -3058,6 +3112,293 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · 真机 SHA→NRT 11-05/08：**35 条、最低 avgTotalPrice ¥3010**（VN533-VN310，页面「往返 含税」），真实 fetch 1 行 3.8s；只采渠道含税总价，不做两段单程相加。
   · 矩阵 `tuniu.round_trip` 仍 `y`，移除「仅国内」scope（国内 listFlight + 国际 H5 queryFlight 两端均有真机证据）；README/EN/INTL_DESIGN/HANDOFF 同步。
   · 新增夹具 `tests/fixtures/tuniu_intl_rt.json`（35 条真实 productList）与 `test_r927`：35 条、最低 3010、`price==avgTotalPrice`、标准键/告警归一、`fetch` 分流；定向 8 passed；全量非 UI **6127 passed / 19 skipped / 0 failed**（05:28，代码指纹一致）。
+
+- r943 多程轮尾采集 + 只读 /api/multicity（2026-11-03 10:11）：
+  · `main.collect_multicity`：每轮末尾按 `segments_key` 去重，只走本轮启用的携程；
+    首段已过期的行程跳过（渠道会滚回其他日期，落库会把价挂到过期桶）；异常自吞
+    不阻断主扫描；只把渠道页面自报的整单总价写进 `itinerary_daily`，不按段相加。
+  · `GET /api/multicity?route_id=&segments_key=&limit=`：真库以 `mode=ro` 打开，
+    库/表缺失返回 `items=[] + note`（不建库建表、不 500）；演示态明说「演示数据
+    不含多程整单样本」，界面可把「没样本」和「读失败」分开。
+  · 矩阵 `ctrip.multi_city` 说明同步：已有 `fetch_multi`/轮尾采集/只读 API；
+    配置卡/概览整单卡在 r944、整单提醒与历史走势在 r944/r951 补齐；r954 已有
+    2 段生产整单行（¥1476），后续 r956 升 `y`（仅 2 段），3+ 段/缺口程未验
+    （缺口程后于 16:41 实测 ¥2184）；
+    不再写「采集端未实现」。
+  · 门禁：多程 4 文件 **23 passed**（模型/解析/轮尾/API，2026-11-03 10:13），
+    全量见 §1.0。
+
+- r952 门禁不稳双修（2026-11-03 12:18）：
+  · r320b `test_trend_payload_shape_and_clamp` 只 monkeypatch `config_path`，
+    而 `_trend_payload` 优先读 `_State.cfg`；xdist 文件顺序下前序用例留下的库
+    导致 `direct=[]` 假红。改为同时钉 `_State.cfg`（临时库）。
+  · r286 fixture 会误杀固定 8796 端口（随机端口下无归属），并 `goto(networkidle)`、
+    固定 500ms 等健康格；8 worker 下 3 个 ERROR。去掉误杀，改 DOM 就绪 +
+    `#navMon`/`S.users` 条件等待，健康格 `.hc` 条件等待。
+  · 验证：两文件单跑 **15 passed**（12:18）；`-n 4` **15 passed**（12:18）；
+    修复后全量非 UI **6191 passed / 19 skipped / 0 failed**（12:30，648.73s，
+    共 6211），4 个假红未再出现。
+
+- r953 多程整单 CSV 导出（2026-11-03 12:22，`feat/mc-export` 合并）：
+  · 概览多程卡「导出 CSV」只导真实落库历史点（route/segments/价格/阈值/
+    渠道/时刻/最新 legs）；公式注入单元格前缀 `'` 转义；无 latest/历史不显示。
+  · `test_multicity_export` 真浏览器求值 + UI 契约；合并后（2026-11-03 12:22）
+    定向 **17 passed**（2026-11-03 12:46，含历史/API/JS 语法/div 平衡与真下载）。
+  · 按 `80c63eb` 重烘静态站：**5,659,402 bytes**，站点戳
+    `1.5.307 code:ccfc38542bf3 2026-11-03`；`release_align_check --local`
+    **25/25 PASS**（12:40）。
+  · 同树重建 Windows 候选：zip **61,742,809 bytes / 864 entries**，SHA256
+    `bdf974af562c238ac3c4b56618ff5526e3589369a1c847471f59a2d57e653d0e`；
+    无 tests/config/user_data/data 条目，未上传。
+  · 全量非 UI **6192 passed / 19 skipped / 0 failed**（12:54，workers 8，759.17s，
+    共 6211），导出改动零回归。
+
+- r958 并行 stealth/identity WIP 的配置可达性缺口（2026-11-03 14:08；14:20 已修）：
+  · 全量实收 6253（含 9 个未跟踪 WIP 模块/测试）**6227 passed / 19 skipped /
+    7 failed**（736.92s）；6 红单飞全绿（r319 / r660 / r845×2 / r999×2，xdist 竞争）。
+  · 唯一真红 `r601`：`config.example.yaml` 新增 8 键无页面落点
+    （`crawler.humanize`、`humanize_rounds`、`browser_channel`、
+    `android.identity.use_root/reboot/force`、`android.stealth.hide_dev_options`、
+    `android.keep_app_alive`），用户只能改文件。
+  · 修法：全局参数面板新增 **9 个控件**（拟人化动作/轮数、浏览器内核、设备身份、
+    use_root、重启方式、非模拟器强制、隐藏开发者选项、复用前台 App）；保存端
+    写回 `crawler` 三键与 `android.identity/stealth/keep_app_alive`，并与后端钳制
+    一致（rounds 1–6、reboot 枚举、browser_channel 仅空/chrome、use_root null 保留）。
+  · 门禁：r601 **4 passed** + 配置 HTTP 往返 **12 passed**（14:20）；真渲染
+    **9 控件可见、标签正确、零 pageerror**（14:20）。
+  · 最终全量非 UI **6236 passed / 19 skipped / 0 failed**（14:46，workers 8，
+    683.41s，共 6255），含未跟踪并行 WIP 测试；tracked **6214**。
+  · 按最终树重烘站点：**5,662,428 bytes**，站点戳 `code:eac4fcd5bcf9`；
+    候选 zip **61,805,134 bytes / 864 entries**，SHA256
+    `1fc4276e7cd4901393219b1bd927ea26eea1ae3eb53ad3908ccb8f56e59ac31e`；
+    `release_align_check --local` **25/25**（14:50）。
+  · 静态站 file:// 真渲染（14:57）：矩阵 ctrip 多程格 **✓**、title 含
+    「仅 2 段」，App 缺口明确列「智行/去哪儿/携程/同程/飞猪 App 多程」；
+    390/900 档 9 个新控件均可见，页面 scrollWidth 380/890 ≤ 390/900，零 pageerror。
+  · UI 自检 **670/670**（15:15，零 JS 错误），覆盖矩阵 y 与 9 个新控件。
+
+- r916 途牛日历纠偏：官方 H5 日历接入监控（2026-11-03 18:23）：
+  · 事实核验：`crawlers/special.py::fetch_tuniu_calendar` 调
+    `flight-api.tuniu.com/query/flight/v1/calendar`（type=1），与途牛页面
+    点日期控件同一 XHR；真实 H5 搜索流点「查询/日历」后返回 **125 个
+    逐日价**（2026-11-03..2027-08-25，¥360–1790，11-05 ¥420，裸价不含税）。
+    r805z 只扫了 `crawlers/tuniu.py`，漏掉特价雷达已在用的 `special.py`，
+    把 `tuniu.calendar` 误记 n。
+  · 接入：新增 `TuniuCrawler.calendar()`，复用同一接口并写
+    `path_note("日历","calendar", rows=N)`；国际 unsupported、请求失败
+    error、无价 empty，日历价不冒充含税明细。
+  · PC 入口实测：临时 profile + 已保存 cookie 打开 PC 列表页，页面弹
+    「安全验证·拖动下方滑块」；未绕过，PC 日历不记已验证，证据取 H5
+    官方日历接口（用户截图 2 的 H5 日期弹层同源）。
+  · 去哪儿 App 日期控件（截图 3）：既有 `_pick_date` 点日期行打开日历、
+    `calendar()` 解析 `q_flight_calendarDayItem#`（2026-11-02 真机
+    BJS→SHA 61 天 ¥380–420）；账本无「日历」entry_path 是因探针不写
+    生产库，`app_qunar.calendar=y` 仍由源码 + 真机探针支撑，不冒充
+    生产账本。
+  · 口径：`CHANNEL_DIMENSIONS["tuniu"]["calendar"]="y"`，
+    `DIMENSION_SCOPE=("tuniu","calendar")="仅国内"`，悬停写 125 行实测价
+    与裸价口径；`SPECIAL_CAPABILITY["tuniu"].sources` 补 `tuniucal`
+    （不再只写「特价榜单」）。
+  · 门禁：`tests/test_r916_tuniu_calendar.py` 5 条 + r805z/r805ax/r677/
+    special radar **56 passed**；`core.channel_contract --strict` 10×11
+    无缺口；文档矩阵 HANDOFF 两处 n→y；站点待重烘/对齐。
+
+- r917 同程 H5 端面恢复 + WIP 配置落点（2026-11-03 19:17）：
+  · H5：48h 新鲜度会把「定时任务近期走 PC/窗历」误判成未验证
+    （同程 H5 历史 35 次 ok/1224 行，最近 11-01 17:07；2026-11-03
+    手工 UI 复验国内/国际价格日历可用）。端面规则放宽为近 30 天账本，
+    `tongcheng.h5` 恢复 y，悬停保留最近成功时间与主路。
+  · 并行 WIP 配置落点：策略闸门、滑块 daily_cap/max_fails/
+    device_distance/single_shot、identity.align_display/spoof_abi 共 7 键
+    补页面控件 + 保存写回/钳制；r601/r606/r958 与配置往返 **13 passed**。
+  · 全量（含 WIP）**6317 passed / 19 skipped / 0 failed**（508.17s，共 6336）；
+    UI 门禁与站点重烘/对齐随后跑。
+
+- r956 矩阵 ctrip.multi_city 升 y（仅 2 段）（2026-11-03 13:10）：
+  · 依据 r954 生产行 ¥1476（IJ004+MM304）与配置/采集/概览/来源/提醒/历史/导出
+    闭环，`CHANNEL_DIMENSIONS["ctrip"]["multi_city"]` 由 `""` 升 `y`，
+    `DIMENSION_SCOPE` 写「仅 2 段」；3+ 段实测无组合卡、缺口程未验
+    （后于 16:41 实测 ¥2184）。
+  · App 对齐缺口由 `()` 变为 `("multi_city",)`（5 家 App 均未接多程）；
+    r677/r683 门禁改为「仅 ctrip 可 y、必须带 scope、ctrip 源码有 fetch_multi」。
+  · Release 正文/门禁改为「已有 2 段生产整单行 + 矩阵 ✓ 仅 2 段 + 3+ 段未验」；
+    矩阵/正文定向 **39 passed**（13:09）。
+  · 按当前树重烘静态站：**5,659,607 bytes**，站点戳
+    `1.5.307 code:338493de3e01 2026-11-03`；`release_align_check --local`
+    **25/25 PASS**（13:14）。
+  · 同树重建 Windows 候选：zip **61,742,031 bytes / 864 entries**，SHA256
+    `8f40c9946bb6f7157e45ecad0ac9dcdc85d24882382404dd6e2dd7414214fe35`；
+    无 tests/config/user_data/data 条目，未上传。
+  · 全量 **6180 passed / 26 skipped / 6 failed**（13:12，732.75s）；6 红均为
+    文档/旧断言，同步后定向 **138 passed**（13:33）；全量待并行 WIP 落定复跑。
+
+- r954 携程 PC 两段多程生产行（2026-11-03 12:52）：
+  · 用 Ctrip profile **副本**（不碰 live 会话）跑 `collect_multicity`：
+    SHA→TYO 11-20 / TYO→OSA 11-23，页面自报多程含税价 **¥1476**，
+    legs **IJ004 + MM304**；来源 URL
+    `flights.ctrip.com/online/list/multi-sha-tyo-tyo-osa?depdate=2026-11-20_2026-11-23...`。
+  · 临时库 `itinerary_daily` 1 行 + `itinerary_history` 1 点；`tripType=MC`、
+    `totalBasis=page_multicity_total`、`prov{path,url,totalBasis}` 均落库；
+    **未写 live 库**。
+  · 追加 3 段实测：SHA→TYO 11-20 / TYO→OSA 11-23 / OSA→SHA 11-26，
+    结果页**无「多程超低价」组合卡**，解析器记 empty；3+ 段未接通（不是渠道
+    没有），缺口程未验（后于 16:41 实测 ¥2184）。
+  · 矩阵仍 `""`：2 段已有生产整单行，3+ 段未接通；`core/channels.py`、
+    HANDOFF、Release 正文同步「已有 2 段生产整单行」。
+
+- r951 多程整单历史 + 概览 sparkline（2026-11-03 11:58，`feat/mc-history` 合并）：
+  · `PriceStorage` 新增 `itinerary_history`（append-only，90 天保留，按
+    platform/route/segments_key/depart_date/fetched_at 唯一去重；`itinerary_daily`
+    仍只保最新一条）。`itinerary_history(segments_key, limit)` 只返回真实落库点，
+    不补点、不按段价折算。
+  · 概览多程卡在 **≥2 个真实整单点**时画 sparkline（心理价线、aria 播报），
+    单点或空历史不画空图；接口随 `mcRoutes.history` 返回。
+  · 定向 `test_multicity_history` + API/UI 契约 **13 passed**（12:01）；
+    tracked 计数 6207→**6210**（r953 导出/下载用例后为 6212）。
+  · 合并后按 `80c655a` 重烘静态站：`docs/site/index.html` **5,657,639 bytes**，
+    站点戳 `1.5.307 code:28872766340e 2026-11-03`；`release_align_check --local`
+    **25/25 PASS**（12:02）。
+  · 同树重建 Windows 候选：zip **61,742,550 bytes / 864 entries**，SHA256
+    `de9489c240ded91d57d345f6a46ef3d20c78d969d59dacdbdd9f6620598bff5e`；
+    无 tests/config/user_data/data 条目，未上传。
+  · 真渲染（demo 注入）：≥2 真实点 → `.mcspark svg` 存在且 aria 含「整单总价
+    历史」；单点/空历史不画；390 档 scrollWidth 380 ≤ 390；零 pageerror。
+
+- r950 当前树全量冒烟 + 红点单飞复验（2026-11-03 11:48）：
+  · 全量非 UI（workers 8，6211 项，耗时 10:41）**6184 passed / 19 skipped /
+    1 failed / 3 errors**：`test_r320b_trendlong::test_trend_payload_shape_and_clamp`
+    1 红，`test_r286_webui` 3 error。
+  · 4 项单飞 **7 passed**（8.0s，同树同代码）：错误签名是 Playwright TargetClosed /
+    demo 竞争，不是产品回归；按单跑口径 **6188 passed / 19 skipped / 0 failed**。
+  · UI **670/670**（11:18）；`release_align_check --local` **25/25**；tracked **6211**。
+
+- r949 静态演示站按当前树重烘（2026-11-03 11:29）：
+  · `python docs/demo_build.py` → `docs/site/index.html` **5,656,613 bytes（5,524 KB）**，
+    站点戳 `1.5.307 code:3860ec683303 2026-11-03`；演示数据仍为合成数据，
+    未烘入任何登录态。
+  · `release_align_check --local` **25/25 PASS**（11:31），此前唯一红项（站戳落后）
+    已清除。站点尚未发布/部署，推送后 Pages 才会更新。
+
+- r948 Windows 候选包按当前树重建（2026-11-03 11:24）：
+  · 用 `_scratch/_pkg_final_venv`（PyInstaller 6.22.2，干净依赖）按 `TicketMonitor.spec`
+    构建；`TicketMonitor.exe --version` = **1.5.307**；Analysis TOC 含
+    `core.multicity`、`crawlers.ctrip_multicity`、`webui`。
+  · zip **61,740,889 bytes / 864 entries**，SHA256
+    `e7c5ac26f699cbb57a86ca34d857192dd3bd96ed93bd2e73cf69bf8c5eac46d2`；
+    扫描 tests/config/user_data/data 条目 **0**；未进 `dist_package`、未上传。
+  · 该包构建于 HEAD `3561197` + r946/r947 工作树；发版冻结后若树再变必须重算，
+    不能复用。
+
+- r947 多程提醒跳过过期首段（2026-11-03 11:18）：
+  · 缺陷：`_multicity_alert_round` 只挡行龄 >6h；跨夜后「首段已过期」但行仍新鲜
+    的行程会被当成达标推送（关注航班提醒早有首段日期门，多程缺失）。
+  · 修法：`segs[0]["date"] < today` 直接跳过，不读去抖状态、不推送。
+  · 门禁：新增 `test_expired_first_segment_never_alerts`（新鲜行 + 2020 首段 → 0 推）；
+    多程 5 文件 **31 passed**（11:18）。
+
+- r946 多程来源页可溯源（2026-11-03 11:13）：
+  · 缺口：`save_itinerary` 只存 legs，`fetch_multi` 的 `prov`（path/url/totalBasis）
+    被丢弃；概览只能看到平台与时刻，无法回到渠道结果页核对。
+  · `save_itinerary(..., prov=)` 只保留 path/url/totalBasis 并写进 `extra.prov`
+    （旧行无此键就不显示链接，不伪造来源）；`collect_multicity` 透传 `row.prov`；
+    概览 `latest.prov` 渲染「来源」链接，仅接受 `http(s)`，`target=_blank`
+    `rel=noopener noreferrer`。
+  · 门禁：多程 5 文件 **30 passed**（11:13；模型/解析/API/轮尾/提醒），含来源往返 +
+    坏 prov 丢弃；真渲染 1512/900/390：链接 28px、无横向溢出、`javascript:` 负控
+    不渲染、零 pageerror。
+
+- r945 多程整单提醒接线 + dict 航线兼容 + 按用户勾选（2026-11-03 10:33）：
+  · `bed5cdb`：`collect_multicity` 同时吃 `Route` 对象与 dict 航线（配置页保存后
+    热重载的形态），segments/首段日期按两种形状取，避免同一行程重复查或静默跳过。
+  · `58e4e82`：配置/概览/提醒接线契约。`_multicity_alert_round` 在轮尾采集后按
+    整单总价与心理价提醒：去抖键含用户+行程+整单线；价格回到线上方清 0；继续
+    下探 ≥¥10 才补推；行龄 >6h 不提醒；通知未被接受不写状态（下轮可重试）。
+  · `b49ae51`：轮尾按行程聚合订阅用户，只采「至少一个订阅用户勾选携程」的行程；
+    提醒按行平台过滤，未勾携程的用户不再收到多程提醒——不替用户采/推他没选的渠道。
+  · 定向多程 5 文件 **29 passed**（2026-11-03 10:53：模型/解析/API/轮尾/提醒）。
+    当前 tracked **6214**；主树全量复跑见 §1.0（不虚报未完成的绿）。
+
+- r944 多程配置卡 + 概览整单卡（2026-11-03 10:23）：
+  · 配置页新增「添加多程行程」：2–4 段行编辑（三字码 + 日期）、整单心理价、
+    携程采集提示；保存前前端校验段码/日期/重复行程，后端 `_normalize_mc_users`
+    再归一 from/to/dates，非法段 400，不留到下一轮 `build_routes` 才炸。
+  · 概览把多程与单 O-D 走势分开供货：每卡显示最近整单总价、整单线达标、
+    未采集原因（未勾选携程 / 尚无整单行 / 只取渠道页面），不画空走势；
+    卡脚明写「整单总价只取渠道页面，不由段价相加」。
+  · 轮尾多程采集移入 `PULSE.end()` 之前：耗时/异常计入本轮脉冲，不再是
+    看不见的尾巴。
+  · 门禁：`test_multicity_api.py` **6 passed**（2026-11-03 10:17；配置归一/
+    HTTP 保存往返/概览数据形状/只读 API 空态）；保存真写 yaml 后回读
+    segments 与 from/to 一致。
+
+- r942 携程 PC 多程结果解析与 `fetch_multi`（2026-11-03 10:07）：
+  · `crawlers/ctrip_multicity.py`：`multi-sha-tyo-tyo-osa` URL 构造 + 真实结果页
+    「多程超低价」组合卡解析；总价只认页面自报「多程含税价」，legs 只放航班号/
+    航司/时刻/段城市，`build_mc_extra` 从形状上禁止段价字段。
+  · `CtripCrawler.fetch_multi`：2–4 段归一后取首个组合卡；没有组合卡记 `empty`，
+    异常记 `error`，不拿单段价冒充整单总价。
+  · 真实夹具 `tests/fixtures/ctrip_multicity_result.txt`（SHA→TYO 11-20 /
+    TYO→OSA 11-23，¥1298、9C8515 + MM304）+ `test_ctrip_multicity.py`。
+
+- r941 日桶聚合价格带下限守卫（2026-11-03 10:10）：
+  · r938 只挡新采集行；`refresh_daily` 仍会把 <¥100 的元素写进日桶
+    lo/open/close（共享库实测 6 行 lo<100），走势被优惠券/占位价拉成假低价。
+  · `core/storage.py::refresh_daily` 在元素转 float 后、分桶前跳过 `< PRICE_MIN`；
+    低于价格带的价不参与 n/lo/hi/open/close/avg。该 (航线,日期,聚合日) 刷新时
+    先删桶再按干净元素重建。
+  · 新增 `test_sub_band_price_never_enters_daily_bucket`（同桶塞 ¥20 与 ¥500，
+    lo 必须 ≥100）；定向日桶 **16 passed**（2026-11-03 10:10）。
+  · 共享生产库 5 行 raw / 6 行日桶历史低价未删（未授权写库）；本轮只阻止继续
+    污染，已刷新桶会重建为干净值。
+
+- r940 公开演示站线上回核（2026-11-03 09:56）：
+  · 匿名请求 `https://dengmeiluan.github.io/ticket-monitoring/site/`：站点戳 **`1.5.307 code:6c85a00f14c1 2026-11-03`**（与 Release `ab04c22` / live webui 同源）；5.64 MB。
+  · 页面含 `app_ctrip` / `app_tongcheng`（10 渠道），`10 渠道`文案在；残留的 4 处「7 渠道」均在 CSS/JS 注释，不是可见旧文案；无旧缓存。
+
+- r939 1999 软拒诊断语义（2026-11-03 09:55）：
+  · 线上 qunar 国际 1999/8 软拒时，日志已写明「认证 Cookie 仍在场、按限流/软拒退避」，健康卡却落成「本轮无票」/「换日期或重登」，属可判断/可指导缺口。
+  · `core/health.py` 新增软拒标记：保留 note「渠道软拒（1999）已退避；不是无票」；`core/health_diag.py` 单列「渠道软拒/已退避」卡，动作「下轮自动重试；不要据此换日期或重登」（不再被 generic empty 吞掉）。
+  · 门禁：health 相关 **42 passed**（新增软拒正控 + 原登录墙/无票/环境故障不回归）；全量非 UI **6165 passed / 19 skipped / 0 failed**（09:55，workers 8，含 webui/channels/main/pacing/storage/multicity/models/app_qunar_parse/health/health_diag 指纹前后一致）。
+
+- r938 去哪儿 App ¥20 假票价根因修复（2026-11-03 09:42）：
+  · 生产证据：`flight_prices` 中 app_qunar 多条 `code=""、name=""、price=20/25`（SHA→NRT/HAK/SIN），日志被孤低价守卫拦截；根因是 `app_qunar_parse` 把无航班身份、价格落在优惠卡上的卡片也 append 成行。
+  · 修法：低于 `core.models.PRICE_MIN` 的「价格」不当票价；**无航班号且解析价低于价格带**（¥20/¥25 优惠卡）整行跳过；有航班号但价格越界的行保留身份、`price=None`。真实中转卡（无 code 但价 ≥100 或价未解析）不误杀。
+  · 门禁：`test_r664_qunar_parse.py` 新增无身份低价卡跳过 + 有身份越界价置 None 两条；定向 Qunar 解析/边界 **21 passed**；全量非 UI **6164 passed / 19 skipped / 0 failed**（09:42，workers 8，webui/channels/main/pacing/storage/multicity/models/app_qunar_parse 指纹前后一致）。
+  · 存量 4 行 ¥20 历史数据未删（共享生产库，未授权写）；本轮只阻止继续落库与推送假价。
+
+- r937 live 8765 切换复核（2026-11-03 09:20）：
+  · 实测 PID **47952**，cwd `D:\idea_project\_release_ab04`，启动 08:58:06；`webui.py` sha12 `6c85a00f14c1`；`/api/channel-dims` **10 家**；`enabled_platforms` 6、诊断卡 7；config 与主树 diff=0。
+  · Release `v1.0` → `ab04c22`，正文 10 渠道，四资产 digest 4/4（见 r936）。
+  · 线上 390 真渲染（只读）：矩阵 **10 列 / 10 行**、滚到最右首列 `left=28`=容器左缘（冻结生效）、滑动提示可见、10 个探针 chip、零 pageerror。
+  · live 树**不含** r933–r935（多程数据层/`Route.segments`/实际渠道错峰）；旧 `_release_final_72d` 保留作回滚。
+
+- r936 线上 Release 初版正文回核（2026-11-03 09:18 时点；**09:54 起 tag 已重指 `e65cee1`，本节保留当时记录**）：
+  · GitHub latest：tag `v1.0`、名称「机票监控台 · 初版（滚动更新）」、updated 00:57Z；正文已是 10 家渠道。
+  · 用同一套正文门禁跑**线上正文**：`count/name/multi/surface/rt_row` 全 0 错、10 行矩阵、0 个 `{{…}}` 占位符；正文写 6169 tracked / 6149 passed / 670 UI，四资产 digest 与正文 SHA **4/4 相等**；源码 `ab04c22`。
+  · 说明：`ab04c22` 早于 r933–r935（多程数据层/配置隔离不在该 Release，产品叙事仍准确）；live 8765 进程是否仍跑旧 7 渠道代码与 Release 正文是两件事，不能互相冒充。
+
+- r935 发行包包含性 + 冻结态冒烟（2026-11-03）：
+  · 用 `TicketMonitor.spec` 在 `_scratch/pkgcheck`（临时 work/dist）复建 Windows 候选：`TicketMonitor.exe --version` = **1.5.307**、exit 0；`Analysis-00.toc` 与 PyInstaller archive 均含 **`core.multicity`**，新模块不会在冻结包缺失。
+  · `Dockerfile` 为 `COPY . .`，新模块同样入镜像；`requirements.txt` 未新增依赖。
+  · 冻结 exe 的 CLI 不暴露 `--demo/--port`（演示仅源码入口 `python webui.py --demo`），因此未启动服务，避免与 live 8765 抢端口；候选 zip 仍须按最终树重建并重算 SHA（Runbook 已标注 `3c472292` 早于 r931–r935）。
+
+- r934 多程配置形状 + 调度隔离（2026-11-03，未接采集/UI）：
+  · `Route` 新增 `segments`；`build_routes` 用 `core.multicity.normalize_segments` 校验并由 segments 派生首/末段与日期，非法形状启动期直接报错，不退化成单 O-D。
+  · 新增 `route_query_registry(users)`：多程航线单列 `skipped`，**绝不进入单程 registry**；扫描轮日志写明「采集端未接，本轮跳过 N 条多程航线」。
+  · 门禁：`tests/test_multicity_model.py` 12 passed（2026-11-03 09:00；含 segments 派生/非法拒绝/多程不进 registry/普通航线仍注册）。
+  · 矩阵 `multi_city` 仍 `""`，仍缺 `fetch_multi`、多程结果面、推送与配置 UI。
+
+- r933 多程数据模型第一层（2026-11-03，未接采集/UI）：
+  · 新增 `core/multicity.py`：2–4 段归一、`segments_key`、MC extra（`tripType="MC"`/`legs`/`totalBasis`）；legs 禁止任何价格字段，从形状上杜绝「两段单程相加冒充多程总价」。
+  · `PriceStorage` 新增 `itinerary_daily`（主键 platform+route_id+segments_key+depart_date；total_price + legs_json）与 `save_itinerary`/`itineraries`；拒绝非正总价、段价字段、depart_date 与首段不一致；**legs 必须与 segments 逐段 from/to/date 对上**（防把别的行程拼进同一总价）；单 O-D `flight_daily` 不混入多程。
+  · 新增 `tests/test_multicity_model.py` 11 条（归一/键/extra/存储 upsert/拒非法/不与 flight_daily 混写）；矩阵 `multi_city` 仍为 `""`，尚未接 `Route.segments`、fetch_multi、UI 与推送。
+  · 验证：定向 11 passed（含逐段一致性负控；修掉校验循环复用 `key` 变量覆盖返回键的缺陷）；全量非 UI **6161 passed / 19 skipped / 0 failed**（08:48，workers 8，webui/channels/main/pacing/storage/multicity 指纹前后一致）；UI **670/670**（07:51，webui 未变）；站点 `code:6c85a00f14c1`；align **25/25**（README 跟踪口径 **6169**，新测试文件尚未入库不计入）。
+
+- r932 起跑错峰按本轮实际渠道 + 健康页门禁条件等待（2026-11-03）：
+  · 真实现偏差：`stagger_offset` 固定按 5 家浏览器分步、App 走 crc32 哈希；配置页提示却写「按本轮实际渠道均分」。
+  · 修法：`stagger_offset(plat, base, channels=None)`；主循环把 `get_crawlers(plats)` 得到的本轮渠道名传入 `_timed_fetch → _stagger_wait`，App 也拿到确定性偏移；不在本轮集合内的渠道保留哈希兜底。
+  · 健康页 UI 测试把固定 900ms 改为 `wait_for_selector('#hbody .hcells', 15s)`：独立审计实测 300ms 即出 10 格，负载下会晚于 900ms；这是门禁等待问题，不是产品缺陷。
+  · 验证：定向 pacing + 两条旧红 **26 passed**；全量非 UI **6150 passed / 19 skipped / 0 failed**（08:15，workers 8，webui/channels/main/pacing 指纹前后一致）；UI **670/670**（07:51，零 JS 错误）；站点 `code:6c85a00f14c1`；`release_align_check --local` **25/25**（README 跟踪口径 **6169**）。
 
 - r931 能力矩阵窄档冻结首列 + 滑动提示（2026-11-03）：
   · 真渲染实测（390 视口，demo 当前树）：`.dimwrap` 内容宽 698 / 可视 324；滚到最右后维度首列 `left=-346`，读者只剩一排勾叉；屏上没有任何「可横滑」提示。

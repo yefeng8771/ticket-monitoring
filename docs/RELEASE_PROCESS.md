@@ -55,11 +55,16 @@ Release cadence:
 1. **Freeze** parallel writers; confirm `webui.py`, backend, tests and docs are the same coherent state. Do not build from a moving worktree.
 2. **Integrate** the complete feature backend, tests and pins. Run, and only proceed when all are green:
    - `python tools/test_all.py --workers 8` (default parallel gate: syntax + pytest via xdist + UI self-check side by side)
-   - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q` (serial fallback; same test set, CI-identical command)
+   - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q` (serial fallback; same test set as CI, which splits the same files across 4 shards)
    - `python docs/uitest.py`
    - the project’s live 8765 acceptance
    - the channel × domestic/international matrix
    - required performance measurements
+   - a **clean clone** full run (`git clone` the exact release tree, no `data/`,
+     `logs/`, `_scratch/`) must report **0 skipped** on the 6673-test scale.
+     Data/environment skips are release blockers; if an environment-only gate
+     (missing font/Chromium/adb) truly cannot run, list it explicitly in the
+     release report instead of letting it hide inside a green summary.
 3. **Back up** the complete Git history, uncommitted work and necessary audit evidence outside the repository; verify restore. Backups must never enter the public repository or packages.
 4. **Converge history**: inventory public branches, tags, Releases and deployments; reduce the final source to a single root initialization commit. Before and after the rewrite, compare the source tree and assert that no verified feature is lost except explicit public-material and distribution cleanup. Check for new remote commits before updating; use operations with expected-state protection. Record the operation in the release notes.
 5. **Bump and bake**: only after gates pass, bump the version in `main.py`, its version gate and `docs/release-notes-v<version>.md`; update README/EN counts, screenshots and site. CN/EN README, Release and site keep the full first-release introduction with one chapter order, one screenshot order, one set of facts and one capability boundary. Public material must not accumulate internal rounds, duplicated release prose or development logs.
@@ -96,7 +101,7 @@ Do not push, retag, publish or rewrite shared history without explicit user auth
 - **对账的 pytest 项数是「已跟踪测试」**（`git ls-files tests` + `pytest --collect-only`），不是工作树全量。新增测试未入库时不计入；把它们 stage/commit 后数字会变。因此：**对齐放最后**，任何 staging/提交之后同步 README/EN 的跟踪口径并重跑 `release_align_check.py --local`。
 - **对账的 UI 项数读 `HEAD:docs/uitest_result.txt`**（已提交版本），不是工作树。工作树新跑出 670/670 并不会让对账变 670；发布提交要把新的 uitest 结果一起入库，README 的 UI 断言数同步改成结果文件里的实际值，再对账。
 - **全量门禁在并发会话下用 `--workers 4`**：8 worker 曾出现 demo free-port 竞态（`test_r851` setup 连接拒绝，已加三次新端口重试）与内存压力。跑前/跑后必须看工具的 CODE_GLOBS 哈希 WARN；一旦产品代码被改写，整轮作废，不得把其中的 passed 当绿证。
-- **线上 8765 只在写会话停止后重启**：比较进程启动时间与 `webui.py` mtime；启动早于最后一次改动即为旧代码。重启后复验 `/api/health` 诊断卡 7 家、探针 7 chip、390 无横向溢出。
+- **线上 8765 只在写会话停止后重启**：比较进程启动时间与 `webui.py` mtime；启动早于最后一次改动即为旧代码。重启后复验 `/api/health` 诊断卡 10 张（5 浏览器 + 5 App）、探针 10 chip、390 无横向溢出。
 - **本地 25/25 是快照**：它证明 README/截图/站点戳/计数在当前 tracking 下自洽；在线 Release/tag/四平台包/ghcr 镜像仍需带 token 的在线对账与 `release-build` 工作流。
 
 ### 6.1 在线面预检（2026-11-02 01:00 +0800 实测）
@@ -117,23 +122,29 @@ Do not push, retag, publish or rewrite shared history without explicit user auth
 - **资产 502 的回退**：`SHA256SUMS` 下载失败时，用 release API 的 `digest` 对正文 SHA 做**明确标注**的回退校验；不静默跳过，也不把代理 502 当产品失败。
 - **预跑实测（29/46）**：线上正文 intro/version 仍 1.5.306、**正文 SHA 只与 win64 当前资产一致（另 3 个 zip 的 API digest 不在正文）**、Pages 部署 **11 个**、站点戳 `2a326e3c` 旧树、source/tag/CI/release-build/ghcr 不同源；live 8765 1.5.307 通过。发版须重建正文+四资产（同一组 SHA）、`prune_deployments.py` 到 1、重烘站点、CI/release-build 绿、ghcr 新 SHA，再在线对账全绿。
 - **计数以冻结后的 tracked 为准**：并行会话与日期参数会让计数漂移；发布前冻结写者、重跑 4w、`git ls-files -z tests` 重新 collect 并同步 README/EN/UI，再做 root commit。
+- **资产必须用最终依赖重建**：依赖清单变化后旧资产不可复用——`e65cee1` 四平台包构建早于 `numpy` 声明，冻结包内滑块缺口检测会静默无候选。发版必须按最终 `requirements.txt` 重跑 release-build，并重算四资产 SHA、正文与 `SHA256SUMS.txt`。
 
 ### 6.3 发布后在线复核（2026-11-02 发布轮，发布树 0d4b058 / v1.5.307）
 
 > 只读核对，不包含当前工作树未发布的 10 渠道改动。旧 §6.1/§6.2 的
 > 「CI 红 / Pages 旧戳 / ghcr 5cff7f5」是 2026-10-31 预跑时的历史问题，
 > 本发布轮已全部关闭；不要把那段当现状。
+>
+> **2026-11-03 09:54 更新**：tag 已重指 `e65cee1`（多 4 个提交），
+> ghcr `latest` = `sha-e65cee1` digest `5fb025bb…`（与 Release 同 digest）；
+> 下表是 09:20 时点记录，`ab04c22` 现仅对应 live 树。
 
-| 项 | 实测（2026-11-02T08:07Z 前后） |
+| 项 | 实测（2026-11-03 09:20） |
 |---|---|
-| Release | tag 恒定 `v1.0` → `0d4b058`；名称「机票监控台 · 初版（滚动更新）」；正文 `当前版本 v1.5.307 · 源码 0d4b058` |
-| 资产完整性 | 4 个平台 zip + `SHA256SUMS.txt`，updated 2026-11-02T08:07Z；本地 SHA256SUMS 与 Release API `digest` **4/4 相等**（win64/linux-x64/macos-arm64/macos-x64） |
-| CI / release-build / Pages | 三个工作流均在 `0d4b058` 上 `completed success`（2026-11-02T07:23Z）；Pages `build_type=legacy`（`/docs`），status `built` |
-| 容器镜像 | 匿名 manifest **200**；`latest` 与 `sha-0d4b058` **同一 digest** `sha256:90bdf31e…`；created 2026-11-02T07:24Z；仅 `linux/amd64` |
+| Release | tag 恒定 `v1.0` → `ab04c22`；名称「机票监控台 · 初版（滚动更新）」；正文 `当前版本 v1.5.307 · 源码 ab04c22` |
+| 资产完整性 | 4 个平台 zip + `SHA256SUMS.txt`；Release API `digest` 与正文 SHA **4/4 相等**（win64/linux-x64/macos-arm64/macos-x64） |
+| CI / release-build / Pages | 三个工作流在 `ab04c22` 上 success；Pages 部署成功 |
+| 容器镜像 | 匿名 manifest **200**；`sha-ab04c22` digest `sha256:9b72acb1…`；`latest` = `sha-934e108` digest `sha256:c8fe5de9…`（HEAD 更新，**非同 digest**；要 Release 同源请 pin `sha-ab04c22`） |
 | Issue / PR | 0 open / 0 open（GitHub API `open_issues_count=0`） |
 
-**结论**：发布树的 tag、Release 正文、四资产、CI、Pages、ghcr 已同源。
-当前工作树（10 渠道 + 国际往返/日历/多程解析等）尚未提交/发布；live 8765 仍是 7 渠道旧副本。
+**结论**：Release 的 tag、正文、四资产、CI、Pages 已同源；镜像 `latest` 跟随 HEAD，
+不再与 Release 源同 digest，对外说明必须区分 `latest` 与 `sha-ab04c22`。
+当前工作树另有 r933–r935（多程数据层/配置隔离/实际渠道错峰）未提交；Release `v1.0` 当前 → `e65cee1`（首发 `ab04c22`），live 8765 已切到 `_release_ab04`（10 渠道，PID 47952）。
 
 ### 6.4 本地打包环境必须隔离（2026-11-03 实测）
 
@@ -155,3 +166,12 @@ Do not push, retag, publish or rewrite shared history without explicit user auth
   SHA256 `3c472292102f8a0d45b06bfaef962a350d513359e3d7bba2666891b8a208a8a4`
   （含同程 App 国际往返与 `PATH_CN["app-roundtrip"]`；r919 旧包 `35a9c2c9…` 已作废）。
   仅存 `_scratch/ticket-monitoring-win64-candidate-root.zip`，未进 `dist_package`、未上传。
+- 当前树候选（2026-11-03 23:30，源码 `318a70d`，含 App 设备锁 WIP）：
+  PyInstaller 6.22.2 构建成功，`--version=1.5.307`，TOC 含 `core.multicity` /
+  `crawlers.ctrip_multicity` / `webui` / `crawlers.captcha` / `crawlers.slider` /
+  `core.policy` / `core.android.vendor` / `core.android.hardening`；zip
+  **117,001,794 bytes / 1027 entries**，SHA256
+  `0c4cc2aa4da3966a0628044ae3bf84ffe4b8144d0ed35ab8c468c75c8064bab4`；
+  `_internal` 含 cv2/numpy（干净 venv 已装 numpy 2.4.6 / opencv 5.0.0），
+  tests/config/user_data/data 条目 0（`_internal/cv2/data/` 是 OpenCV 合法数据目录）；
+  未上传。冻结后重算，不复用；旧 `67babb53` 作废。
