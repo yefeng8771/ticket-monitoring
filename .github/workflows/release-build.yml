@@ -20,7 +20,7 @@ jobs:
         include:
           - os: windows-latest
             asset: ticket-monitoring-win64.zip
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             asset: ticket-monitoring-linux-x64.zip
           - os: macos-latest
             asset: ticket-monitoring-macos-arm64.zip
