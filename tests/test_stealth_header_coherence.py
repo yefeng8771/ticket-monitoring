@@ -150,34 +150,46 @@ def test_desktop_headers_match_ua_and_locale():
     assert list(h1.items()) == list(h2.items()), (h1, h2)
 
 
-def test_mobile_headers_have_no_client_hints():
+def test_mobile_headers_carry_self_consistent_client_hints():
+    """移动档（r1063 T25 起是 Android Chrome）**必须**发 UA-CH。
+
+    旧契约"移动档不发 UA-CH"是配合 iPhone/Safari UA 的；换成 Chromium 后，
+    不发本身就是"UA 被改写"的证据。这里守的是**自洽**：版本与 UA 一致、
+    `?1`、平台 Android。
+    """
     h = profile_headers(_FP_MOBILE, {"Referer": "https://m.example.test/"})
     assert h["User-Agent"] == MOBILE_UA
     assert h["Accept-Language"] == "zh-CN,zh;q=0.9"
-    assert not any(k.lower().startswith("sec-ch-ua") for k in h), h
+    major = re.search(r"Chrome/(\d+)", MOBILE_UA).group(1)
+    assert 'v="%s"' % major in h["sec-ch-ua"], h
+    assert h["sec-ch-ua-mobile"] == "?1", h
+    assert h["sec-ch-ua-platform"] == '"Android"', h
     assert h["Referer"] == "https://m.example.test/", h
 
 
-def test_mobile_tier_has_no_client_hints_in_headers_nor_useragentdata(browser):
-    """移动档两侧同律：请求头不得出现任何 sec-ch-ua*，页面也不暴露
-    navigator.userAgentData（Safari UA 不该带 Chromium 专属 UA-CH）。"""
+def test_mobile_tier_says_one_thing_in_headers_and_page(browser):
+    """移动档**两侧同律**：头里发 UA-CH，页面里也该有 `navigator.userAgentData`，
+    且 `mobile === true`。头说不发、页面说有（或反过来）都是矛盾。"""
     h = profile_headers(_FP_MOBILE, {"Referer": "https://m.example.test/"})
-    assert not any(k.lower().startswith("sec-ch-ua") for k in h), h
-    assert not any(k in h for k in ("sec-ch-ua", "sec-ch-ua-mobile",
-                                    "sec-ch-ua-platform")), h
+    assert h.get("sec-ch-ua"), h
+    assert h.get("sec-ch-ua-mobile") == "?1", h
+    assert h.get("sec-ch-ua-platform") == '"Android"', h
     ctx, page, fp = _open(browser, True, "mobile-hints")
     try:
         got = page.evaluate("""() => ({
           uad: typeof navigator.userAgentData,
           uadIn: 'userAgentData' in navigator,
-          protoUad: 'userAgentData' in Navigator.prototype
+          protoUad: 'userAgentData' in Navigator.prototype,
+          mobile: !!(navigator.userAgentData
+                     && navigator.userAgentData.mobile)
         })""")
     finally:
         ctx.close()
     assert fp["is_mobile"] is True
-    assert got["uad"] == "undefined", got
-    assert got["uadIn"] is False, got
-    assert got["protoUad"] is False, got
+    assert got["uad"] == "object", got
+    assert got["uadIn"] is True, got
+    assert got["protoUad"] is True, got
+    assert got["mobile"] is True, got
 
 
 def test_headers_profile_scoped_and_identity_cannot_be_overridden():

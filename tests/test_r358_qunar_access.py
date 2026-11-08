@@ -62,7 +62,7 @@ def test_webui_source_access_board_and_login_note():
     for needle in (
         "来源接入",
         "SOURCE ACCESS",
-        "网页版已于 2026-10-10 停服",
+        "PC 网页已于 2026-10-10 停服",
         "登录后可用",
         "本块只讲去哪儿网页通路",
         "App 渠道走 Android 真机采集",
@@ -79,3 +79,8 @@ def test_webui_source_access_board_and_login_note():
     ):
         assert needle in src, needle
     assert "flight.qunar.com/site/oneway_list.htm" not in src
+    # r996：停服说明只留在来源接入板/该渠道行；登录卡不再重复整段
+    # （用户点名「非常冗余和突兀的去哪儿停服说明」）。
+    login_block = src[src.index('id="sec-login"'):src.index('id="sec-chlinks"')]
+    assert "去哪儿网页版已于" not in login_block
+    assert "停服" not in login_block

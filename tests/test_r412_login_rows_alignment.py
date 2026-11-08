@@ -54,7 +54,8 @@ def _measure(port, width):
           const ab=a?a.getBoundingClientRect():null;
           const n=c.querySelector('.lgname');
           const nb=n?n.getBoundingClientRect():null;
-          return {h:Math.round(b.height), right:ab?Math.round(ab.right):null,
+          return {x:Math.round(b.left), h:Math.round(b.height),
+                  right:ab?Math.round(ab.right):null,
                   left:nb?Math.round(nb.left):null};
         })""")
         b.close()
@@ -72,10 +73,18 @@ def test_all_rows_share_right_edge(server, width):
     """
     rows = _measure(server, width)
     assert len(rows) >= 5, rows
-    rights = {r["right"] for r in rows}
-    assert len(rights) == 1, "右缘不齐 %r @%dpx" % (sorted(rights), width)
-    lefts = {r["left"] for r in rows}
-    assert len(lefts) == 1, "左缘不齐 %r @%dpx" % (sorted(lefts), width)
+    # r999：≥1200 登录区是双列卡片网格（r999_cfg_login_grid），左右两列
+    # 各自有自己的右缘/左缘；同一列内必须严格对齐，跨列本来就不等。
+    cols = {}
+    for r in rows:
+        cols.setdefault(r["x"], []).append(r)
+    expect_cols = 2 if width >= 1200 else 1
+    assert len(cols) == expect_cols, (width, sorted(cols), rows)
+    for x, grp in cols.items():
+        rights = {r["right"] for r in grp}
+        lefts = {r["left"] for r in grp}
+        assert len(rights) == 1, "第 %d 列右缘不齐 %r @%dpx" % (x, sorted(rights), width)
+        assert len(lefts) == 1, "第 %d 列左缘不齐 %r @%dpx" % (x, sorted(lefts), width)
 
 
 @pytest.mark.parametrize("width", [1440, 1100, 900, 620, 420])
@@ -106,10 +115,15 @@ def test_dual_slot_sub_date_line_never_wraps():
 
 
 def test_name_column_left_edges_align(server):
-    """渠道名列左缘一致（网格第一列没有被内容撑歪）。"""
+    """渠道名列左缘一致（每一列的卡片列没有被内容撑歪）。"""
     rows = _measure(server, 1440)
-    lefts = {r["left"] for r in rows}
-    assert len(lefts) == 1, lefts
+    cols = {}
+    for r in rows:
+        cols.setdefault(r["x"], []).append(r)
+    assert len(cols) == 2, sorted(cols)
+    for x, grp in cols.items():
+        lefts = {r["left"] for r in grp}
+        assert len(lefts) == 1, (x, lefts)
 
 
 def test_rows_stay_aligned_in_every_status_combo(server):
@@ -148,7 +162,8 @@ def test_rows_stay_aligned_in_every_status_combo(server):
                     const b=c.getBoundingClientRect();
                     const a=c.querySelector('.lgact')||c.querySelector('.btn2');
                     const ab=a?a.getBoundingClientRect():null;
-                    return {ch:(c.dataset.channel||''),h:Math.round(b.height),
+                    return {ch:(c.dataset.channel||''),x:Math.round(b.left),
+                            h:Math.round(b.height),
                             right:ab?Math.round(ab.right):null};
                   });
                 }""", cls)
@@ -157,8 +172,15 @@ def test_rows_stay_aligned_in_every_status_combo(server):
                 assert len(rows) == n_login, (
                     "登录卡应为 %d 张，实测 %d" % (n_login, len(rows)))
                 hs = {r["h"] for r in rows}
-                rs = {r["right"] for r in rows if r["right"] is not None}
                 assert len(hs) == 1, "状态 %r 下行高分裂：%s" % (cls or "默认", hs)
-                assert len(rs) == 1, "状态 %r 下按钮右缘分裂：%s" % (cls or "默认", rs)
+                cols = {}
+                for r in rows:
+                    cols.setdefault(r["x"], []).append(r)
+                assert len(cols) == 2, "状态 %r 下登录区不是双列：%s" % (
+                    cls or "默认", sorted(cols))
+                for x, grp in cols.items():
+                    rs = {r["right"] for r in grp if r["right"] is not None}
+                    assert len(rs) == 1, "状态 %r 第 %d 列按钮右缘分裂：%s" % (
+                        cls or "默认", x, rs)
         finally:
             b.close()

@@ -13,6 +13,27 @@
 [![CI](https://github.com/dengmeiluan/ticket-monitoring/actions/workflows/ci.yml/badge.svg)](https://github.com/dengmeiluan/ticket-monitoring/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/Platform-Windows_%7C_Linux_%7C_macOS-0078D6)](https://github.com/dengmeiluan/ticket-monitoring/releases)
+
+## 🚀 三步开始（Windows / Linux / macOS）
+
+```powershell
+git clone https://github.com/dengmeiluan/ticket-monitoring.git
+cd ticket-monitoring
+.\setup.ps1          # Windows；macOS/Linux 用：bash setup.sh
+```
+
+`setup.ps1` 会**自动**做完这四件事，无需手工准备：
+
+1. 检查 Python（需 3.11+）；
+2. `pip install -r requirements.txt`；
+3. `playwright install chromium`（浏览器内核，只需一次）；
+4. `python -m core.setup_check --fix`——缺 `config.yaml` 会从示例生成、缺目录会建。
+
+装完直接 `python main.py`（或后台 ` .\start.ps1`），终端会打印 `http://127.0.0.1:端口`，
+浏览器打开就是完整界面。**默认零配置即可采网页渠道**；想采 App 渠道，启动 MuMu 模拟器后
+跑一次 `python -m core.setup_check`，看到「App 通路：已连到设备」即可。
+
+> 任何一步卡住，先跑 `python -m core.setup_check`：它会把「还差什么、怎么补」逐条列出来。
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 **[🎪 点开即玩的在线演示](https://dengmeiluan.github.io/ticket-monitoring/site/)** · [English README](README_EN.md) · [下载发行包（Windows / Linux / macOS）](https://github.com/dengmeiluan/ticket-monitoring/releases)
@@ -47,10 +68,10 @@
 - **采集端形态**：这里的 H5 就是移动 Web（390×844 视口 + 移动 UA + 触控指纹），浏览器这几家的主路径本就跑在移动端。
 ![能力对照：10 家渠道（5 浏览器 + 5 App）× 7 个维度的支持三态，App 缺口单列](docs/screenshots/console-dims.png)
 - **能力对照（配置页 · 渠道登录）**：10 家渠道（5 浏览器 + 5 App）× 7 个维度（国内 / 国际 / 日历 / 明细 / 往返 / 多程 / 低价机票）的**一张矩阵直接看**，每格三态——支持 / 不支持 / 未验证（未验证不当作支持）；App 渠道相对浏览器端还差哪些维度单列在下方（基准＝任一浏览器渠道已具备该维度，不是某一家友商）。矩阵与采集代码同源，不是另写一份说明；App 渠道默认关闭，状态与真机证据见 `docs/APP_CHANNELS.md`。
-- **App 渠道（可选，默认关闭）**：没有 Web 面的渠道（智行只有 App）现在可以经 Android 模拟器 + adb 采集；同程 App（WebView 结果经 u2 读取）冷启后连续两次 + 双日期复验通过，国内/国际价格日历均已接通（国际 SHA→NRT 14 天连续两次 ¥882–1495），国际单程明细也已跑通（6 条、最低 ¥875），国际往返也跑通（去程行「含税总价」= 页面往返总价，上海⇌东京 11-16/19 7 条去程、最低 ¥2209；端到端 11-17/22 9 条、最低 ¥2420，返程 MM877 +¥0，20.9s），但登录态会过期、失效时结果页要求登录，需重新登录；待随下次统一重启启用。携程 App 国内单程已连续两次各 32/33 行（11-18 ¥480 / 11-19 ¥490），国内/国际价格日历 OCR 真机通过（国际 SHA→NRT 连续两次 54/53 天 ¥864–1530，两月视野）；国际/国内往返均已跑通（去/返双栏，去程卡价即页面「往返总价」，国际 SHA→NRT 8 条 ¥2146、国内 SHA→PEK 5 条 ¥760），国际单程明细也已跑通（38 条、最低 ¥935）；飞猪 App 固定竖屏 + OCR 已接入国内单程明细（连续两次两条航线跑通；连续自动化会触发访问拒绝，需人工恢复，不做绕过）；需本机装 MuMu（约 15 GB，Windows，需 VT）。**不启用时框架完全不碰它**——不 import、不检测设备、界面不显示。用 `python main.py --app-status` 可随时体检（五步引导清单，「验证可采集」只认真的落过库）。
+- **App 渠道（可选，默认关闭）**：没有 Web 面的渠道（智行只有 App）现在可以经 Android 模拟器 + adb 采集；同程 App（WebView 结果经 u2 读取）冷启后连续两次 + 双日期复验通过，国内/国际价格日历均已接通（国际 SHA→NRT 14 天连续两次 ¥882–1495），国际单程明细也已跑通（6 条、最低 ¥875），国际往返也跑通（去程行「含税总价」= 页面往返总价，上海⇌东京 11-16/19 7 条去程、最低 ¥2209；端到端 11-17/22 9 条、最低 ¥2420，返程 MM877 +¥0，20.9s），但登录态会过期、失效时结果页要求登录，需重新登录；待随下次统一重启启用。携程 App 国内单程已连续两次各 32/33 行（11-18 ¥480 / 11-19 ¥490），国内/国际价格日历 OCR 真机通过（国际 SHA→NRT 连续两次 54/53 天 ¥864–1530，两月视野）；国际/国内往返均已跑通（去/返双栏，去程卡价即页面「往返总价」，国际 SHA→NRT 8 条 ¥2146、国内 SHA→PEK 5 条 ¥760），国际单程明细也已跑通（38 条、最低 ¥935）；飞猪 App 固定竖屏 + OCR 已接入国内单程明细（连续两次两条航线跑通；连续自动化会触发访问拒绝，需人工恢复一次）；需本机装 MuMu（约 15 GB，Windows，需 VT）。**不启用时框架完全不碰它**——不 import、不检测设备、界面不显示。用 `python main.py --app-status` 可随时体检（五步引导清单，「验证可采集」只认真的落过库）。
   产出**真实航班明细**（含航班号/起降时刻/价格，实测 5–7 条/日），日期超出首页 8 天线时自动开跨月日历选日再查询；拿不到明细才回落到**日历价**（每日最低，无航班号）。账本里两条通路分开记。
   登录：配置页「渠道登录 → 智行 App」打开的就是真机实时画面，点几下登完即可；程序会把登录态打包成快照，**下次采集前自动恢复**——换机/重装/清数据后仍是登录态。设备上已有更新的登录态时不会覆盖。
-  美团因触发人脸核验（活体核验既违约也不该自动化），暂不接入。细节见 `docs/APP_CHANNELS.md`。
+  美团触发的是人脸活体核验，没有可自动化路径，暂不接入。细节见 `docs/APP_CHANNELS.md`。
 - **去哪儿网页版停服适配（2026-10）**：去哪儿的 PC 机票查询/预订页已于 2026-10-10 停服，采集与用户深链统一改走 H5（`m.flight`；PC 仅保留默认关闭的复活探测）；渠道登录改走统一登录页（手机号验证码/扫码），Cookie 与 H5 共用、需保持登录态。App 专属价与自动下单不在采集范围，其余四渠道不受影响。
 - **监控**：多用户、多航线、多日期（区间/指定日）、直飞/中转独立心理线、航司白名单、行李/时段/衔接/直挂/跨天/价格上限/最长时长等门禁；每条航线可暂停而不删除；关注航班是配置关注航线+日期明细集合中的指定航班子集，可对已采集航班单独编排渠道、目标、提醒与备注；航线与日期必须在关注航线中已配置。
 - **推送**：每轮聚合一条钉钉图文，达标置顶、语义分档、7 天趋势与操作建议；达标可叠加钉钉 @、Windows 弹窗、ntfy、Bark、阿里云电话/短信；支持免打扰时段、预览与发送历史。
@@ -208,7 +229,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **特价机票监控** | 按出发地/目的地/日期范围查**九源官方特价（5 个网页端 + 4 个 App）**：携程低价日历+全国榜、去哪儿官方 H5 特价深链、飞猪 cheapestCalendar（软拒回退国内出发榜）、同程低价日历、途牛国内 H5 日历、智行 App「特价」（逐天最低价）、去哪儿 App「低价机票」（14 天窗口）、携程 App 价格日历、同程 App 原生价格弹层（国内/国际）；逐日价标注是否含税；系统按用户设置的航线/日期范围持续记录逐日价并展示监控走势，低价日可查看已采集的真实航班或一键发起该日明细探针；概览「特价雷达」卡实时呈现 |
+| **特价机票监控** | 按出发地/目的地/日期范围查**十源官方特价（5 个网页端 + 5 个 App）**：携程低价日历+全国榜、去哪儿官方 H5 特价深链、飞猪 cheapestCalendar（软拒回退国内出发榜）、同程低价日历、途牛国内 H5 日历、智行 App「特价」（逐天最低价）、去哪儿 App「低价机票」（14 天窗口）、携程 App 价格日历、同程 App 原生价格弹层（国内/国际）；逐日价标注是否含税；系统按用户设置的航线/日期范围持续记录逐日价并展示监控走势，低价日可查看已采集的真实航班或一键发起该日明细探针；概览「特价雷达」卡实时呈现 |
 | **国际航班监控** | 仍只填三字码：任一端在大陆城市集外即**自动切国际端点**（五洲目的地零配置）；价格恒**含税总价**口径+税费拆分小字；跨天档放宽 0-7 天、**时区修正时长真值**；城市面板「🌐 国际」页签按地区分组 272 城（33 热门）/三路搜索；毒价守卫按国际量程分档 |
 
 ### 推送与提醒
@@ -263,6 +284,41 @@
    - 钉钉机器人 Webhook + 加签密钥（[创建方法](#钉钉机器人配置)），点「🔔 测试推送」即验
 4. 保存即热重载生效，监控开始
 
+### Android 模拟器（App 渠道）一键准备
+
+App 渠道需要本机 MuMu（Android 15，约 15 GB，需 VT）。**不需要手工装模块、补库、配隐藏名单**：
+
+```powershell
+python scripts/setup_device.py                 # 只体检：告诉你还差什么（不改设备）
+python scripts/setup_device.py --apply --reboot # 一条命令装完并等待生效
+python scripts/setup_device.py --apply --enable-app-channels   # 顺带把 App 渠道写进配置
+```
+
+它按顺序做四件事，每步都读回验证：
+
+> 所有外部依赖的**地址与校验和**集中在一张表里：[`docs/DEVICE_PACKAGES.md`](docs/DEVICE_PACKAGES.md)
+> （模块包、Magisk、Android NDK、MuMu、以及 App 包名对照）。
+> 命令行也可直接查：`python scripts/fetch_packages.py --list`。
+
+1. **取包**：下载 NeoZygisk（v2.4）与 Shamiko（v1.2.5）——版本与 SHA256 钉死在实测可用的组合上，
+   并构建本项目的 `mumu_cloak`（native 模块，隐藏 MuMu 属性/文件特征）；
+2. **生成配置**：`config.yaml` 不存在时从 `config.example.yaml` 生成（统一 LF）；
+3. **落地设备**：关闭 MuMu 自带 root → **自动停用会破坏 ARM 翻译层的模块** → 部署身份开机模块
+   （机型 / CPU / SELinux / 电话层 / 包名清理）→ 安装并补齐 x86_64 库 → 配置 5 个 App 的隐藏名单；
+4. **装 App**：`packages/apks/*.apk` 里有的自动安装（APK 请自备，仓库不分发）。
+
+装完自动跑 **12 项体检**（机型、ABI、`/proc/cpuinfo`、SELinux、电话层 RIL/运营商/网络类型、
+包名暴露面、Zygisk 注入、模块齐全、隐藏名单、有害模块状态、`mumu_cloak` 启用），
+全绿才算准备好。开机后伪装需 **2–3 分钟**才生效，`--reboot` 会轮询等待而不是固定 sleep。
+
+> 为什么有"自动停用模块"这一步：HMA / Zygisk-Assistant / Vector(LSPosed) / Hide-My-Goldfish
+> 装上后会把 MuMu 的 houdini 翻译层一起遮掉，导致**所有 arm64 App 秒崩**
+> （`libmmkv.so is for EM_AARCH64 instead of EM_X86_64`），而症状完全联想不到是它们干的。
+> 细节与实测记录见 `docs/DEVICE_IDENTITY_PLAYBOOK.md`。
+>
+> App 渠道的**登录风控**是账号/环境层面的问题，与设备伪装是两件事：
+> 伪装做到位能让采集稳定，但登录仍可能被拦（尤其注册）；详见 `docs/APP_CHANNELS.md`。
+
 **全部渠道都必须登录**（2026-10-27 定；App 渠道接入后同样适用）：入口页大多能匿名浏览，但**出价与明细都要登录后才有**——不再用「建议登录」这种模糊说法。控制台「⚙️ 配置 → 🔐 渠道登录」一键弹窗保存，也可启动时加 `--login <渠道>`。各渠道的差异在会话槽位，不在「要不要登」：
 > - **携程**：PC 与 H5 都要登录后才出价；
 > - **去哪儿**：网页版 2026-10-10 停服，登录窗落统一登录页（验证码/扫码），H5 才出全量明细；
@@ -287,7 +343,7 @@ docker compose up -d                 # 没有镜像则本地构建（build: .）
 
 不想盯死航线？特价监控只填**出发城市 + 心理价位**两个参数，自动发现全网特价：
 
-- **九源发现（5 个网页端 + 4 个 App）**：携程低价日历+全国榜、去哪儿官方 H5 特价深链（页面自身签名，使用
+- **十源发现（5 个网页端 + 5 个 App）**：携程低价日历+全国榜、去哪儿官方 H5 特价深链（页面自身签名，使用
   已保存会话读取真实响应）、飞猪 cheapestCalendar（含税，7 天窗；软拒回退国内出发
   榜并冷却）、同程 queryCalendarLowestPrice（免登录/免签名，国际 90 天/国内 180 天）、
   途牛国内 H5 同源逐日日历（裸价不含税；国际无官方日历时如实为空）、智行 App「特价」
@@ -421,7 +477,7 @@ Windows 右下角弹窗通道在非 Windows 自动停用，其余通道全平台
 
 ```bash
 python tools/test_all.py        # 并发全量（默认 min(8, CPU)）：语法检查 + pytest（xdist 按文件）+ UI 自检（按 profile 分片）同跑
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # 全量（已跟踪 6684 项；采集/解析/推送/契约/文档）：十渠道解析/通路单测（含占位守卫/透传透镜/聚合守卫等防呆钉）+ 推送链路演练 + 链接同源门禁 + 曲线-列表一致性 + 版本门禁 + 文档/代码契约
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q   # 全量（已跟踪 8035 项；采集/解析/推送/契约/文档）：十渠道解析/通路单测（含占位守卫/透传透镜/聚合守卫等防呆钉）+ 推送链路演练 + 链接同源门禁 + 曲线-列表一致性 + 版本门禁 + 文档/代码契约
 python docs/uitest.py             # 全功能 UI 自检（670 断言，自动拉起演示控制台，零 JS 错硬门禁）
 python docs/screenshot.py         # README 截图再生成（先起演示服：python webui.py --demo --port 8799）
 python docs/demo_build.py         # 重烘在线演示站（docs/site）

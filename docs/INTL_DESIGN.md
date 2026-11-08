@@ -268,7 +268,7 @@ empty」是同一类错误：状态说错了，行动建议就跟着错。
 **能力口径**：H5 只做单程，收了 `ret_date` 也直接 unsupported（不拿单程价
 冒充往返总价）；`CHANNEL_DIMENSIONS.fliggy.round_trip = "y"` 描述的是
 **PC** 那条通路。风控期间状态记 `blocked`，detail 写明
-「H5 风控验证（mtop …）」，交人工处理（同 `challenge.py`
+「H5 风控验证（mtop …）」，不纳入自动尝试（同 `challenge.py`
 既有纪律）。
 
 ### 2.5c 采集端面（PC / H5）—— 五种「不是 y」的原因必须分开说

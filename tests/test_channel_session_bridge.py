@@ -82,6 +82,11 @@ def cookie(name="session", domain=".tuniu.com", expires=-1):
 @pytest.mark.parametrize("platform", REGISTRY)
 def test_relative_profile_is_anchored_before_cwd_changes(tmp_path, monkeypatch,
                                                        platform):
+    # 本条钉的是「相对 user_data_dir 一律锚定到仓库根，不随 cwd 漂移」
+    # 这个**默认路径行为**，所以必须模拟生产形态——显式去掉 conftest 的
+    # 集中重定向（`TM_USER_DATA_DIR`）。conftest docstring 早有这条约定：
+    # 「默认路径行为不变」类钉须模拟生产形态显式恢复，语义担保不丢。
+    monkeypatch.delenv("TM_USER_DATA_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     c = REGISTRY[platform]({"user_data_dir": "user_data"},
                            logging.getLogger("session-test"))

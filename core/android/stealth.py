@@ -38,7 +38,8 @@ from __future__ import annotations
 
 import time
 
-from .fingerprint import _call, _text, as_root, props_of, _root, _magisk, _q
+from .fingerprint import (_call, _text, as_root, props_of, _root, _magisk,
+                          _q, _exact_path_exists, app_can_see)
 
 # 渠道 → 包名（与 crawlers/app_*.py 的 `_APP_PKG` 一致；这里不复用是为
 # 了让本模块可以脱开 crawlers 单测）
@@ -114,14 +115,52 @@ _MARK = "/data/local/tmp/tm_stealth_%d.ok"
 # ---------------------------------------------------------------------------
 # 检测
 # ---------------------------------------------------------------------------
+def _fmt_hidden_note(items) -> str:
+    """把「存在但 App 摸不到」的条目渲染成日志尾巴（纯函数，便于钉测试）。
+
+    这类条目**不参与扣分**，所以它们不解释分数缺口；单独列出来只为两件事：
+      1) 证明探针真的在工作，而不是恒假的死件（§6.38：`test -e` 三段 argv
+         写法让 root 探测 55 轮全判"不存在"，操作员看到的一直是假清白）；
+      2) 挡住「看到 /data/adb/magisk 就想去删」的误操作——自检跑在 `adb root`
+         下能看到 App 永远进不去的目录（`/data/adb` 是 0700），今天差点为此
+         删掉 resetprop 的工位，白损能力。
+    措辞必须把「未计入」和「别去动它们」都说清；空列表返回空串，
+    不能印出「另有 0 条」这种噪音。
+    """
+    n = len(items or [])
+    if not n:
+        return ""
+    return "；另有 %d 条存在但 App 摸不到，未计入（别去动它们）" % n
+
+
 def detect(dev) -> dict:
     """采集当前设备的 root / 模拟器证据（只读，不改任何东西）。
 
     返回 ``{"root": [...], "emulator": [...], "magisk": {...},
     "unfixable": [...], "score": int}``。``score`` 100 = 已知证据全清。
     """
+    # **`score` 初值不能是 0**（2026-11-04 实机踩到）。
+    #
+    # 原来是 `score: 0` + 设备读不到时直接 return，于是返回
+    # ``{"score": 0, "root": [], "emulator": [], "error": "device offline"}``，
+    # 而 prepare 的日志把它渲染成：
+    #
+    #     [android] root/模拟器隐藏：1 条动作，自检 0 分（剩余：无）
+    #
+    # **"0 分"和"无残留"是互相矛盾的两句话**：0 分的意思是"检测到 13 条以上
+    # 证据"，而它真实的意思是"这条 adb 压根没读到"（采集进行中端口被占用时
+    # 很常见）。操作员看到"自检 0 分"会以为隐藏彻底失败、去折腾设备，
+    # 实际什么坏事都没发生。
+    #
+    # `None` = "未知"，消费方本来就按未知处理：`riskscore` 是
+    # `if val is None: continue`（不会因为读不到而加风险分），
+    # `app_base` 用 `isinstance(数值)` 过滤。
     rep = {"root": [], "emulator": [], "magisk": {}, "unfixable": [],
-           "score": 0, "debuggable": False}
+           "score": None, "debuggable": False,
+           # 存在、但 App 摸不到（父目录 0700 之类）→ 列出、**不扣风险分**
+           "hidden_from_app": []}
+    # App 可见性判定的权限位缓存：一次 detect 内多条路径共享，省 adb 往返
+    _see = {}
     props = props_of(dev)
     if not props:
         rep["error"] = "device offline"
@@ -149,30 +188,42 @@ def detect(dev) -> dict:
 
     # --- 文件系统层（与 props 独立，props 干净也可能命中）---
     #
-    # **必须用 `test -e` 逐路径判存在，不能用 `ls`**（2026-11-04 实机踩到）：
-    # `ls /a /b /c` 在某个参数是**目录**或**符号链接**时会把它的内容列出来，
-    # 于是 `/mnt/shared`（指向 `/`）让 `ls -d` 打印出整屏根目录条目
-    # （acct/adb_keys/apex/bin/…），自检分被扣到 0 分——操作员看到「自检 0 分」
-    # 以为隐藏失败，实际是误报。`test -e` 只回 0/1，不会有目录展开问题。
+    # 逐路径判存在走**共享实现** `fingerprint._exact_path_exists`。
+    # 这里错过两次、方向相反，成因都是同一个 —— **adb 把命令行按空格拆开**
+    # 送进设备 shell，所以探测命令里不许出现 `-c`/`&&`/`||`/`|`/引号：
+    #   ① 多条 `ls /a /b /c`：参数里的目录被列**内容** → 冒出 17 条幽灵残留，
+    #      自检被扣到 0 分（操作员以为隐藏失败，其实是误报）。
+    #   ② 改用 `sh -c "test -e X && echo TM_YES || echo TM_NO"`：设备实际执行
+    #      `sh -c test`（内层拿不到参数 → **恒假**）+ 外层 `|| echo TM_NO`
+    #      → **任何路径都判"不存在"**。于是"root 痕迹: []、自检 100 分"
+    #      **从未被验证过**（用 `/system/bin/sh` 自测立刻暴露）。
+    #      假阴性比假阳性危险：假阳性吵人，假阴性让人放心。
+    #
+    # **并且按 App 的权限判存在**（见 `app_can_see`）：自检跑在 `adb root`
+    # （uid=0）下，能看到 App 永远进不去的目录。实测 `/data/adb` 是
+    # `drwx------ 0700` → App 连 traverse 都做不到，`/data/adb/magisk`
+    # 对它**等于不存在**；而 `/data/local/tmp` 是 `0771`（others 有 x），
+    # 放那儿的那份才真会被 stat 到。看不见的不扣风险分，但如实列出。
+    # 这条判据挡住了一次误操作：否则会为消一条 App 看不见的"泄漏"
+    # 去删 resetprop 的工位，白损能力。
     _FS_ROOTS = ("/system/bin/su", "/system/xbin/su", "/sbin/su",
                  "/system/app/Superuser.apk", "/data/adb/magisk")
     for p in _FS_ROOTS:
-        if _text(_call(dev, "shell", "sh", "-c",
-                       "test -e %s && echo TM_YES || echo TM_NO" % _q(p))
-                 ).strip() == "TM_YES":
+        if not _exact_path_exists(dev, p):
+            continue
+        if app_can_see(dev, p, _see):
             rep["root"].append("fs:%s" % p)
-    if _text(_call(dev, "shell", "sh", "-c",
-                   "test -e /dev/qemu_pipe && echo TM_YES || echo TM_NO")
-             ).strip() == "TM_YES":
+        else:
+            rep["hidden_from_app"].append("fs:%s" % p)
+    if (_exact_path_exists(dev, "/dev/qemu_pipe")
+            and app_can_see(dev, "/dev/qemu_pipe", _see)):
         rep["emulator"].append("fs:/dev/qemu_pipe")
 
     # 模拟器厂商的共享目录：App 一个 File.exists() 就能判定，props 改不掉。
-    # MuMu 的 /mnt/shared 与 /sdcard/MuMuSharedFolder 是默认存在的一对。
-    # 同样用 `test -e`（`/mnt/shared` 常是符号链接，`ls` 会展开成根目录）。
+    # `/mnt/shared` 实测 `drwxrwxr-x`（others 有 r-x）→ **App 真能 stat 到**，
+    # 所以这条是必须处理的暴露面：只能在 MuMu 设置里关掉文件夹共享。
     for p in ("/mnt/shared", "/sdcard/MuMuSharedFolder", "/sdcard/MuMu"):
-        if _text(_call(dev, "shell", "sh", "-c",
-                       "test -e %s && echo TM_YES || echo TM_NO" % _q(p))
-                 ).strip() == "TM_YES":
+        if _exact_path_exists(dev, p) and app_can_see(dev, p, _see):
             rep["emulator"].append(
                 "shared:%s（MuMu 共享目录，需在模拟器设置里关掉）" % p)
 
@@ -294,12 +345,20 @@ def hide(dev, packages=None, config=None) -> dict:
         # **值已空的跳过**：清过一次就不用每轮再清 41 次（省 adb 往返）。
         if _is_vendor_prop(key, val):
             vendor_keys.append(key)
+    readonly_keys = []
     for key in vendor_keys:
         if rp:
             script.append("%s --delete %s >/dev/null 2>&1 && echo 'DEL %s'"
                           % (rp, _q(key), key))
+        elif key.startswith("ro."):
+            # **`ro.*` 没有 resetprop 一定改不动**：`setprop` 会返回 0（成功）
+            # 但值不变——第 3 轮就吃过"命令报成功、读回没变"的亏。
+            # 原来这里照样 `echo CLR`，于是日志报"已清空 42 条"而实际一条没清
+            # （2026-11-04 实机复核：清完 `ro.nemu` 仍是 1）。
+            # 现在明确列进"改不动"，让操作员知道该装 Magisk，而不是以为清干净了。
+            readonly_keys.append(key)
         else:
-            # 没有 resetprop 也要清：setprop 写空串（非 ro.* 时可成功）
+            # 非 ro.* 可以清：setprop 写空串（值空即无信息量）
             script.append("setprop %s '' >/dev/null 2>&1 && echo 'CLR %s'"
                           % (_q(key), key))
     out = _text(as_root(dev, "; ".join(script) or "true"))
@@ -313,6 +372,12 @@ def hide(dev, packages=None, config=None) -> dict:
                         % (len(ok_keys), len(del_keys), len(clr_keys)),
                  "ok": bool(ok_keys or del_keys or clr_keys),
                  "why": "清 root/厂商 props（厂商键删不掉时清空值）"})
+    if readonly_keys:
+        # 如实报"这些改不动"，并在 why 里点明根治手段——不要让人以为清了
+        acts.append({"cmd": "props-readonly:%d" % len(readonly_keys),
+                     "ok": False,
+                     "why": "ro.* 只读改不动（需 Magisk resetprop）：%s"
+                            % ", ".join(readonly_keys[:6])})
     if not rp:
         acts.append({"cmd": "resetprop", "ok": False,
                      "why": "没有 Magisk：ro.* 只读改不动；nemud.* 等可写键已改用清空"})
@@ -360,6 +425,110 @@ def verify(dev, packages=None) -> dict:
     }
 
 
+# **`adb root` 之后一定会出现的运行态 prop**：真机上没有"adbd 是 root"这条，
+# 所以 detect() 把它算作 root 证据；而它**不在厂商键命名空间里**
+# （`_is_vendor_prop` 判 False），于是 hide() 从来不清它 ——
+# 检测报了个自己不管的洞（2026-11-04 实测：自检因此长期停在 84 分）。
+# 实测删得掉且会保持（delete 后 20s 仍为空）：adbd 启动时由 init 置位，
+# 之后没人再写，所以清一次能撑到 adbd 下次重启。
+#
+# **为什么可以放心清（2026-11-04 实测，此前这是个未验证的顾虑）**：
+# 这条标记要清、又必须留着 root 跑 resetprop（清 `ro.nemu`，实测 Ctrip SDK
+# 读到它就返回 50003），直觉上像是个二选一的取舍。实测不是：
+#
+#   setprop service.adb.root 0 → getprop 回读 '0'
+#                              → `adb shell id` 仍是 **uid=0(root)**
+#                              → `resetprop --delete`+set 探针仍可用（读回 'tmprobe62'）
+#                              → 自检 **76 → 84**，root 归空
+#
+# 也就是说这个属性只是**状态记录**，adbd 并不监听它，改它不会把通道切断。
+# 所以「既要 root 通道又不露 root 标记」不是取舍，两头都能要。
+# 反过来提醒：真把 adbd 重启回非 root 时（实例重启后就是），
+# 通道会断，那时必须重新 `adb root` —— 与本条无关，别混为一谈。
+_RUNTIME_ROOT_PROPS = ("service.adb.root",)
+
+
+def refresh(dev, config: dict = None, logger=None) -> dict:
+    """**轻量重清**：只把厂商/运行态 props 再删一遍，不做贵的动作。
+
+    为什么必须有这一步（2026-11-04 实测）：
+    `prepare()` 按 `boot_id` 标记**每个 boot 只跑一次**，
+    但 MuMu 的 `nemuinit` 守护进程**会在几分钟内把 `nemud.*` 重新写回来**——
+
+    ```
+    19:19  stealth 跑完   → 含 nemu 的 prop 行数 0
+    19:26  （没再动过）   → 含 nemu 的 prop 行数 57
+    ```
+
+    也就是说：同一 boot 内的后续轮次，模拟器标记是**裸露**的。
+    而一次轮 ≈ 30 分钟，正好被写回覆盖。
+
+    所以"按 boot 一次"对 props 是不够的，但"每轮全量 hide()"又太贵
+    （denylist 要读 sqlite、快照要抓 logcat）。折中：**props 单独做成廉价重清**，
+    每轮都跑；贵的动作仍按 boot 一次。
+
+    成本：1 条 `getprop` + 命中几条就几条 `resetprop --delete`。
+    实测清空后 45 秒内不回升，所以每轮一次是够的。
+    """
+    from .fingerprint import _magisk, as_root, props_of, _text
+    rep = {"ok": False, "deleted": [], "detail": ""}
+    props = props_of(dev)
+    if not props:
+        rep["detail"] = "设备没读到 props，跳过重清"
+        return rep
+    targets = []
+    for k, v in props.items():
+        v = str(v or "")
+        if not v:
+            continue                     # 已经是空值：不用重复清
+        if _is_vendor_prop(k, v) or k in _RUNTIME_ROOT_PROPS:
+            targets.append(k)
+    if not targets:
+        # **没东西要清时不许去探测 magisk**：`_magisk()` 带 delete-then-set
+        # 探针（要验"真能改 ro.*"），一次 4~5 条 adb。而 refresh() 是
+        # **每轮都跑**的 —— 在干净设备上白烧这些往返，等于把"廉价重清"
+        # 做成不廉价（2026-11-04 被自己的测试抓到）。
+        rep["ok"] = True
+        rep["detail"] = "无残留 props"
+        return rep
+    rp = _magisk(dev)
+    # `rp` 可能是 "/path/magisk resetprop"（一整串）或 "/path/resetprop"。
+    # **必须拆成独立参数传**：塞进单个字符串会被 Windows 的命令行把引号吃掉
+    # （本轮已在 `sh -c "test -e '...'"` 上踩过同一个坑）。
+    # prop 键名都是纯标识符，本来也不需要引号。
+    #
+    # **一条脚本批量做完**：逐条发就是每个键 2 个 adb 往返（删 + 读回），
+    # 厂商键有几十条就是上百次往返；放进 as_root 一次执行只要一次。
+    # 每个键自己 echo 一个标记，读回为空才算真删掉（命令返回码不可信，
+    # `setprop ro.*` 一直是"返回 0 但值不变"）。
+    lines = []
+    for k in targets:
+        if rp:
+            # 用 %s 直接展开（键名是纯标识符，不需要引号）
+            lines.append(
+                "%s --delete %s >/dev/null 2>&1; "
+                "test -z \"$(getprop %s)\" && echo 'GONE %s'"
+                % (rp, k, k, k))
+        else:
+            lines.append(
+                "setprop %s '' >/dev/null 2>&1; "
+                "test -z \"$(getprop %s)\" && echo 'GONE %s'"
+                % (k, k, k))
+    out = str(_text(as_root(dev, "; ".join(lines) or "true")) or "")
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("GONE "):
+            rep["deleted"].append(line[5:].strip())
+    rep["ok"] = len(rep["deleted"]) == len(targets)
+    rep["detail"] = "重清 %d/%d 条 props" % (len(rep["deleted"]), len(targets))
+    if logger and rep["deleted"]:
+        logger.info("[android] 厂商 props 已被写回，重清 %d 条：%s",
+                    len(rep["deleted"]),
+                    "、".join(rep["deleted"][:3]) +
+                    ("…" if len(rep["deleted"]) > 3 else ""))
+    return rep
+
+
 def prepare(dev, config: dict = None, logger=None, *, packages=None,
             vm: int = 0, force: bool = False) -> dict:
     """对外唯一入口：本 boot 周期做一次「检测 → 隐藏 → 复核」。
@@ -378,20 +547,38 @@ def prepare(dev, config: dict = None, logger=None, *, packages=None,
     boot = boot_id(dev)
     cur = _text(_call(dev, "shell", "cat", mark_path)).strip()
     if not force and boot and cur == boot:
-        return {"ok": True, "skipped": "done this boot", "actions": []}
+        # **本 boot 做过全量隐藏，不等于现在还是干净的**：`nemuinit` 会在
+        # 几分钟内把 `nemud.*` 写回来（实测 19:19 归零 → 19:26 又 57 行）。
+        # 所以这里仍然要跑一次**廉价重清**，只清 props、不碰 denylist/快照。
+        rf = refresh(dev, config, logger)
+        return {"ok": True, "skipped": "done this boot", "actions": [],
+                "refresh": rf}
 
     rep = hide(dev, packages=packages, config=config)
     rep["verify"] = verify(dev, packages)
-    _call(dev, "shell", "sh", "-c",
-          "echo %s > %s" % (_q(boot or "1"), mark_path))
+    # 用统一的 write_remote：原来这里是 `sh -c "echo X > path"`，
+    # 实测在 Windows 上**静默不生效**（写进去是空的），于是这个
+    # "本 boot 已完成"的门槛**从来没成立过** —— hide() 每轮全量重跑
+    # （denylist 读写 sqlite + 抓 logcat 快照），既慢又没人发现。
+    from .fingerprint import write_remote
+    write_remote(dev, mark_path, boot or "1")
     rep["ok"] = True
     if logger:
         d = rep.get("detect") or {}
+        # `hidden_from_app` 是**存在但 App 摸不到**的东西（父目录 0700 之类），
+        # 不参与扣分，所以它不解释分数缺口；列出来是为了两件事：
+        #   1) 让操作员知道探针确实在工作（不是"什么都没查到"的死件）；
+        #   2) 挡住"看到 /data/adb/magisk 就想去删"的误操作——今天差点
+        #      为此删掉 resetprop 的工位，白损能力（见 §6.38）。
+        _tail = _fmt_hidden_note(d.get("hidden_from_app"))
         logger.info(
-            "[android] root/模拟器隐藏：%d 条动作，自检 %d 分（剩余：%s）",
-            len(rep.get("actions") or []), d.get("score", 0),
+            "[android] root/模拟器隐藏：%d 条动作，自检 %s（剩余：%s）%s",
+            len(rep.get("actions") or []),
+            ("%d 分" % d["score"]) if isinstance(d.get("score"), int)
+            else "未知（设备没读到）",
             ", ".join([x for x in (d.get("root") or []) +
-                       (d.get("emulator") or [])][:4]) or "无")
+                       (d.get("emulator") or [])][:4]) or "无",
+            _tail)
     return rep
 
 

@@ -15,7 +15,11 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {".md", ".txt", ".py", ".yaml", ".yml", ".ini", ".spec",
                  ".json", ".ps1", ".cfg", ".toml"}
 SKIP_DIRS = {"_scratch", "build", "_build", "_build_check", "dist", "dist_package",
-             "user_data", "user_data_free", "__pycache__", ".git", "site"}
+             "user_data", "user_data_free", "__pycache__", ".git", "site",
+             # `_vendor/`：`pip install --target` 装的可选解码后端（ddddocr 等），
+             # 已在 .gitignore 里。第三方发行物自己混用 CRLF/LF，
+             # 我们既不拥有也不该改（重装即失效），所以扫换行符时跳过。
+             "_vendor"}
 
 CRLF = b"\r\n"
 LF = b"\n"

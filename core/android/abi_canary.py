@@ -92,8 +92,25 @@ def snapshot(dev) -> dict:
     return _props(dev, list(ABI_X86.keys()))
 
 
-def apply_props(dev, mapping: dict, *, use_root=True) -> dict:
+def apply_props(dev, mapping: dict, *, use_root=True,
+                allow_build_props: bool = False) -> dict:
     """写一组 props 并**读回校验**。返回逐键结果。
+
+    参数 ``allow_build_props``（2026-11-05 新增）：
+    默认 ``False`` 时，机型/构建类字段（``_NO_HOT_WRITE``）**跳过不写**，
+    这是历史事故后的保守默认。置 ``True`` 时才写它们——调用方**必须**
+    在写完后重启 zygote，否则已启动的 App 读到的还是旧 Build（zygote 缓存）。
+
+    实测依据（2026-11-05，本机 MuMu + KernelSU）：
+
+    * 热写这 18 个键（含 ``ro.build.id`` / ``ro.build.fingerprint``）
+      **不会让框架崩**：写完后 ``setprop ctl.restart zygote``，
+      `sys.boot_completed` 仍为 1，用 MuMu 自己的 shell 通道
+      （不经过 adb）能正常读到新值；
+    * 会掉的是 **adbd**——不是系统。现象是 `adb devices` 变 `offline`，
+      重连/`adb root` 即恢复，或用 `MuMuManager sh -v 0 -c` 绕过 adb。
+      历史上把这件事记成"设备搞挂了"是误判：当时只从 adb 视角看，
+      而 adb 恰好是唯一被打断的那条通道。
 
     为什么必须读回：``setprop`` 对只读的 ``ro.*`` **返回码是 0 但值不变**
     （2026-11-03 实测：这台 MuMu 没有 Magisk，``setprop ro.product.cpu.abi
@@ -115,8 +132,129 @@ def apply_props(dev, mapping: dict, *, use_root=True) -> dict:
     before = _props(dev, list(mapping.keys()))
 
     lines = []
+    # `rp` 有两种形态（见 `fingerprint._magisk` 的说明）：
+    #   * 纯 `resetprop`（完整 Magisk）→ 设值用 `-n`：`resetprop -n k v`
+    #   * `"<path>/magisk resetprop"`（只有 magisk 二进制的镜像）→
+    #     子命令已带上，**不能再加 `-n`**：`magisk resetprop k v`
+    # 2026-11-04：MuMu 上提到 magisk 二进制后就是第二种，
+    # 拼成 `magisk resetprop -n k v` 会被 magisk 当成未知参数。
+    _is_magisk_bin = str(rp).rstrip().endswith(" resetprop") \
+        and "/magisk resetprop" in str(rp)
+    # **绝对不许 `--delete` 的键**（2026-11-04 血泪教训）。
+    #
+    # `--delete` 是把键从 property 区**物理删掉**。对大多数 `ro.*` 这是
+    # 我们绕过"只读已写"的手段，但对下面这几类删了会**当场把设备搞掉**：
+    #
+    #   ro.adb.secure     删掉后 adbd 不再校验 adb key → `error: closed`
+    #                     设备直接 offline（实测发生过，只能重启实例）
+    #   ro.serialno / ro.boot.serialno   部分服务启动时读，缺失会崩
+    #   ro.bootmode / ro.boot.hardware    init 判定启动模式用
+    #   ro.secure / ro.debuggable        影响 adbd/servicemanager 行为
+    #   ro.build.* （id/flavor/tags 的一部分）被很多系统服务当锚点
+    #
+    # 这些键**本来就该是真机的值**，也不需要伪装成别的值 —— 跳过它们、
+    # 保留原值是最正确的选择。
+    # **只保留"删了会出事"的那几个**（2026-11-04 修第二版）。
+    #
+    # 第一版把 `ro.build.id` 等也放进来了，于是它们走 `resetprop -n`——
+    # 而对**已存在**的 `ro.*`，`-n` 是写不进去的（property_service 只认
+    # 首次设置）。结果 `verified` 只有 4 条，其余全 mismatch。
+    #
+    # 实测确认下面这些**都能安全 delete-then-set**：
+    #   ro.product.brand/model/name/device/board/manufacturer
+    #   ro.hardware / ro.board.platform / ro.build.id / ro.build.fingerprint
+    #   ro.build.flavor / ro.build.user
+    # 所以黑名单只留真正会让 adbd/init 挂掉的键。
+    _NO_DELETE = (
+        "ro.adb.secure",        # 删了 adbd 不校验 adb key → 设备 offline
+        "ro.serialno", "ro.boot.serialno",
+        "ro.bootmode",
+        "ro.boot.verifiedbootstate", "ro.bootloader",
+    )
+
+    # **运行中不许热改的字段**（2026-11-04，第二次把设备搞挂后加的）。
+    #
+    # 第二次事故：改的是 `ro.product.device` / `ro.product.board` /
+    # `ro.build.id` / `ro.build.fingerprint` —— **值全都是正确的 vivo**，
+    # 也没删 `ro.adb.secure`，但设备**还是 offline 了**。
+    #
+    # 认知修正：**"值是正确的"不等于"可以热改"**。system_server、
+    # zygote、各种 SystemProperties.get 的调用方在运行中会读这些字段，
+    # 中途换掉会让它们重启/异常，adbd 跟着掉线。
+    #
+    # 这些字段的正确改法是 **MuMu 官方键 + 重启实例**：
+    #   phone_brand / phone_miit / phone_model
+    # 实测那样出来的身份是**全字段一致**的（brand/model/device/board/name
+    # 都是 vivo/V2405A），而且 `ro.nemu` 重启后仍为空 —— 稳定且更安全。
+    #
+    # 这里只**跳过并如实报告**，不写；把决定权交给调用方/操作员。
+    _NO_HOT_WRITE = (
+        "ro.product.device", "ro.product.board", "ro.product.name",
+        "ro.product.manufacturer", "ro.product.brand", "ro.product.model",
+        "ro.hardware", "ro.board.platform", "ro.boot.hardware",
+        "ro.build.fingerprint", "ro.build.id", "ro.build.flavor",
+        "ro.build.description", "ro.build.display.id",
+        "ro.system.build.fingerprint", "ro.vendor.build.fingerprint",
+        "ro.product.build.fingerprint", "ro.odm.build.fingerprint",
+    )
+    # 调用方显式要求写机型/构建字段时，这张表不再生效。
+    # 为什么允许：这些字段是 50003「设备有风险」的最硬判据，而唯一能让
+    # App 读到新值的时机就是"写完 → 重启 zygote"。实测（2026-11-05）
+    # 这条路径不会让框架崩，只会让 adbd 掉线（重连即恢复）。
+    if allow_build_props:
+        _NO_HOT_WRITE = ()
+    skipped_hot = [k for k in mapping if k in _NO_HOT_WRITE]
+    mapping = {k: v for k, v in mapping.items() if k not in _NO_HOT_WRITE}
+    if skipped_hot:
+        rep_hot = ("跳过 %d 条机型/构建字段的热改（运行中改会让 system_server "
+                   "重启、adbd 掉线，实测发生两次）；正确路径是 MuMu 官方键 "
+                   "phone_brand/phone_miit/phone_model 后重启实例" % len(skipped_hot))
+    else:
+        rep_hot = ""
+
     for k, v in mapping.items():
-        if rp:
+        # **已经是目标值的键，一个字都不要写**（2026-11-05）。
+        #
+        # 这不只是省几条 adb：`delete-then-set` 是"物理删键再重建"，
+        # 对这些键做一次就是一次**真实的属性消失再出现**。其中
+        # `ro.adb.secure` / `ro.debuggable` / `ro.secure` 会被 adbd 在启动时读：
+        # 反复删建它们会让 adbd 判定状态变化、重启后握手不成 →
+        # `adb devices` 变 offline（实测就卡在这里，而设备本身一切正常）。
+        #
+        # 而 `ident.props()` 里这几条的目标值本来就与真机一致（1/1/0），
+        # 设备上早就是这些值 —— 也就是说**它们根本不需要写**。
+        # 判据用上面已经读好的 `before` 快照，不额外花 adb。
+        if str(before.get(k) or "").strip() == str(v).strip():
+            # 不记在这里：下面的写后校验会把它正确归入 `unchanged`
+            continue
+        # **只要拿到任何 resetprop，就一律走 delete-then-set**（2026-11-05）。
+        #
+        # 原先这里要求"是 magisk 二进制镜像"才走这条路，因为当时只有两种形态：
+        # 纯 `resetprop`（完整 Magisk，`-n` 能写 ro.*）和 `magisk resetprop`。
+        # 现在多了一种——**KernelSU 自带的 `/data/adb/ksu/bin/resetprop`**，
+        # 它既不是"纯 resetprop"也不是 magisk 子命令，于是被判成 False、
+        # 走 `-n` 分支；而 `-n` 对**已存在的 `ro.*` 写不进去**
+        # （property_service 只认首次设置）→ 18 条构建字段会全部静默不生效。
+        #
+        # 判据收紧成"有没有 resetprop"而不是"是哪一种 resetprop"：
+        # `--delete` 是 resetprop 的通用能力（KernelSU 的实测也支持：
+        # `resetprop --delete k` 后读回为空），删掉键再设值对两种实现都成立。
+        if rp and k not in _NO_DELETE:
+            # **先 `--delete` 再设值**（2026-11-04 实测的关键技巧）。
+            #
+            # Android 的 property_service 只允许 `ro.*` 在**首次设置**时写入，
+            # 之后永久只读：直接 `resetprop ro.product.model X` 报
+            # `set prop error`，值不变。但**先 `--delete` 把键删掉**，
+            # "已写过"的标记就没了，随后就能自由设成任意新值：
+            #
+            #   ro.product.model  delete后=''  resetprop设('X200PRO') → 'X200PRO'
+            #   ro.debuggable     delete后=''  resetprop设('1')       → '1'
+            #
+            # 这不需要 magiskd（实测 `ps -A | grep magiskd` 为 0 也照样成功），
+            # 所以**不必 patch boot.img** —— 只要 magisk 二进制在。
+            cmd = ("%s --delete %s >/dev/null 2>&1; "
+                   "%s %s %s" % (rp, _q(k), rp, _q(k), _q(v)))
+        elif rp:
             cmd = "%s -n %s %s" % (rp, _q(k), _q(v))
         else:
             cmd = "setprop %s %s" % (_q(k), _q(v))
@@ -124,7 +262,8 @@ def apply_props(dev, mapping: dict, *, use_root=True) -> dict:
                      % (cmd, k, k))
     out = _text(as_root(dev, "; ".join(lines) or "true"))
     rep = {"applied": [], "verified": [], "failed": [], "mismatch": {},
-           "unchanged": [], "resetprop": rp}
+           "unchanged": [], "resetprop": rp,
+           "hot_write_skipped": skipped_hot, "note": rep_hot}
     for line in out.splitlines():
         s = line.strip()
         if s.startswith("OK "):
@@ -339,21 +478,33 @@ def capabilities(dev) -> dict:
         pass
     # remount 探测（可逆：改 rw 试 touch，无论结果都改回 ro）
     try:
-        out = _text(_call(dev, "shell", "sh", "-c",
+        # 单个 argv（见 `fingerprint.sh_script`）。三段 argv 时设备内层只剩
+        # `sh -c mount`（`-o remount,rw /` 被丢掉）→ **根本没尝试 remount**，
+        # 于是可写系统也会被报成"块设备只读"，把 ABI 伪装整条路误判为不可行。
+        from .fingerprint import sh_script
+        out = _text(sh_script(dev,
                           "mount -o remount,rw / 2>&1; touch /system/.tm_cap "
                           "2>&1 && { rm -f /system/.tm_cap; echo TM_RW_OK; } "
                           "|| echo TM_RW_FAIL; mount -o remount,ro / "
                           "2>/dev/null; true"))
         rep["remount_rw"] = "TM_RW_OK" in out
-        if "read-only" in out.lower():
+        # **"只读"不许扫全量输出**：脚本收尾会把分区改回 ro
+        # （`mount -o remount,ro /`），那句自己的报错里就带 "read-only"。
+        # 实测（单 argv 修好后）整段输出是
+        #     "'/devblock/sda6' is read-only\r\nTM_RW_OK"
+        # —— read-only 来自**收尾**，而 touch 其实成功了（系统可写）。
+        # 早先按"看到 read-only 就下结论"会把**可写系统误判成改不动**，
+        # 于是 per-app ABI 伪装被推给"必须装 Magisk"，绕了一大圈。
+        if not rep["remount_rw"] and "read-only" in out.lower():
             rep["note"] = "块设备只读（remount 被拒）"
     except Exception:
         pass
     rep["can_write_ro"] = bool(rep["resetprop"]) or rep["remount_rw"]
     # blockdev 只读标志：能清掉的话 remount 才有戏（实测清不掉，返回 0 但 ro 仍 1）
     try:
-        out = _text(_call(
-            dev, "shell", "sh", "-c",
+        from .fingerprint import sh_script
+        out = _text(sh_script(
+            dev,
             "blockdev --getro /dev/block/sda6 2>/dev/null || echo NA; "
             "blockdev --setrw /dev/block/sda6 2>/dev/null; "
             "blockdev --getro /dev/block/sda6 2>/dev/null || echo NA"))

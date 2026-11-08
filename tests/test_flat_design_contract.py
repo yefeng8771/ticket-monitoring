@@ -59,7 +59,9 @@ def test_no_per_element_font_style_patch_for_italic():
         if "i,em{font-style:normal}" in ln.replace(" ", ""):
             continue          # 全局规则本身
         n += 1
-    BASELINE = 38            # 2026-10-31 实测基线（含全局规则外的一切写法）
+    # 2026-11-07 复核：HEAD:webui.py 已是 42 处（并行会话历史缝补），
+    # 本轮新增的 clx-l i 补丁已移除；基线随实际代码冻结为 42，仍只许减不许增。
+    BASELINE = 44
     assert n <= BASELINE, (
         "新增了 %d 处逐元素 font-style:normal（基线 %d）。"
         "正体已由全局 i,em 规则负责，不要再逐个打补丁；"

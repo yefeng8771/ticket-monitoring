@@ -23,7 +23,8 @@ def test_contract():
     c = _crawler()
     assert c.name == "app_fliggy"
     assert c.package == "com.taobao.trip"
-    assert c.supports_round_trip is False
+    # 往返 2026-11-06 真机接通（SHA→PEK 11-16/11-19 总价 ¥747）
+    assert c.supports_round_trip is True
     assert "com.taobao.trip" in c.login_url()
 
 
@@ -87,7 +88,23 @@ def test_ocr_unavailable_is_explicit(monkeypatch):
     assert "OCR" in c.paths[-1]["detail"]
 
 
-def test_round_trip_is_explicitly_unsupported():
+def test_round_trip_is_connected_by_default():
+    """往返已真机接通（2026-11-06），默认就走往返路，不再记 unsupported。
+
+    真机证据：SHA→PEK 11-16/11-19 往返总价 ¥747、去程起价 ¥682，
+    落账 `航班明细/ok/rows=1`；行带 `tripType=RT` + `retDate`。
+    """
+    from crawlers.app_fliggy import AppFliggyCrawler
+    assert AppFliggyCrawler.supports_round_trip is True
+    assert hasattr(AppFliggyCrawler, "_fetch_round_trip")
+
+
+def test_round_trip_records_unsupported_when_switch_off(monkeypatch):
+    """负控：把开关关掉时必须**如实记 unsupported**，不许静默返回空。
+
+    这条保留了原来的意图——「没验证的能力不能假装支持」。
+    """
     c = _crawler()
+    monkeypatch.setattr(type(c), "supports_round_trip", False, raising=False)
     assert c.fetch("SHA", "PEK", ["2026-11-16"], ret_date="2026-11-20") == []
     assert c.paths[-1]["status"] == "unsupported"

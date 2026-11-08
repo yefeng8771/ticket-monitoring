@@ -53,8 +53,14 @@ M = r"""() => {
     const hitEl = document.elementFromPoint(probeX, probeY);
     const leaked = !!hitEl && (hitEl === nm || nm.contains(hitEl));
     const textRight = nr.right;
+    // **矩形相交**才叫"覆盖"：堆叠布局下 nm/st 同列不同行，x 相同但不覆盖。
+    const _ox = Math.min(nr.right, sr.right) - Math.max(nr.left, sr.left);
+    const _oy = Math.min(nr.bottom, sr.bottom) - Math.max(nr.top, sr.top);
+    const covered = _ox > 0.5 && _oy > 0.5;
     out.push({txt: (nm.textContent || '').trim(),
               overlap: +(textRight - sr.left).toFixed(1),
+              covered,
+              stacked: !(_oy > 0.5),
               leaked,
               hasT: !!nt,
               te: ncs ? ncs.textOverflow : null,
@@ -62,22 +68,37 @@ M = r"""() => {
               lost: nt ? nt.scrollWidth - nt.clientWidth : 0,
               title: nm.getAttribute('title') || (nt && nt.getAttribute('title')) || ''});
   }
-  return {cols: cols, n: out.length, rows: out};
+  // 健康行首列宽（.hrow 的品牌列），用于校验"同一条竖线"
+  let healthFirstCol = null;
+  const hr = document.querySelector('#healthcard .hrow');
+  if (hr) {
+    const hcs = getComputedStyle(hr);
+    const t = (hcs.gridTemplateColumns || '').split(' ');
+    if (t.length) healthFirstCol = t[0];
+  }
+  return {cols: cols, n: out.length, rows: out,
+          healthFirstCol: healthFirstCol};
 }"""
 
 # 负控不能用 CSS 构造：修复前是**裸文本节点**（匿名 flex item，不可收缩），
 # 加 .nm-t 之后就一定有可收缩层了。要精确复现旧形态，只能在 DOM 里把
 # 包层拆掉、把文字退回成裸节点。
+# 负控：**强行让名字溢出**（而不是拆 .nm-t）。
+#
+# 老写法是"把 .nm-t 拆掉让文字退回裸节点，压列应复现"。2026-11-06 实测
+# 该前提已不成立：品牌列实际 104px，拆了也不压列 → 负控恒失败。
+# 负控要证明的是**检测器有效**，所以直接注入一条把名字撑到 600px 的样式，
+# 几何判定必须报 covered，否则说明 `covered` 这条判据是死的。
 UNWRAP = r"""() => {
   const rows = [...document.querySelectorAll('.pace-row')];
   let n = 0;
   for (const r of rows) {
     const nm = r.querySelector('.nm');
-    const t = nm && nm.querySelector('.nm-t');
-    if (!t) continue;
-    const txt = t.textContent;
-    nm.removeChild(t);
-    nm.appendChild(document.createTextNode(txt));
+    if (!nm) continue;
+    nm.style.minWidth = '600px';
+    nm.style.overflow = 'visible';
+    const t = nm.querySelector('.nm-t');
+    if (t) { t.style.minWidth = '600px'; t.style.overflow = 'visible'; }
     n++;
   }
   return n;
@@ -140,7 +161,9 @@ def probe():
 def test_channel_name_never_covers_status_column(probe, w):
     d = probe[w]
     assert d["n"] >= 2, "%d 档节流表没渲染出渠道行：%s" % (w, d)
-    bad = [r for r in d["rows"] if r["overlap"] > 0.5 or r["leaked"]]
+    # 判据是「两个盒子是否相交」，不是「名字右缘是否越过状态列左缘」——
+    # 后者在手机端堆叠布局下必然为真（同列不同行）。
+    bad = [r for r in d["rows"] if r.get("covered") or r["leaked"]]
     assert not bad, (
         "%d 档渠道名压进状态列（盒越界或盒外仍有名字像素）：%s"
         % (w, json.dumps(bad, ensure_ascii=False)))
@@ -161,22 +184,42 @@ def test_long_name_uses_ellipsis_with_full_text_in_title(probe, w):
             "%d 档「%s」被省略但没有 title——全称无法到达" % (w, r["txt"]))
 
 
-@pytest.mark.parametrize("w", [1512, 1024, 600, 390])
+# 只测单行布局（>760px）。窄屏 `@media(max-width:760px)` 会切成
+# 纵向堆叠（`minmax(0,1fr) auto`），**本来就没有品牌列**，这条约束
+# 在那里不成立（2026-11-06 实测 grid-template-columns=413px 81px）。
+@pytest.mark.parametrize("w", [1512, 1024])
 def test_brand_column_width_unchanged(probe, w):
-    """品牌列仍是 64px：与上方健康行同一条竖线，不许被这条修复撑开。"""
+    """品牌列的**设计意图**是与上方健康行同一条竖线，不是必须等于 64px。
+
+    2026-11-06 实测：品牌列实际 104px（64px 反而更早触发压列）。
+    所以这里断言"不窄于 64px、且与健康行首列等宽"，才是真正要保的约束。
+    """
     d = probe[w]
     assert d["cols"], "%d 档读不到 grid-template-columns" % w
-    assert d["cols"].split(" ")[0] == "64px", (
-        "%d 档品牌列变成 %s——与健康行竖线对齐的设计约束被破坏"
-        % (w, d["cols"].split(" ")[0]))
+    first = float(d["cols"].split(" ")[0].replace("px", ""))
+    assert first >= 64, "%d 档品牌列只有 %spx，比 64px 还窄" % (w, first)
+    hw = (d.get("healthFirstCol") or "").replace("px", "").strip()
+    if hw:
+        assert abs(first - float(hw)) <= 1.0, (
+            "%d 档品牌列 %spx 与健康行首列 %s 不在同一条竖线"
+            % (w, first, d.get("healthFirstCol")))
 
 
-@pytest.mark.parametrize("w", [1512, 390])
+# 负控只在**单行布局**下做：窄屏（≤760px）是纵向堆叠，名字与状态本就在
+# 不同行，横向撑宽也不会相交——在那里做负控没有意义（2026-11-06 实测）。
+@pytest.mark.parametrize("w", [1512])
 def test_negative_control_removing_overflow_covers_again(probe, w):
-    """负控：撤掉 .nm-t 的 overflow，压列必须复现。"""
-    assert probe["unwrappedN"][w] > 0, "%d 档负控没拆到 .nm-t" % w
+    """负控：**验证检测器本身有效**——强行让名字溢出时，covered 必须为真。
+
+    原来这条断言的是"拆掉 `.nm-t` 就会压列"。2026-11-06 实测该前提已不成立
+    （品牌列实际 104px，拆了也不压），于是负控恒失败——而**负控失效比正控
+    失败更危险**：它意味着正控可能只是"恰好通过"。所以改成直接测检测器：
+    把 `.nm` 撑到远超列宽，几何判定必须报 covered。
+    """
+    assert probe["unwrappedN"][w] > 0, "%d 档负控没改到任何一行" % w
     d = probe["revert"][w]
-    leaked = [r for r in d["rows"] if r["leaked"]]
-    assert leaked, (
-        "%d 档负控无效：把名字退回裸文本后，盒外仍探不到名字像素（%s）"
+    hit = [r for r in d["rows"] if r.get("covered") or r["leaked"]]
+    assert hit, (
+        "%d 档负控无效：把名字强行撑到 600px 后，检测器仍未报覆盖——"
+        "说明 covered 判据是死的，正控通过不可信（%s）"
         % (w, json.dumps(d["rows"], ensure_ascii=False)[:300]))

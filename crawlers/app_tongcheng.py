@@ -134,18 +134,31 @@ def _find_city_hit(xml, city):
 
 
 def _form_slot(xml, kind, city=""):
-    """表单城市/日期位的当前坐标（页面滚动后固定坐标会漂）。"""
+    """表单城市/日期位的当前坐标（页面滚动后固定坐标会漂）。
+
+    **不再用 `cy < 1000` 的上限**（2026-11-05）：设完航线后布局会重排，
+    实测日期位从 y≈971 挪到 **y≈1061**，于是 `_form_slot(page,"date")`
+    返回 None，调用方退回 900×1600 基准的 `_DATE_SLOT=(244,562)` 点空，
+    账本记 `app-date / 日历未打开`。而手工点当前真实位置是能打开日历的。
+
+    新判据：取**最靠上**的那个匹配（表单自己的日期/城市行在页面顶部，
+    下方是促销与推荐，天然排在后面）。
+    """
     ns = _nodes(xml)
     if kind == "date":
-        for n in ns:
-            if n["cy"] < 1000 and re.search(r"\d+月\d+日", n["text"]):
-                return (n["cx"], n["cy"])
-        return None
-    hits = [n for n in ns if n["text"] == city and n["cy"] < 1000]
+        hits = [n for n in ns if re.search(r"\d+月\d+日", n["text"])]
+        if not hits:
+            return None
+        n = min(hits, key=lambda x: x["cy"])
+        return (n["cx"], n["cy"])
+    hits = [n for n in ns if n["text"] == city]
     if not hits:
         return None
-    side = [n for n in hits if (n["cx"] < 450 if kind == "dep"
-                                else n["cx"] >= 450)]
+    # 左右分列用整页宽的中位，而不是写死 450
+    xs = [n["cx"] for n in hits]
+    mid = (min(xs) + max(xs)) / 2.0
+    side = [n for n in hits if (n["cx"] <= mid if kind == "dep"
+                                else n["cx"] > mid)]
     n = min(side or hits, key=lambda x: x["cy"])
     return (n["cx"], n["cy"])
 
@@ -185,6 +198,10 @@ class AppTongchengCrawler(AppCrawler):
 
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        # 日期超出 App 视野就直接交浏览器（能力边界，记 unsupported）：
+        # App 日历只支持近未来，远期日期每条白耗 100–150 秒设备时间。
+        if self.reject_far_dates(dates):
+            return []
         try:
             import uiautomator2  # noqa: F401
         except Exception:
@@ -203,6 +220,17 @@ class AppTongchengCrawler(AppCrawler):
         if dev is None:
             self.path_note("android-device", "unsupported",
                            detail="device unavailable")
+            return []
+        # 链路闸门（r1063 T9）：**必须在拿设备锁之前**按阶段问——闸门要等
+        # 时不能占着设备睡（App 渠道的设备是串行独占的）。一次 fetch 走
+        # 「登录 → 列表」两段（往返查询走「登录 → 往返」）；被停用的阶段
+        # 只记 `paced` 并交空结果，**不记失败**（记失败会拉开整家渠道熔断）。
+        if not self.path_gate("app-login", "detail"):
+            return []
+        if ret_date:
+            if not self.path_gate("往返", "round_trip"):
+                return []
+        elif not self.path_gate("app-list", "detail"):
             return []
         with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
@@ -432,13 +460,24 @@ class AppTongchengCrawler(AppCrawler):
             return True
 
     def _tap_form_tab(self, dev, label: str):
+        """点表单顶部的档位 tab（国内/国际/往返/多程）。
+
+        **不再用 `cy < 400`**（2026-11-05）：那是 900×1600 的标定值，而
+        1260×2800 下档位 tab 落在 **y≈604**，于是永远找不到 tab、
+        `_set_one_way_mode` 永远失败 —— 渠道被判 `app-form timeout`，
+        真实原因只是"表单还停在往返档"。
+
+        新判据与分辨率无关：同名节点里取**最靠上**的那个（档位 tab 一定
+        在城市行/日期行之上），不需要任何 y 常量。
+        """
         page = _dump(dev)
-        for n in _nodes(page):
-            if n["text"] == label and n["cy"] < 400:
-                dev.tap(n["cx"], n["cy"])
-                time.sleep(1.5)
-                return _dump(dev)
-        return page
+        cands = [n for n in _nodes(page) if n["text"] == label]
+        if not cands:
+            return page
+        target = min(cands, key=lambda n: n["cy"])
+        dev.tap(target["cx"], target["cy"])
+        time.sleep(1.5)
+        return _dump(dev)
 
     def _set_one_way_mode(self, dev, from_city: str, to_city: str) -> bool:
         """单程请求先清掉上轮往返的返程日：带返程位查询会落双栏往返页。"""
@@ -459,12 +498,13 @@ class AppTongchengCrawler(AppCrawler):
         """国内走「国内」档（返程位可留空后选），国际走「往返」档。"""
         label = "国内" if self._is_domestic(from_city, to_city) else "往返"
         page = _dump(dev)
-        for n in _nodes(page):
-            if n["text"] == label and n["cy"] < 400:
-                dev.tap(n["cx"], n["cy"])
-                time.sleep(1.5)
-                page = _dump(dev)
-                break
+        # 同样不看 y 常量：取最靠上的同名节点（见 `_tap_form_tab` 的说明）
+        cands = [n for n in _nodes(page) if n["text"] == label]
+        if cands:
+            target = min(cands, key=lambda n: n["cy"])
+            dev.tap(target["cx"], target["cy"])
+            time.sleep(1.5)
+            page = _dump(dev)
         form = parse_round_trip_form(page)
         if not form:
             self.path_note("app-roundtrip", "timeout",
@@ -924,6 +964,9 @@ class AppTongchengCrawler(AppCrawler):
             self.path_note("android-device", "unsupported",
                            detail="device unavailable")
             return []
+        # 链路闸门（r1063 T9）：价格日历是一个独立阶段，在拿设备锁之前问。
+        if not self.path_gate("app-calendar", "calendar"):
+            return []
         with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
             form = self._ensure_form(dev)
@@ -966,6 +1009,11 @@ class AppTongchengCrawler(AppCrawler):
     def low_fare(self, from_city: str, to_city: str,
                  days: int = 14, anchor_ymd: str = "") -> List[dict]:
         """特价雷达发现源：逐日最低价（与 calendar 同一数据面）。"""
+        # 链路闸门（r1063 T9）：同程的低价就是价格日历，同一次设备交互算
+        # 一条路——两档名字都要放行才跑（停「低价」只停特价发现源，停
+        # 「日历」则两个都停）。各自记名，面板上看得清是哪一档把它停掉的。
+        if not self.path_gate("low-fare", "low_fare"):
+            return []
         return self.calendar(from_city, to_city, days=days,
                              anchor_ymd=anchor_ymd)
 

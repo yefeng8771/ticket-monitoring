@@ -40,7 +40,9 @@ def test_frontend_reads_payload_not_cfg():
     """健康页的 CFG 是 null——读它等于这段永不出现（已实证）。"""
     w = _w()
     i = w.index("const _miss=_cfgP.filter")
-    seg = w[i - 700:i + 300]
+    # 窗口要够宽：r979 之后 enabled_platforms 到 _miss 之间插入了
+    # 「未启用渠道」整块（约 900 字符），原来的 -700 已够不到（2026-11-06）。
+    seg = w[i - 1600:i + 300]
     assert "j.enabled_platforms" in seg, "前端没有读后端下发的清单"
     assert "(CFG||[]).forEach" not in seg, "前端又去读 CFG 了（健康页为 null）"
 
@@ -104,6 +106,8 @@ def test_render_shows_unscanned_channels():
                           icon:!!r.querySelector('img.bic,span.bic'),
                           badge:(r.querySelector('.hbadge')||{}).textContent||''}));
               return {n:document.querySelectorAll('#healthcard .hrow').length,
+                      off:document.querySelectorAll(
+                        '#healthcard .hoffrow').length,
                       miss:miss,
                       inBody:!!body&&body.innerHTML.indexOf('未扫描')>=0,
                       bodyLen:body?body.innerHTML.length:0}}""")
@@ -115,7 +119,14 @@ def test_render_shows_unscanned_channels():
         except Exception:
             srv.kill()
 
-    assert got["n"] == 5, "2 家已扫描 + 3 家未扫描应各有完整一行：%s" % got
+    # r979 起，注册但**未启用**的渠道也会渲染一行「去启用」（.hoffrow），
+    # 所以总行数 = 已扫描(2) + 未扫描(3) + 未启用(off)。这里按组成断言，
+    # 而不是钉死一个会随渠道数变化的常数。
+    assert got["n"] == 2 + 3 + got.get("off", 0), (
+        "健康卡行数应为 已扫描2 + 未扫描3 + 未启用%d：%s"
+        % (got.get("off", 0), got))
+    assert got.get("off", 0) > 0, (
+        "r979 要求「未启用」渠道也单独成行（.hoffrow）：%s" % got)
     assert len(got["miss"]) == 3, "未扫描渠道没有各自成行：%s" % got
     text = "".join(x["text"] for x in got["miss"])
     for name in ("去哪儿", "飞猪", "同程"):

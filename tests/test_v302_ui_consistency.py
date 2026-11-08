@@ -52,7 +52,7 @@ def test_search_header_is_compact_and_source_strip_is_a_table():
     src = _src()
     for s in (
         '<div class="srx-hero-copy" id="srxHeroCopy">',
-        "let po='0';try{po=localStorage.getItem('jpsrx_probeopen2')||'0'}",
+        "let po='1';try{po=localStorage.getItem('jpsrx_probeopen2')||'1'}",
         "#searchview .srx-capbar{display:flex!important;background:transparent!important;border:0!important;",
         "#searchview .srx-probe:not(.open) .srx-probeacts>*:not(.srx-probe-toggle){display:none!important}",
         "#searchview .srx-kpi{display:inline-flex!important",

@@ -18,11 +18,19 @@ def _schedule_next(sched, state, job_id="price_monitor"):
     logger = logging.getLogger("ticket-monitor")
     iv = int(state.get("interval_minutes", 30))
     jm = int(state.get("jitter_minutes", 0))
+    # 自适应退避（2026-11-06）：上一轮受阻越多，这一轮推得越远。
+    # 由轮末按 `pacing.round_backoff_minutes()` 写入；全绿时会被清回 0，
+    # 所以恢复正常后立刻回到正常节奏，不会一路慢下去。
+    try:
+        _bo = int(state.get("backoff_minutes", 0) or 0)
+    except (TypeError, ValueError):
+        _bo = 0
+    _bo = max(0, _bo)
     try:
         from datetime import datetime, timedelta
         if sched.get_job(job_id) is None:
             return None
-        delta = max(1, iv + random.uniform(-jm, jm))
+        delta = max(1, iv + _bo + random.uniform(-jm, jm))
         # r391：静默窗跳过轮把「窗口结束 +1 分钟」写进 state["wake_at"]，
         # 这里取较短的那个——否则窗口结束后还要等满一个间隔才补采。
         _wake = state.pop("wake_at", None)
@@ -30,8 +38,12 @@ def _schedule_next(sched, state, job_id="price_monitor"):
             delta = min(delta, max(1.0, _wake / 60.0))
         next_time = datetime.now(sched.timezone) + timedelta(minutes=delta)
         sched.modify_job(job_id, next_run_time=next_time)
-        logger.info("下次抓取计划: %s (间隔 %.1f 分钟)",
-                    next_time.strftime("%H:%M:%S"), delta)
+        if _bo:
+            logger.info("下次抓取计划: %s (间隔 %.1f 分钟，含受阻退避 %d 分钟)",
+                        next_time.strftime("%H:%M:%S"), delta, _bo)
+        else:
+            logger.info("下次抓取计划: %s (间隔 %.1f 分钟)",
+                        next_time.strftime("%H:%M:%S"), delta)
         return next_time
     except Exception as e:
         logger.warning("调整下次执行时间失败: %s", e)

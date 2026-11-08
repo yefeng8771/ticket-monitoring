@@ -248,5 +248,11 @@ def _rt_count_errors(body):
 def test_body_round_trip_count_matches_matrix():
     body = _read()
     assert _rt_count_errors(body) == [], _rt_count_errors(body)
-    bad = body.replace("9 家", "10 家均已有已接通通路", 1)
-    assert _rt_count_errors(bad), "负控失败：10 家均接通没被拦"
+    # 负控要**随当前家数取词**：原来写死「9 家」，家数一变（9→10）替换
+    # 就落空、负控恒过、形同虚设（2026-11-06 实际踩到，与 README 那条同理）。
+    _n = sum(1 for row in CHANNEL_DIMENSIONS.values()
+             if row["round_trip"] == "y")
+    bad = body.replace("%d 家" % _n,
+                       "%d 家均已有已接通通路" % _n, 1)
+    assert bad != body, "负控样本没替换到家数"
+    assert _rt_count_errors(bad), "负控失败：全家均接通没被拦"

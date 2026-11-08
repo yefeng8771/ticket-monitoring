@@ -3,7 +3,7 @@
 
 默认路径：人工在真实窗口里完成挑战（本文件钉的就是这条链）。
 自动处置属于可选外挂（``crawlers/slider.py::SliderHandler``，需显式注册 +
-``crawler.slider.auto`` 打开，且只对几何滑块生效）；任何情况下都不接第三方
+``crawler.slider.auto`` 打开，且只对几何滑块生效）；外部打码平台默认不接
 打码服务、也不调用官方接口。
 """
 import logging

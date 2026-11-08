@@ -151,7 +151,8 @@ def page(srv):
         pg.on("pageerror", lambda e: errs.append(("pageerror", str(e))))
         pg.on("console", lambda m: errs.append(("console.error", m.text))
               if m.type == "error" else None)
-        pg.set_default_timeout(8000)
+        pg.set_default_timeout(20000)
+        pg.set_default_navigation_timeout(30000)
         yield pg
         leftover = [e for e in errs
                     if not any(pat in e[1] for pat in pg._expected)]
@@ -740,8 +741,13 @@ class TestW13Route:
             page.wait_for_selector("#citypanel", state="visible")
             assert page.locator(
                 "#cpbody .cp-city").count() > 100   # 全量城表面在场
+            page.wait_for_selector('#cpbody .cp-city[data-n="北京"]',
+                                   state="visible", timeout=10000)
             page.locator('#cpbody .cp-city[data-n="北京"]').first.click()
-            page.wait_for_timeout(120)
+            page.wait_for_function(
+                "()=>{const e=document.querySelector("
+                "'.rline[data-rk=\"0:0\"] input[onchange*=\"from_name\"]');"
+                "return e && e.value.trim()==='北京'}", timeout=8000)
             out = page.evaluate("""(() => {
               const r = CFG[0].routes[0];
               const head = document.querySelector(
@@ -763,8 +769,13 @@ class TestW13Route:
             tin = '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"]'
             _click(page, tin + ' + .rt-citymore')
             page.wait_for_selector("#citypanel", state="visible")
+            page.wait_for_selector('#cpbody .cp-city[data-n="长沙"]',
+                                   state="visible", timeout=10000)
             page.locator('#cpbody .cp-city[data-n="长沙"]').first.click()
-            page.wait_for_timeout(120)
+            page.wait_for_function(
+                "()=>{const e=document.querySelector("
+                "'.rline[data-rk=\"0:0\"] input[onchange*=\"to_name\"]');"
+                "return e && e.value.trim()==='长沙'}", timeout=8000)
             out = page.evaluate("""(() => {
               const r = CFG[0].routes[0];
               const head = document.querySelector(
@@ -789,7 +800,10 @@ class TestW13Route:
             _click(page, '.rline[data-rk="0:0"] input[onchange*="\'to_name\'"] + .rt-citymore')
             page.wait_for_selector("#citypanel", state="visible")
             page.locator("#cpq").fill("长沙")
-            page.wait_for_timeout(120)
+            page.wait_for_function(
+                "()=>{const a=[...document.querySelectorAll('#cpbody .cp-city')]"
+                ".filter(e=>e.offsetParent&&e.textContent.includes('长沙'));"
+                "return a.length>=1}", timeout=10000)
             page.locator("#cpbody .cp-city:visible").first.click()
             page.wait_for_timeout(120)
             out = page.evaluate("""(() => ({
@@ -953,8 +967,13 @@ class TestW15Specials:
         try:
             _click(page, '#cfgform input[data-sp="from_name"]')
             page.wait_for_selector("#citypanel", state="visible")
+            page.wait_for_selector('#cpbody .cp-city[data-n="北京"]',
+                                   state="visible", timeout=10000)
             page.locator('#cpbody .cp-city[data-n="北京"]').first.click()
-            page.wait_for_timeout(120)
+            page.wait_for_function(
+                "()=>{const e=document.querySelector("
+                "'#cfgform input[data-sp=\"from_name\"]');"
+                "return e && e.value.trim()==='北京'}", timeout=8000)
             out = page.evaluate("""(() => ({
               name: CFG[0].specials[0].from_name,
               inp: document.querySelector(

@@ -258,18 +258,29 @@ def test_login_rows_keep_one_action_column_under_mixed_states(page):
             const a = r.querySelector('.lgact')
                     || [...r.querySelectorAll('button,a.btn2')].pop();
             const ar = a ? a.getBoundingClientRect() : null;
+            const rr = r.getBoundingClientRect();
             return {name: (r.querySelector('.lgname')||{}).textContent || '',
                     act: a ? (a.textContent||'').trim() : null,
+                    cardL: Math.round(rr.left),
                     L: ar ? Math.round(ar.left) : null,
                     W: ar ? Math.round(ar.width) : null,
-                    H: Math.round(r.getBoundingClientRect().height)};
+                    H: Math.round(rr.height)};
           });
-          return {acts, uniqL: [...new Set(acts.map(a => a.L))],
+          // r1052：宽档登录卡是两列栅格（用户定的「宽面两列」），
+          // 「同一列」按卡片所在视觉列分组核对；跨列本来就不同左缘。
+          const cols = {};
+          acts.forEach(a => { (cols[a.cardL] = cols[a.cardL] || []).push(a); });
+          const colUniq = Object.values(cols).map(g =>
+            [...new Set(g.map(a => a.L))]);
+          return {acts, nCols: Object.keys(cols).length, colUniq,
                   uniqH: [...new Set(acts.map(a => a.H))]};
         }""", st)
         assert len(out["acts"]) >= 7, (st, out["acts"])
-        assert len(out["uniqL"]) == 1, (
-            "状态 %s 下操作按钮左缘参差：%s" % (st, out["acts"]))
+        assert out["nCols"] in (1, 2), (
+            "状态 %s 下登录卡列数异常：%s" % (st, out["nCols"]))
+        for uniq in out["colUniq"]:
+            assert len(uniq) == 1, (
+                "状态 %s 下同列操作按钮左缘参差：%s" % (st, out["acts"]))
         assert len(out["uniqH"]) == 1, (
             "状态 %s 下行高参差（按钮把行顶成两行）：%s" % (st, out["acts"]))
         assert out["uniqH"][0] == 52, (st, out["acts"])

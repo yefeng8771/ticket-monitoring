@@ -28,7 +28,8 @@ def post(url, *, headers=None, payload=b"", cookies=None, timeout=25,
                 impersonate=imp)
     import httpx
     return httpx.post(url, headers=headers or {}, content=payload,
-                      cookies=cookies or {}, timeout=timeout)
+                      cookies=cookies or {}, timeout=timeout,
+                      trust_env=False)
 
 
 def new_client(impersonate="chrome", **kwargs):
@@ -43,6 +44,12 @@ def new_client(impersonate="chrome", **kwargs):
     """
     imp = (IMPERSONATE_DEFAULT if impersonate is None
            else str(impersonate or "").strip())
+    # **默认不走系统/环境代理**（2026-11-06）：httpx 默认 trust_env=True，
+    # 会把系统代理（Clash）套上来——既可能把国内站点请求绕到境外出口
+    # （风控升档），又会因 NO_PROXY 里带 `[::1]` 之类直接抛 InvalidURL
+    # 让渠道整条空转。项目在 special.py / notifier.py 里早已明确
+    # 「系统代理一律不走」，这里补上同一纪律。显式 `proxy=` 不受影响。
+    kwargs.setdefault("trust_env", False)
     if imp:
         try:
             from curl_cffi import requests as _c
@@ -84,4 +91,4 @@ def get(url, *, headers=None, cookies=None, timeout=20, impersonate=None):
                              impersonate=imp)
     import httpx
     return httpx.get(url, headers=headers or {}, cookies=cookies or {},
-                     timeout=timeout)
+                     timeout=timeout, trust_env=False)

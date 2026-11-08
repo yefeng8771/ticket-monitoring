@@ -108,13 +108,25 @@ class YieldLedger:
         return rec
 
     def note(self, plat: str, path: str, ok: bool, rows: int = 0,
-             now: float = None) -> dict:
-        """记一次采集结果。返回该路径的累计记录。"""
+             now: float = None, status: str = "") -> dict:
+        """记一次采集结果。返回该路径的累计记录。
+
+        ``status``（可选）只做**观测**用：累加进该路径的 ``st`` 直方图。
+        没有它的话，账本里 ``fail`` 会把"站点确实没票（empty）"、
+        "解析/交互失败（error/timeout）"、"登录墙（login/captcha）"
+        混成一个数字——三者处置方向完全不同（2026-11-05）。
+        它**不影响** ok/fail 判定：``empty`` 仍然算"没取到数"，
+        新增的只是"为什么没取到"。老账本没有 ``st`` 键，读时用 .get 兜底。
+        """
         ts = float(now if now is not None else time.time())
         rec = self._plat(plat)
         key = str(path or "unknown")
         p = rec["paths"].setdefault(key, {"ok": 0, "fail": 0, "rows": 0,
                                           "last": 0.0})
+        _st = str(status or "").strip()
+        if _st:
+            hist = p.setdefault("st", {})
+            hist[_st] = int(hist.get(_st) or 0) + 1
         if ok:
             p["ok"] = int(p.get("ok") or 0) + 1
             rec["total"]["ok"] = int(rec["total"].get("ok") or 0) + 1
@@ -178,7 +190,11 @@ class YieldLedger:
             lo, hi = wilson(ok, n)
             out.append({"path": name, "ok": ok, "n": n,
                         "rate": (ok / n) if n else 0.0,
-                        "lower": round(lo, 3), "rows": int(p.get("rows") or 0)})
+                        "lower": round(lo, 3), "rows": int(p.get("rows") or 0),
+                        # 状态直方图：ok/fail 只说明"有没有取到数"，
+                        # st 说明"为什么"（empty=没票 / error=解析 /
+                        # login=登录墙）。老账本没有 st，给空 dict。
+                        "st": dict(p.get("st") or {})})
         out.sort(key=lambda r: (-r["lower"], -r["n"]))
         return out
 
@@ -232,13 +248,29 @@ class YieldLedger:
                 "samples": n, "lower": round(lo, 3),
                 "why": "下界 %.2f < %.2f，先修因果链再谈频率" % (lo, lo_bad)}
 
-    def snapshot(self) -> dict:
-        """给面板/日志的整体视图。"""
+    def snapshot(self, exclude_infra: bool = False) -> dict:
+        """给面板/日志的整体视图。
+
+        ``exclude_infra=True`` 时按**通路**重算样本：跳过 ``INFRA_PATHS``
+        （快照恢复/运行时/解析兜底——它们的成败说明的是设备状态，
+        不是站点对采集的反应）。``total`` 是历史累计，含 ``is_non_attempt``
+        上线前的旧数，改不了；只有在读侧剔除，顶行才等于真实采集口径
+        （app_zhixing 实测 0.60 → 0.99）。
+        """
         out = {}
         for plat, rec in self.data.items():
             t = rec.get("total") or {}
             ok = int(t.get("ok") or 0)
             n = ok + int(t.get("fail") or 0)
+            if exclude_infra:
+                ok = 0
+                n = 0
+                for name, p in (rec.get("paths") or {}).items():
+                    if str(name) in NO_SAMPLE_PATHS:
+                        continue
+                    _ok = int(p.get("ok") or 0)
+                    ok += _ok
+                    n += _ok + int(p.get("fail") or 0)
             lo, hi = wilson(ok, n)
             out[plat] = {
                 "ok": ok, "n": n, "rows": int(t.get("rows") or 0),
@@ -248,6 +280,40 @@ class YieldLedger:
                 "dead_hours": self.dead_hours(plat),
             }
         return out
+
+
+def user_data_root(config=None, default: str = "user_data") -> str:
+    """账本根目录（**唯一口径**）。
+
+    优先级：config 显式值 > 环境变量 ``TM_USER_DATA_DIR`` > ``default``。
+
+    为什么要有环境变量这一层（2026-11-05，同类第三次）：
+    测试里的假渠道（app_demo / probe / app_dummy）按"模块默认路径"把账本
+    写进了**真实** ``user_data/``，于是 ``scripts/yield_report.py`` 把它们
+    当成真渠道渲染成 0% 成功率，还给出"建议间隔 75 分钟"——污染了爬取率
+    这张决策表。写点分散在 4 处，逐用例打补丁注定漏，所以按 conftest 既有
+    惯例（PUSH_HISTORY_FILE / TM_RENDER_DIR 同律）做**集中重定向**。
+
+    为什么 config 优先：生产 ``main.py`` 总会显式传绝对 ``user_data_dir``；
+    而"显式传 tmp 并断言落在那里"的既有用例也不该被环境变量改写。
+
+    但**显式传默认值不算显式配置**（2026-11-05 补）：`{"user_data_dir":
+    "user_data"}` 与不传等价，全仓 16 个测试文件 22 处都这么写；把它当
+    显式配置的话，集中重定向就永远漏这些用例，脏账本会继续长出来。
+    """
+    cfg = config if isinstance(config, dict) else {}
+    dflt = str(default or "user_data").strip() or "user_data"
+    root = str(cfg.get("user_data_dir") or "").strip()
+    # **显式传默认值 ≠ 显式配置**：`{"user_data_dir": "user_data"}` 与
+    # 不传该键在语义上完全等价（都是"用默认目录"）。全仓 16 个测试文件、
+    # 22 处都这么写，逐处改注定漏，且下个新用例还会这么写。
+    # 所以把默认值当哨兵：等于它就继续往下走（可被重定向），
+    # 只有**真的换了目录**（绝对路径如生产的 session_root，或别的相对名）
+    # 才算显式配置并优先返回。
+    if root and os.path.normpath(root) != os.path.normpath(dflt):
+        return root
+    env = str(os.environ.get("TM_USER_DATA_DIR") or "").strip()
+    return env or root or dflt
 
 
 def default_ledger(user_data_dir: str = "user_data",
@@ -272,6 +338,53 @@ def is_paced(paths) -> bool:
     if not recs:
         return False
     return all(str(r.get("status") or "") == "paced" for r in recs)
+
+
+# **基础设施通路**：它们的成败说明的是"设备/恢复/运行时"的状态，
+# 不是站点对采集的反应。把它们混进渠道成功率，会把"我方没尝试"
+# 记成"渠道失败"。
+INFRA_PATHS = ("snap-restore", "android-runtime", "android-device",
+               "app-dump", "app-error")
+
+#: 读侧算成功率时要剔除的通路 = 基础设施 + 明确"没发起查询"的两类。
+#:   * ``TRIP``    —— 往返明细本渠道不支持（状态 ``unsupported``）；
+#:   * ``unknown`` —— ``app-silent`` 上线前的旧轮次，连通路都没记。
+#: 两者都不是采集尝试；把它们算进分母，实测把 app_qunar 从 0.28 拖到 0.09，
+#: 让人误判成"整个渠道几乎全挂"。
+NO_SAMPLE_PATHS = INFRA_PATHS + ("TRIP", "unknown")
+
+
+def is_non_attempt(paths) -> bool:
+    """这一轮**根本没有真正尝试采集**（不支持的通路 / 纯基础设施步骤）。
+
+    为什么需要（2026-11-05 实测）：`app_zhixing` 的账本里
+    数据通路 `日历` 成功率 **0.99(636)**，可整渠道被算成 0.59 ——
+    因为 266 条 `snap-restore`（登录态快照恢复，永远 rows=0）和
+    52 条 `android-runtime/unsupported`（该通路本渠道不支持）
+    全被当成"采集失败"进了分母。
+
+    这与 `is_paced` 是**同一个病**（"我方主动让位"曾被算成"渠道失败"，
+    账面成功率只剩 50%，让人误以为被风控）。原则也照搬：
+    **不是采集尝试的轮次，不该进成功率样本**。
+
+    判据（保守，宁可少判）：
+      * 状态是 `paced`（我方让位）或 `unsupported`（本就不支持）→ 不算尝试；
+      * 通路属于 `INFRA_PATHS`（快照恢复/运行时/解析兜底）→ 不算尝试；
+      * 只要有一条是**真的打了站点**（ok/empty/timeout/soft_reject/login…）
+        → 这一轮就是真实样本，照常计入（失败也照实记）。
+    """
+    recs = [r for r in (paths or []) if isinstance(r, dict)]
+    if not recs:
+        return False
+    for r in recs:
+        st = str(r.get("status") or "")
+        pth = str(r.get("path") or "")
+        if st in ("paced", "unsupported"):
+            continue
+        if pth in INFRA_PATHS:
+            continue
+        return False
+    return True
 
 
 def statuses_ok(paths) -> tuple:

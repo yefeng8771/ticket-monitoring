@@ -18,8 +18,9 @@
 
     register_handler(MyHandler())
 
-现成的处理器：``crawlers.slider.SliderHandler``（只对**几何滑块**尝试，强人机
-不碰；需显式注册 + ``crawler.slider.auto`` 打开，默认不挂）。
+现成的处理器：``crawlers.slider.SliderHandler``（几何滑块 + 算数 + 文字 +
+点选，按 ``crawler.slider.auto`` / ``crawler.captcha.*`` 决定尝试范围；
+默认自动挂载，无需手写注册）。
 
 处理器在**页面渲染完成之后**接手（导航一返回就调用），面对的是已经渲染
 出来的挑战控件；它解完自行 reload，重载不会再触发本钩子。
@@ -168,17 +169,19 @@ def current_handler():
 
 def ensure_slider_handler(config=None, *, user_data_dir="user_data",
                           profile: str = "", logger=None):
-    """按配置**自动**挂上滑块处理器（幂等，默认关）。
+    """按配置**自动**挂上滑块/简易验证码处理器（幂等）。
 
     为什么需要这一层：``SliderHandler`` 写好了，但"谁去注册它"一直没人接——
     ``crawler.slider.auto`` 配成 ``simple`` 也不会生效，功能等于死的
     （2026-11-03 全仓搜过：``register_handler`` 只有在测试里被调用过）。
 
-    这里做成**幂等 + 失败静默**的引导函数，由 ``BaseCrawler.__init__`` 调用，
-    于是只要采集器启动就会按配置生效，不用改 main / webui：
+    这里做成**幂等 + 失败静默**的引导函数，由采集器 ``__init__`` 调用
+    （``BaseCrawler`` 与 ``AppCrawler`` 两处都要调——AppCrawler 不继承
+    BaseCrawler，漏了它 App 渠道就一辈子没注册过）：
 
-    * ``crawler.slider.auto`` 为假/未配 → **不注册**，保持"识别→记账→停手"；
-    * 为真 → 注册 ``SliderHandler``（内部仍会二次分级：强人机一律不碰）；
+    * ``crawler.slider.auto`` 显式为假 → **不注册**，回到"识别→记账→停手"；
+    * 未配或为真 → 注册处理器（内部二次分级：图像型尝试，行为型不动）；
+      **默认就是这一支**（2026-11-05 起，见 ``slider`` 模块头的约束表）；
     * 已经注册过同一个处理器 → 直接返回，不重复覆盖。
 
     返回当前处理器（可能是 None）。
@@ -190,7 +193,7 @@ def ensure_slider_handler(config=None, *, user_data_dir="user_data",
             "probe", config, user_data_dir=user_data_dir, profile=profile)[0]
         if not want:
             return cur
-        # 优先挂**超集**处理器：它覆盖滑块 + 算数 + 文字（强人机一律不碰）。
+        # 优先挂**超集**处理器：它覆盖滑块 + 算数 + 文字（强人机不投入）。
         # 挂不上时退回只处理滑块的旧实现，保证老行为可用。
         try:
             from . import captcha as captcha_mod
@@ -200,6 +203,12 @@ def ensure_slider_handler(config=None, *, user_data_dir="user_data",
             handler_cls = slider_mod.SliderHandler
             handler_name = "slider-handler"
         if getattr(cur, "name", "") in ("solver-handler", "slider-handler"):
+            return cur
+        # **不许覆盖别人显式注册的处理器**（2026-11-05 被测试抓到）。
+        # 原先这里无条件注册，于是调用方自己 `register_handler(MyHandler())`
+        # 之后，只要有采集器构造一次就被静默换回内置实现——接缝形同虚设。
+        # 只接管「空」或「我们自己的旧实现」两种状态。
+        if cur is not None:
             return cur
         return register_handler(handler_cls(
             config, user_data_dir=user_data_dir, profile=profile,

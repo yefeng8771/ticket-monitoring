@@ -136,30 +136,37 @@ def browser():
         b.close()
 
 
-def test_mobile_context_is_safari_coherent(browser):
+def test_mobile_context_is_android_chrome_coherent(browser):
+    """移动档 = **Android Chrome**（r1063 T25）。
+
+    旧契约把它建模成 iPhone Safari，于是"不该有 window.chrome / UA-CH /
+    deviceMemory"——但运行时是 Chromium，这几条恰好是**矛盾证据**
+    （`python -m core.fp_audit` 报 high）。现在整族切到 Android Chrome：
+    有 chrome、有 UA-CH（mobile=true, Android）、有 deviceMemory。
+    """
     ctx, page, fp = _open(browser, True)
     try:
         got = page.evaluate(PROBE)
     finally:
         ctx.close()
     assert fp["is_mobile"] is True
-    assert got["vendor"] == "Apple Computer, Inc."
-    assert got["platform"] == "iPhone"
-    # 移动档不得出现 Chromium 专属对象 / 桌面触摸特征
-    assert got["chrome"] == "undefined", got
-    assert got["chromeIn"] is False, got
-    assert got["uad"] == "undefined", got
-    assert got["uadIn"] is False, got
-    assert got["dm"] == "undefined", got
-    assert got["dmIn"] is False, got
+    assert got["vendor"] == "Google Inc."
+    assert got["platform"] == "Linux armv8l"
+    # Chromium 专属对象：Android Chrome **有**，没有才是矛盾
+    assert got["chrome"] == "object", got
+    assert got["chromeIn"] is True, got
+    assert got["uad"] == "object", got
+    assert got["uadIn"] is True, got
+    assert got["dm"] == "number", got
+    assert got["dmIn"] is True, got
     assert got["touch"] == 5
     assert (got["sw"], got["sh"]) == (390, 844), got
     assert (got["aw"], got["ah"]) == (390, 844), got
-    assert got["dpr"] == 3
+    assert got["dpr"] == 2.625, got
     assert got["cd"] == 24 and got["pd"] == 24
-    assert got["plugins"] >= 1 and got["mimes"] >= 1
-    assert "application/pdf" in got["pdf"], got["pdf"]
-    assert got["gl"] == ["Apple Inc.", "Apple GPU"], got["gl"]
+    assert got["gl"] and got["gl"][0] == "Qualcomm", got["gl"]
+    assert "Adreno" in got["gl"][1], got["gl"]
+    assert "Apple GPU" not in " ".join(got["gl"])
 
 
 def test_desktop_context_is_windows_chrome_coherent(browser):
@@ -218,8 +225,8 @@ def test_browser_context_injects_resolved_script(monkeypatch):
         with c._browser_context(True, False, 0, None):
             pass
     js = ctx.scripts[0]
-    assert "Apple Computer, Inc." in js
-    assert '"Apple GPU"' in js
+    assert "Google Inc." in js
+    assert "Adreno" in js
     assert not re.findall(r"__[A-Z0-9_]+__", js)
 
 

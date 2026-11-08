@@ -428,15 +428,16 @@ def test_three_charts_redraw_on_mode_switch():
 def test_three_charts_share_range_control_language():
     """时间范围/模式控件曾是三套形制：航线软蓝胶囊、关注「文字+下划线」
     （后写 !important 覆盖把软蓝底换成了白底+投影）、雷达下划线 tab。
-    现三处都继承 `.mon-range` 单源：26px 高、圆角 8、11px/600、软蓝选中底、
-    零投影。"""
+    现三处都继承 `.mon-range` 单源：30px 高、圆角 8、12px/600、软蓝选中底、
+    零投影。r981：旧单源写 26px/11px，关注与雷达各自抬到 30px 后只有
+    航线走势仍是 26px，三图同屏读作「航线图小一号」。"""
     src = _src()
     # 单一来源规则存在且是软蓝胶囊
     i0 = src.index(".mon-range button,.rngchip{")
     seg = src[i0:i0 + 320]
-    assert "height:26px!important" in seg
+    assert "height:30px!important" in seg
     assert "border-radius:8px!important" in seg
-    assert "font-size:11px!important" in seg
+    assert "font-size:12px!important" in seg
     assert "background:var(--r-blue-soft)!important" in src[i0:i0 + 520]
     # 关注与雷达容器都挂 mon-range
     assert 'id="wsRanges" role="group"' in src and 'mon-range' in src[

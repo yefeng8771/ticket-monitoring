@@ -14,7 +14,7 @@
 import argparse
 import json
 
-__version__ = "1.5.307"
+__version__ = "1.6.0"
 import os
 import subprocess
 import sys
@@ -444,6 +444,103 @@ def _anchored(p, default):
     _first_run 的 300s 节流查到空库必不跳过（首轮重推）。"""
     p = (str(p) if p else "").strip() or default
     return p if os.path.isabs(p) else os.path.join(_REPO_ROOT, p)
+
+
+def _session_user_data(crawler_cfg):
+    """采集器的 user_data 根目录——**唯一口径**的绝对形态。
+
+    这就是注进每条爬虫 `config["user_data_dir"]` 的那个值。它必须与界面侧
+    （`webui._policy_engine` → `PolicyEngine.base_dir`）解析出来的**完全
+    相同**：界面的「停手」是写 `user_data/<profile>/strategy_halt.json`，
+    采集器读同一份文件；两边各算一遍就会出现「界面说已停手、采集照跑」
+    （r1063 T6 Critical，本函数堵的是它往深一层的那条分支）。
+
+    口径本体只有一份：`core.yield_stats.user_data_root()`
+    （config 显式值 > `TM_USER_DATA_DIR` > `"user_data"`）。这里只做
+    「锚到仓库根」这一步（`_anchored` 与全仓同律），**不重新判断配置语义**
+    ——原来的写法自己判「有没有 `user_data_dir` 这个键」，于是出厂字面量
+    `user_data`（生产配置就是这么写的）被当成显式目录、绕过了环境变量层，
+    与界面的理解当场分叉。
+
+    迁移边界（`main()` 里的 `_new_ud`）刻意不跟着环境变量走：迁移是一次
+    性的目录搬迁动作，目标只认**配置值**；运行期读哪个目录才是本函数说了算。
+    """
+    from core.yield_stats import user_data_root
+    return _anchored(user_data_root(crawler_cfg), "user_data")
+
+
+def _fail_evidence(paths):
+    """从路径账里挑出**真失败**证据（喂给 `Pacing.observe()` 的唯一入口）。
+
+    剔除四类「不算对方拒绝」的行：
+
+    * `ok` / `calendar` —— 成功面（出数即健康，不能据别的路的失败熔断）；
+    * `empty` —— 真无票，重试也不会变好，没有理由停手整个渠道；
+    * `paced` —— **我方主动不发请求**（链路闸门拒了这条通路 / 节流让位 /
+      熔断跳过）。这是 r1063 T8/T9 之后最常见的「非失败」证据：策略里停用
+      一条通路就记一条 `paced`，若把它当失败交上去，一条被停用的通路就能
+      把**整家渠道**熔断——正是链路闸门要挡的连坐。
+
+    比较前先 `strip().lower()`：`path_note()` 只收 `PATH_STATUS` 里的字面量，
+    但 `main.py` 自己会往 `c.paths` 里补行（软拒合成），渠道未来也可能直接
+    追加。写个 `"Paced"` / `" paced "` 就被判成失败，表现正是本任务要挡的
+    连坐，而且**静默**（不会报错，只会多熔断一家渠道）。归一化只会把更多
+    行归到「非失败」，方向是安全的。
+
+    为什么要一个函数而不是就地写表达式：`observe()` 的调用点不止一处
+    （主扫描落地归因、验证窗关闭后的「未通过就重新熔断」），还要各自顺手
+    拼 `note`（同样只能拼真失败的说明）。各写一遍必然漏一处，而漏的那一处
+    会静默改变熔断行为。
+    """
+    drop = ("ok", "calendar", "empty", "paced")
+    return [x for x in (paths or [])
+            if str((x or {}).get("status") or "").strip().lower() not in drop]
+
+
+def _fail_note(paths):
+    """真失败证据的说明串——与 `_fail_evidence()` **同源**。
+
+    不能就地写 `" ".join(detail for x in paths if status not in (...))`：
+    `classify_failure()` 会拿 note 文本做关键词兜底（403/429/验证码/限流…），
+    于是 `paced` 行的 `detail`（= `gate_path()` 的 `why`）只要提到拦截原因，
+    一条**我方克制**就会被归因成「对方拒绝」。证据与说明必须同一份过滤。
+    """
+    return " ".join(str(x.get("detail") or "")
+                    for x in _fail_evidence(paths))
+
+
+def _evidence_path(rows):
+    """这组账行指向**唯一一条**通路时返回它，否则空串（= 渠道级结论）。
+
+    为什么需要：`Pacing.observe()` / `ChannelBreaker.trip()` 支持
+    `渠道|链路` 记账（r1063 T7），但 `trip()` 的调用方从没递过 `path`——于是
+    链路级熔断键**从来没被创建过**，`gate_path()` 的熔断腿只看得到渠道键
+    （复核 2026-11-06 第 3 条）。账行自带 `path`，能确定是哪一条就用它。
+
+    返回空串的两种情况：证据跨多条通路 / 一条都没带 path。那时诚实的结论
+    就是「整家有问题」——把多通路的证据摊到其中一条头上，会让真正该停的
+    另一条照跑。空串在 `observe`/`reset`/`note_ok` 里的语义是**这一渠道的
+    全部层级**，与这些调用点在 r1063 之前的行为逐位相同。
+    """
+    seen = {str((r or {}).get("path") or "").strip() for r in (rows or [])}
+    seen.discard("")
+    return seen.pop() if len(seen) == 1 else ""
+
+
+def _dim_of_query(ret_dates):
+    """这次采集属于哪个**维度**（`core.channels.DIMENSIONS` 词汇）。
+
+    主扫描是「列表/明细」查询，所以缺省 `detail`；只有当这条查询挂了返程日
+    （`ret_dates`）时，采集器走的是往返通路、拿到的是渠道自算的往返总价，
+    维度是 `round_trip`。
+
+    日历 / 多程 / 低价走各自的特价链路（`_specials_for_user`），不经过
+    `_timed_fetch`，所以在这里没有第三种取值。**不许**猜一个看似合理的
+    别的维度：维度段是 `渠道/维度/链路` 策略覆盖的查表键，猜错等于把用户
+    配的收紧/停用落到另一条路上。
+    """
+    rds = [x for x in (ret_dates or []) if str(x or "").strip()]
+    return "round_trip" if rds else "detail"
 
 
 _STORAGE_STATE = os.path.join(_REPO_ROOT, "data", ".storage_paths.json")
@@ -1014,7 +1111,30 @@ def _stable_pool(rows: list) -> list:
 # SHA→HAK 00:21:08→00:31:30），慢渠道不误杀；其余渠道合法上界 ≤2.9min，
 # 余量 >5×。超时只放行栅栏，不杀已泊车线程（线程随 shutdown(wait=False)
 # 滞留，渠道自身无超时调用点另有 AbortSignal 治本）。
-_ROUTE_FUT_TIMEOUT = 15 * 60
+# 路由级栅栏超时的**兜底**（秒）。真正的值走参数层 `budget.route_s`
+# （cfg `crawler.route_timeout_s`，默认 300）——写死的 900s 曾让一次挂死
+# 白等 15 分钟（实测有一轮 1017.9s），而单渠道耗时最大只有 165s。
+_ROUTE_FUT_TIMEOUT = 300
+
+
+def _route_timeout(plats) -> float:
+    """本查询的栅栏超时：取各渠道解析值的**最大值**（保守）。
+
+    为什么取最大而不是最小：一轮里所有渠道共用一个等待窗，取小会把本来
+    只是慢一点的渠道直接判成超时——那是「用配置制造断供」。
+    """
+    lo = 30.0
+    vals = []
+    for _p in (plats or ()):
+        try:
+            from core import strategy_params as _sp
+            got = _sp.resolve("budget.route_s", plat=str(_p))
+            vals.append(float(got.value))
+        except Exception:
+            continue
+    if not vals:
+        return float(_ROUTE_FUT_TIMEOUT)
+    return max(lo, max(vals))
 
 
 def _collect_route_futures(futs_map, timeout_s, logger):
@@ -1661,12 +1781,37 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
     等配置在首次热重载后仍沿用启动快照。去哪儿接口 ~5 分钟全局限流（与航线
     无关），每个 (航线, 日期) 查询之间错峰等待。"""
     import threading
+    # 任务耗时登记表（r1063 T27）：`_timed_fetch` 在工作线程里 append，
+    # 主线程在查询收尾时按查询键取走。`threading` 是本函数内导入的，
+    # 所以锁也建在这里（模块级会 NameError）。
+    _LAT_LOCK = threading.Lock()
+    _LAT = []
+    # 各渠道「已上报过多少等待秒」（r1063 T30）：读增量，避免重复累加。
+    _wait_seen = {}
     # 进程级互斥：启动首轮 / 定时调度 / 网页手动触发统一防并发
     # （曾因"启动即扫 + /api/run"双跑导致每渠道抓两次、每消息推两条）
     _sweep_lock = threading.Lock()
     # 节流/熔断上下文（1–5 区）：与进程同寿命——熔断状态跨轮保留，
     # 热重载只换阈值不丢"这家现在不能碰"的既成事实
     rt["pacing"] = Pacing(cfg)
+    # 人工停手读点（r1063 T18）：`gate_path()` 用它在**链路**粒度拒绝某一条
+    # 通路（渠道级停手的历史行为不变）。停手表是按 profile 落的——同一家渠道
+    # 的 profile 由 `core.policy` 按注册表算，这里逐渠道读一次再查。
+    try:
+        from core.policy import halt_for as _halt_for
+        from core.policy import read_halt as _read_halt
+
+        def _halt_lookup(_plat, _dim="", _path=""):
+            from core.policy import profile_of as _pf
+            try:
+                halts = _read_halt(_pf(_plat))
+            except Exception:
+                return "", {}
+            return _halt_for(halts, _plat, _dim, _path)
+        rt["pacing"].set_halt_reader(_halt_lookup)
+    except Exception as _hr_e:                      # 读不到就按「没停手」继续跑
+        logger.warning("[策略] 人工停手读点没装上（停手仍按渠道级生效）：%s",
+                       _hr_e)
     # 重启续 TTL：库里有真实明细就当作刚采过，避免每次重启/调试都把
     # 全部查询重新打一遍（这是"反复跑数据"最常见的限流来源）。
     try:
@@ -1892,8 +2037,10 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
     crawler_cache = {}
     from threading import RLock
     crawler_cache_lock = RLock()
-    session_root = _anchored((cfg.get("crawler") or {}).get("user_data_dir"),
-                             "user_data")
+    session_root = _session_user_data((cfg.get("crawler") or {}))
+    # 注进采集器的就是这一份绝对路径：界面侧（`webui._policy_engine`）解析
+    # 出同一个目录才有意义——否则停手文件写在一个没人在读的地方
+    # （r1063 T10；口径本体在 `_session_user_data()`，不许在这里另算一遍）
     # 热改无头模式后清缓存，下轮按新配置重建浏览器实例
     def clear_crawlers(platform=None):
         with crawler_cache_lock:
@@ -2162,16 +2309,27 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                 # 立刻再撞一次——这是把"验证失败"伪装成"已修复"。
                 if not ok and rt.get("pacing") is not None:
                     try:
-                        _st = [x.get("status") for x in
-                               (getattr(c, "paths", None) or [])]
-                        _note = " ".join(
-                            str(x.get("detail") or "") for x in
-                            (getattr(c, "paths", None) or [])
-                            if x.get("status") not in ("ok", "calendar", "empty"))
+                        # 证据与主扫描同一个筛选器（r1063 T10 复核）：这条
+                        # 通路原来把 `c.paths` 的**全部**状态原样递上去，连
+                        # `ok`/`calendar`/`empty` 都不滤，`note` 更只用旧三元组
+                        # ——于是 `paced`（我方主动不发）的 `why` 会进 note，
+                        # 被 `classify_failure()` 的关键词兜底归成「对方拒绝」，
+                        # 一次验证失败就顺带把一条被停用的通路算成渠道级证据。
+                        _pt = getattr(c, "paths", None) or []
+                        _st = [x.get("status") for x in _fail_evidence(_pt)]
+                        _note = _fail_note(_pt)
                         _kind, _cd = rt["pacing"].observe(
                             platform, _st, _note,
                             retry_after=int(
-                                getattr(c, "retry_after_s", 0) or 0))
+                                getattr(c, "retry_after_s", 0) or 0),
+                            # 证据落在唯一一条通路上就按 `渠道|链路` 记账，
+                            # 别把「PC 被拦」记成整家（复核 2026-11-06 第 3 条）
+                            path=_evidence_path(_fail_evidence(_pt)))
+                        # 刻意**不**给 `dim`：这是一次「人工验证窗」的渠道级
+                        # 探测（`_probe_channel` 顺着整条渠道打，手上的账行
+                        # 跨维度），硬猜一个维度会把结论摊到某一条路上——
+                        # 那是 §`_evidence_path` 里同一条理由。空串 = 渠道级
+                        # 结论，与 r1063 之前逐位相同。
                         if _kind:
                             rt["scene"].setdefault(platform, {})["retripped"] = {
                                 "kind": _kind, "cooldown_s": int(_cd)}
@@ -2485,6 +2643,32 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                     else:
                         pac.set_health(_p, _node.get("rate") or 0,
                                        _node.get("attempts") or 0)
+                    # 维度级成功率（r1063 T15）：日历烂不该把整家渠道降频。
+                    # 每个维度自成一份样本；样本不足的维度在
+                    # `_health_penalty()` 里自动回落到渠道级，所以这里不做门槛。
+                    for _d, _dn in (_node.get("dims") or {}).items():
+                        _dq = int((_dn or {}).get("query_attempts") or 0)
+                        if _dq >= 5:
+                            pac.set_health(_p, (_dn or {}).get("query_rate")
+                                           or 0, _dq, dim=_d)
+                        elif _dq or int((_dn or {}).get("attempts") or 0):
+                            pac.set_health(_p, (_dn or {}).get("rate") or 0,
+                                           (_dn or {}).get("attempts") or 0,
+                                           dim=_d)
+                    # 链路级成功率（r1063 T16）：`H5/API`、`PC`、`API` 这类通路
+                    # 也要能独立调速。`path_stats` 的 `paths` 正是「每条入口一条」，
+                    # 维度由 `dim_of_path()` 归（与账本同源，不另猜）。
+                    try:
+                        from core.storage import dim_of_path as _dop
+                    except Exception:
+                        _dop = None
+                    if _dop is not None:
+                        for _pth, _pn in (_node.get("paths") or {}).items():
+                            _pa = int((_pn or {}).get("attempts") or 0)
+                            if not _pa:
+                                continue
+                            pac.set_health(_p, (_pn or {}).get("rate") or 0,
+                                           _pa, dim=_dop(_pth), path=_pth)
             except Exception as _he:
                 logger.warning("[节流] 成功率账本读取失败: %s", _he)
         _mark_scan()
@@ -2537,13 +2721,23 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                             name, d)
                 time.sleep(d)
 
-        def _warm_once(c):
+        def _warm_once(c, dim=""):
             """L1/L3 · 本轮首次用到该渠道时先打首页（持 channel_slot）。
 
             深链直入是最强的机器指纹（无 referer、无风控 cookie）；先访问
             首页能把这一条抹掉。每轮每渠道只做一次，失败不阻断采集。
+
+            `dim`（波次六）：本次查询的维度，原样递给 `pac.warmup_on()`。
+            此前只给渠道名，于是 `crawler.strategy_overrides` 里写的
+            `飞猪/intl: warmup.enabled: false` 在**预热这一侧**是死配置
+            ——参数层查得到、界面按 `source=dimension` 显示「已停用」、
+            首页照打。作用域在调用点本来就有（`pac.allow(dim=…)` /
+            `gate_path(plat, dim, "")` 就在上面几行），没有理由不递。
             """
-            if pac is None or not pac.cfg.get("warmup_enabled"):
+            # 开关走参数层（`pac.warmup_on`）：`pac.cfg["warmup_enabled"]` 是
+            # `refresh()` 那一刻的快照，只作没有覆盖时的兜底；渠道级覆盖、
+            # 维度级覆盖与热改都要在**这一轮用之前**现读（复核 2026-11-06）。
+            if pac is None or not pac.warmup_on(c.name, dim=dim):
                 return
             in_list = c.name in (pac.cfg.get("warmup_platforms") or ())
             # 上一轮被软拒（202 空体/444）的渠道：即便不在预热名单，
@@ -2590,9 +2784,18 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                         pass
                 return ok
 
-        def _timed_fetch(c, fc_, tc_, d_, th_min=None, gen=None, chans=None):
+        def _timed_fetch(c, fc_, tc_, d_, th_min=None, gen=None, chans=None,
+                         dim="detail"):
             # 单渠道计时入脉冲（成败=是否有数据），控制台可观察性数据源
+            #
+            # `dim` 是本次查询的**维度**（`core.channels.DIMENSIONS` 词汇，
+            # 由调用点用 `_dim_of_query()` 算出来）。渠道级 plan_query/allow
+            # 的键就是渠道，查不到 `渠道/维度` 层的策略；维度只有交给
+            # `gate_path()` 才生效，所以它必须一路传到闸门，不许在中间丢掉。
             t0 = time.time()
+            # 任务起点（r1063 T29）：与 t0 同刻，但语义不同——
+            # 它用于把「限速等待」和「真实抓取」分开计。
+            _t_task0 = t0
             prices = []
             key = (fc_, tc_, d_)
             # 提交时由主线程传入轮次代际；worker 晚启动/晚拿锁时用它
@@ -2622,12 +2825,12 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                     except (TypeError, ValueError):
                         _days = None
                     tier, why = pac.plan_query(c.name, key, th_min,
-                                               days_ahead=_days)
+                                               days_ahead=_days, dim=dim)
                     pac.note_plan(c.name, key, tier, why)
                     if tier == "skip":
                         pac.note_paced(c.name, why)
                         return [], "paced"
-                    ok, remain = pac.allow(c.name)
+                    ok, remain = pac.allow(c.name, dim=dim)
                     if not ok:
                         _ch = (pac.snapshot()["channels"].get(c.name) or {})
                         logger.info(
@@ -2636,17 +2839,42 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                             _ch.get("reason") or "?", fc_, tc_, d_)
                         pac.note_paced(c.name, "breaker")
                         return [], "paced"
+                    # 维度闸门（r1063 T10）：`plan_query`/`allow` 的键是渠道，
+                    # 查不到 `渠道/维度` 这一层。`gate_path(plat, dim, "")`
+                    # 把「整个维度」求值一遍（策略停用 → 熔断 → 限速），于是
+                    # 策略里写 `ctrip/calendar: {path_fallback.enabled: false}`
+                    # 真的能停掉日历维度的采集。
+                    # 被拦时记 `paced` 而不是失败：那是我方主动不发请求，
+                    # 记成失败就会「停一个维度 = 熔断一家渠道」。
+                    _dim_ok, _dim_wait, _dim_why = pac.gate_path(
+                        c.name, dim, "")
+                    try:
+                        _dim_wait = max(0.0, float(_dim_wait or 0))
+                    except (TypeError, ValueError):
+                        _dim_wait = 0.0
+                    if not _dim_ok:
+                        logger.info(
+                            "[节流] %s 维度 %s 被闸门拦下，本轮跳过 %s→%s %s：%s",
+                            c.name, dim or "（未知）", fc_, tc_, d_, _dim_why)
+                        pac.note_paced(c.name, _dim_why or "dim_gate")
+                        return [], "paced"
                     _stagger_wait(c.name, chans)
-                    _warm_once(c)
+                    _warm_once(c, dim)
                     if _gen is not None and rt.get("_round_gen") != _gen:
                         pac.note_paced(c.name, "stale_round")
                         return [], "paced"
                     # 令牌桶等待必须有预算上限：wait_hint 只算不睡，
                     # 这里睡到窗口重新可用为止；若超过本轮 30s 预算，
                     # 宁可跳过这条查询，也不提前打出去把限额坐实。
+                    # `_dim_wait` 是维度层（可能更严的 min_gap/per_minute）
+                    # 算出来的欠账，与渠道桶取较大者；预算内睡过一次就清零
+                    # ——它是「此刻还欠多久」的快照，睡完就不再欠，留着会
+                    # 在同一轮里被反复睡（死循环）。
                     _deadline = time.time() + 30.0
                     while True:
                         _w = pac.wait_hint(c.name)
+                        if _dim_wait > 0 and _dim_wait > _w:
+                            _w = _dim_wait
                         if _w <= 0:
                             break
                         if _w > max(0.0, _deadline - time.time()):
@@ -2657,8 +2885,11 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                             return [], "paced"
                         logger.info("[节流] %s 令牌桶等待 %.1fs", c.name, _w)
                         time.sleep(_w + 0.05)
+                        _dim_wait = 0.0
                 except Exception as _pe:
                     logger.warning("[节流] 前置闸门异常（放行本轮）: %s", _pe)
+            # 闸门结束：到此为止都是「限速/熔断/停手」的等待，不是抓取。
+            _gate_s = time.time() - _t_task0
             with channel_slot(c.name):
                 if _gen is not None and rt.get("_round_gen") != _gen:
                     logger.info("[节流] %s 上一轮超时 worker 让位，不再发请求",
@@ -2682,6 +2913,13 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                     if pac is not None and not _sent_here:
                         # 一次查询=一次发送；多返程日同批不重复计预算
                         pac.note_sent(c.name)
+                        # 同时记「尝试时间」：cadence 按尝试算，否则
+                        # 从未成功过的渠道没有基线、每轮都会被跑
+                        # （qunar 实测一天 52 次 0 成功）
+                        try:
+                            pac.note_try(c.name, key)
+                        except Exception:
+                            pass
                         _sent_here = True
                     _prices.extend(c.safe_fetch(fc_, tc_, [d_],
                                                 ret_date=_rd))
@@ -2746,7 +2984,14 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                     if _gen_ok:
                         # 连续成功才完全清零 strikes：只成功一次就复位，
                         # 会让抖动渠道在"冷却/恢复"间反复横跳。
-                        pac.note_ok(c.name)
+                        # 成功来自哪条通路就只清「渠道层 + 那一条」：`H5` 的
+                        # 实时冷却不许被 `PC` 的一次成功顺手免掉（复核
+                        # 2026-11-06 第 3 条）。认不出唯一条通路时传空串，
+                        # 语义是「这一渠道的全部层级」＝之前的行为。
+                        pac.note_ok(c.name, path=_evidence_path(
+                            [x for x in paths
+                             if str(x.get("status") or "").strip().lower()
+                             in ("ok", "calendar")]), dim=dim)
                         try:
                             pac.note_fetch(c.name, key,
                                            min(p.price for p in prices), True)
@@ -2754,16 +2999,29 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                             pass
                 else:
                     # 2 区 · 落地归因：只拿「失败路径」的证据判定——成功
-                    # 路径的文案（接口字段里带「验证」字样）不能触发熔断
-                    _bad = [x for x in paths
-                            if x.get("status") not in ("ok", "calendar",
-                                                       "empty")]
-                    _note = " ".join(str(x.get("detail") or "")
-                                     for x in _bad)
+                    # 路径的文案（接口字段里带「验证」字样）不能触发熔断。
+                    # `_fail_evidence()` 同时剔除 `paced`（停用通路/节流让位
+                    # /熔断跳过 = 我方主动不发请求）：一条被策略停用的通路
+                    # 若被当成失败证据，就能把**整家渠道**熔断——「停一条路
+                    # = 停一家渠道」正是链路闸门要挡的连坐。
+                    _bad = _fail_evidence(paths)
+                    _note = _fail_note(paths)
                     if _gen_ok:
                         _kind, _cd = pac.observe(
-                            c.name, [x.get("status") for x in _bad], _note,
-                            retry_after=_ra)
+                            c.name,
+                            # 递上去的证据已剔除 paced（见上）：`paced` 不是
+                            # 对方的拒绝，绝不参与熔断归因。
+                            [x.get("status") for x in _bad], _note,
+                            retry_after=_ra,
+                            # 证据落在唯一一条通路上就记 `渠道|链路`：
+                            # 否则链路级熔断键永远不出现，`gate_path()` 的
+                            # 熔断腿只看得到渠道键（复核 2026-11-06 第 3 条）。
+                            path=_evidence_path(_bad),
+                            # 维度（r1063 fix-wave 2）：`breaker_switch.enabled`
+                            # 的 `渠道/维度` 覆盖要在这里生效，否则「这个维度
+                            # 别熔断」只是界面文案。`dim` 只参与开关求值，
+                            # 记账键仍是 渠道 / 渠道|链路。
+                            dim=dim)
                     else:
                         _kind, _cd = "", 0
                     if _kind:
@@ -2810,8 +3068,21 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                         # 自动开窗（可配置）：命中人机验证时直接把窗口端到
                         # 人面前，不用等人发现状态条变红。同渠道 10 分钟内
                         # 只开一次，防连点。
+                        # 按渠道求值（r1063 T56）：`auto_verify` 是
+                        # `captcha_solve` 族的参数、声明了 channel 作用域，
+                        # 原来读顶层 cfg → 只能全局开关，渠道覆盖被忽略。
+                        # 参数层没意见时回落到 cfg（行为不变）。
                         _auto = bool(((rt.get("cfg") or cfg).get("crawler")
                                       or {}).get("auto_verify", False))
+                        try:
+                            from core import strategy_params as _sp
+                            _av_got = _sp.resolve("captcha_solve.auto_verify",
+                                                  plat=c.name)
+                            if str(getattr(_av_got, "source", "default")) \
+                                    != "default":
+                                _auto = bool(_av_got.value)
+                        except Exception:
+                            pass
                         if _kind == "captcha":
                             if _auto:
                                 _av = rt.setdefault("_auto_verify_at", {})
@@ -2862,6 +3133,25 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                 PULSE.channel(c.name, len(prices), time.time() - t0)
             except Exception:
                 pass
+            # 耗时构成（r1063 T27）：登记本次任务实际耗时（含节流等待）。
+            # 与「墙钟」相比，才知道一轮慢是「活多」还是「在等最慢的那家」。
+            # 渠道等待（r1063 T30）：闸门 + 渠道内部限速/退避，与抓取耗时分开。
+            try:
+                _wf = float(getattr(c, "waited_s", 0.0) or 0.0)
+                _wd = _wf - float(_wait_seen.get(c.name) or 0.0)
+                if _wd > 0:
+                    _wait_seen[c.name] = _wf
+                    if pac is not None:
+                        pac.note_chan_wait(c.name, _wd)
+            except Exception:
+                pass
+            try:
+                with _LAT_LOCK:
+                    _LAT.append(((str(fc_), str(tc_), str(d_)),
+                                 float(time.time() - _t_task0), True,
+                                 float(_gate_s or 0.0)))
+            except Exception:
+                pass
             return prices, "ok"
 
         # 往返回程日旁挂（R15，INTL_DESIGN §2.6；r339 多返程扩展）：
@@ -2883,6 +3173,37 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
 
         user_pairs = {}   # 按用户聚合 (route, prices)，轮末一次聚合推送
         chart_cache = {ui: {} for ui in range(len(users))}
+        # ── 预置换道（r1063 T23）──────────────────────────────────────
+        # 上一轮就被**行为型**风控拦住的渠道，本轮直接把它的 App 孪生放进同一
+        # 波并行采：省掉"整波结束再补采"的那一个往返。决策与记账都收在
+        # `core.failover.preload_targets`（每轮一次，不按查询数记账）。
+        _preload = {}
+        try:
+            from core import failover as _fo_pre
+            _want_pre = set()
+            for _u in users:
+                _want_pre |= set(_u.get("platforms") or ())
+            _preload = _fo_pre.preload_targets(
+                rt.get("scene") or {}, _want_pre, rt.get("cfg") or cfg,
+                user_data_dir=session_root, logger=logger)
+            if _preload and rt.get("pacing") is not None:
+                rt["pacing"].note_failover(
+                    preload=len(_preload),
+                    note="预置 " + "、".join("%s→%s" % (a, b)
+                                            for a, b in _preload.items())[:100])
+                # 进同一本干预台账（r1063 T52）：否则策略行永远显示 0 次
+                try:
+                    for _src3, _app3 in _preload.items():
+                        storage.save_intervention(
+                            platform=_src3, action="strategy_app_fallback",
+                            ok=True, rows=0,
+                            note="[app_fallback] 预置换道 %s→%s"
+                                 % (_src3, _app3))
+                except Exception:
+                    pass
+        except Exception as _pfe:
+            logger.warning("[换道] 预置决策失败（不影响采集）：%s",
+                           str(_pfe)[:80])
         for qi, (fc, tc, d) in enumerate(queries):
             # 平台集合 = 所有订阅用户平台配置的并集（一次采集服务所有人）
             plats = set()
@@ -2898,6 +3219,11 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                                 continue
                             if v > 0:
                                 th_min = v if th_min is None else min(th_min, v)
+            # 预置换道（r1063 T23）：该查询订阅了被拦渠道，就把它的 App 孪生
+            # 一起拉进这一波——两条通路并行，而不是串行补采。
+            for _src0, _app0 in list((_preload or {}).items()):
+                if _src0 in plats and _app0 not in plats:
+                    plats.add(_app0)
             _crawlers = get_crawlers(plats)
             _chans = [c.name for c in _crawlers]
             for c in _crawlers:
@@ -2915,12 +3241,30 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
             if _cap:
                 _mw = min(_mw, _cap)
             ex = concurrent.futures.ThreadPoolExecutor(max_workers=_mw)
+            # 维度（r1063 T10）：这条查询挂了返程日就是往返采集，否则是
+            # 列表/明细。日历、多程、低价走各自的特价链路
+            # （`_specials_for_user`），不经过 `_timed_fetch`，所以这里只有
+            # 这两种取值；判断口径收在 `_dim_of_query()` 一处。
+            _dim = _dim_of_query(ret_dates.get((fc, tc, d)))
+            # 换跑道（r1063 T22）：被**行为型**强风控拦住的渠道，本轮改用 App 通路
+            # 再采一次。`kind` 来自 `_timed_fetch` 写进 rt["scene"] 的案发现场。
+            try:
+                from core import failover as _fo
+            except Exception:
+                _fo = None
+            _blocked = {}
+            # 耗时构成（r1063 T27）：只记墙钟起点；任务耗时按查询键登记在
+            # 全局表里（工作线程是闭包引用，重绑列表会让迟到任务串味）。
+            _q_t0 = time.time()
+            _qkey = (str(fc), str(tc), str(d))
             try:
                 futs = {ex.submit(_timed_fetch, c, fc, tc, d, th_min,
-                                  rt.get("_round_gen"), _chans): c.name
+                                  rt.get("_round_gen"), _chans,
+                                  _dim): c.name
                         for c in _crawlers}
                 results, timed_out = _collect_route_futures(
-                    futs, timeout_s=_ROUTE_FUT_TIMEOUT, logger=logger)
+                    futs, timeout_s=_route_timeout(_chans),
+                    logger=logger)
                 for _nm, _res in results:
                     # 节流跳过（TTL 内 / 熔断中 / 会话让位）不进健康分母：
                     # 主动不发请求不是"断供"，否则健康度被自己的克制染红，
@@ -2931,10 +3275,24 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                         prices, _meta = (_res or []), "ok"
                     if _meta == "paced":
                         _paced_n[0] += 1
+                        # 节流跳过不产数，但同样占墙钟：单独计数，
+                        # 否则「空等」里会混进大量「我方主动不发」的时间。
+                        try:
+                            with _LAT_LOCK:
+                                _LAT.append(((str(fc), str(tc), str(d)),
+                                             0.0, False,
+                                             float(time.time() - _q_t0)))
+                        except Exception:
+                            pass
                         continue
                     _ran_plats.add(_nm)
                     all_prices.extend(prices)
                     ch_rows[_nm] = ch_rows.get(_nm, 0) + len(prices)
+                    if _fo is not None and not prices:
+                        _kind0 = str(((rt.get("scene") or {}).get(_nm) or {})
+                                     .get("kind") or "")
+                        if _fo.is_behavior_block(_kind0):
+                            _blocked[_nm] = _kind0
                     # 分母按域分流（c330 F1）：渠道×域结构性零供给面
                     # （intl 全断）不与 dom 满勤合并成假比率，qsup 逐域
                     # 独立评估——intl 全断归 zrow 领地，dom 满勤不评估
@@ -2954,6 +3312,241 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                 # 栅栏 join——with 形态的 shutdown(wait=True) 曾把已放行
                 # 的栅栏重新焊死在退出路径上
                 ex.shutdown(wait=False)
+            def _app_ready(_app_plat):
+                """App 通路就绪吗（r1063 T34）：只查**能离线判定**的部分。
+
+                能判定的是"这条通路根本没开"——`android.enabled=false`、
+                或者 App 渠道压根没注册。这两种换过去必然 0 条，还白占一天
+                一次的换道额度。
+                **判不了的（会话是否已登录）不猜**：返回就绪，让换道去试，
+                失败会由归因（T33）说清是"未登录"还是"被拦"。
+                """
+                try:
+                    from core.android.config import normalize as _an
+                    sec = _an(((rt.get("cfg") or cfg or {}).get("android")
+                               or {}))
+                    if not getattr(sec, "enabled", False):
+                        return False, "安卓链路未启用（android.enabled=false）"
+                except Exception:
+                    pass
+                try:
+                    from crawlers import REGISTRY as _REG
+                    if str(_app_plat) not in _REG:
+                        return False, "App 渠道 %s 未注册" % _app_plat
+                except Exception:
+                    pass
+                return True, ""
+
+            # ── App 版本与改版侦测（r1063 T64）─────────────────────────
+            # 用户实测智行今天升级到 10.26.2。App 升级/改版会让"按坐标点、按文案
+            # 认屏"的规则失效，但**"它今天升级了"这件事以前系统看不见**。
+            # 这里每轮比一次版本；并对"连续 0 行 + 认不出页面"的 App 渠道报改版嫌疑。
+            try:
+                from core.android import appversion as _av
+                from core.android.runtime import get_runtime as _get_rt
+                _rt = _get_rt({"android": (rt.get("cfg") or cfg or {}).get(
+                    "android")} or {})
+                _dev = _rt.device() if _rt is not None else None
+                if _dev is not None:
+                    from crawlers import REGISTRY as _REG2
+                    _pk2 = {str(c.package): p for p, c in _REG2.items()
+                            if str(p).startswith("app_")
+                            and getattr(c, "package", "")}
+                    _av.check(_dev, list(_pk2), root=session_root,
+                              plat_of=lambda _p: _pk2.get(_p, ""),
+                              logger=logger)
+                    # 改版嫌疑：本轮 0 行 + 认不出页面，连续两轮就报
+                    for _ap, _pkplat in _pk2.items():
+                        if _pkplat not in (plats or ()):
+                            continue
+                        _rows = int((ch_rows or {}).get(_pkplat) or 0)
+                        _path = str((rt.get("_last_path") or {}).get(_pkplat)
+                                    or "")
+                        _av.note_layout_risk(_pkplat, rows=_rows, path=_path,
+                                             root=session_root, logger=logger)
+            except Exception as _ave:
+                logger.debug("[App版本] 检查失败（不阻断）：%s", str(_ave)[:80])
+
+            # ── 会话维护（r1063 T47）：连续被拦就换一份干净档案 ──────────
+            # 依据用户实机观察：飞猪验证码过不去，清掉数据后又能看到机票。
+            # 只挪不删（可还原）、有阈值/冷却/每日上限、失败绝不阻断本轮。
+            try:
+                from core import session_reset as _sr
+                _sr_state = rt.setdefault("_sr_state", {})
+                for _nm3 in (_blocked or {}):
+                    _rep = _sr.auto_step(_sr_state, _nm3, session_root,
+                                         blocked=True)
+                    # 判据链上报（r1063 T49）：界面据此解释"为什么这么判"
+                    if rt.get("pacing") is not None:
+                        try:
+                            _st = (_sr_state or {})
+                            _d = ((_st.get("day") or {}).get(_nm3) or [None, 0])
+                            rt["pacing"].note_sr_state(
+                                _nm3,
+                                fails=int((_st.get("fails") or {}).get(_nm3) or 0),
+                                last_ts=float((_st.get("last") or {}).get(_nm3) or 0),
+                                day=int(_d[1] if len(_d) > 1 else 0),
+                                why=str(_rep.get("why") or "")[:80])
+                        except Exception:
+                            pass
+                    if _rep.get("acted"):
+                        logger.info("[会话] %s 已换一份干净档案（%s）：%s",
+                                    _nm3, _rep.get("why"),
+                                    (_rep.get("result") or {}).get("backup"))
+                        if rt.get("pacing") is not None:
+                            try:
+                                rt["pacing"].note_reset(_nm3)
+                            except Exception:
+                                pass
+                        try:
+                            from core import strategy_ledger as _led3
+                            _led3.record_reset(_nm3, root=session_root)
+                        except Exception:
+                            pass
+                        try:
+                            storage.save_intervention(
+                                platform=_nm3,
+                                action="strategy_session_reset",
+                                ok=True, rows=0,
+                                note="[session_reset] 换一份干净档案（%s）"
+                                     % str(_rep.get("why") or "")[:60])
+                        except Exception:
+                            pass
+                    elif _rep.get("why"):
+                        logger.debug("[会话] %s 不重建：%s", _nm3, _rep["why"])
+            except Exception as _sre:
+                logger.warning("[会话] 检查失败（不阻断）：%s", str(_sre)[:80])
+
+            # ── 第二波：换跑道（r1063 T22）─────────────────────────────
+            # 只对**行为型**被拦的浏览器渠道换道；图像型先由验证码模块自己解。
+            # 换道有每日上限与冷却，禁止来回横跳（PC 被拦 → App 被拦 → PC 再试
+            # 只会把两条路的分数一起打低）。
+            if _fo is not None and _blocked:
+                for _nm, _kind0 in list(_blocked.items()):
+                    try:
+                        _app, _why = _fo.plan_switch(
+                            _nm, _kind0, rt.get("cfg") or cfg,
+                            user_data_dir=session_root, running=_chans,
+                            ready=_app_ready)
+                    except Exception as _fe:
+                        logger.warning("[换道] %s 决策失败：%s", _nm, _fe)
+                        continue
+                    if not _app:
+                        logger.info("[换道] %s 不换道：%s", _nm, _why)
+                        # 只有"被挡住"才记归因；"已在跑/冷却/上限"是正常状态，
+                        # 记进去会让原因表被正常状态淹掉。
+                        if "未就绪" in str(_why) and rt.get("pacing") is not None:
+                            try:
+                                rt["pacing"].note_failover(
+                                    reason="换道被挡：%s" % str(_why)[:40])
+                            except Exception:
+                                pass
+                        continue
+                    try:
+                        _apps = get_crawlers([_app])
+                    except Exception as _ae:
+                        logger.info("[换道] %s 起不来（未配置/依赖缺失）：%s",
+                                    _app, str(_ae)[:80])
+                        if rt.get("pacing") is not None:
+                            rt["pacing"].note_failover(
+                                switched=1, rows=0, reason="App 通路不可用",
+                                note="%s 起不来：%s" % (_app, str(_ae)[:60]))
+                        continue
+                    if not _apps:
+                        if rt.get("pacing") is not None:
+                            rt["pacing"].note_failover(
+                                switched=1, rows=0, reason="App 通路未配置",
+                                note="%s 没有可用实例" % _app)
+                        continue
+                    logger.info("[换道] %s → %s：%s", _nm, _app, _why)
+                    _ex2 = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    try:
+                        _f2 = _ex2.submit(_timed_fetch, _apps[0], fc, tc, d,
+                                          th_min, rt.get("_round_gen"),
+                                          list(_chans) + [_app], _dim)
+                        _r2, _to2 = _collect_route_futures(
+                            {_f2: _app}, timeout_s=_route_timeout([_app]),
+                            logger=logger)
+                        _got = 0
+                        _app_paced = False
+                        for _nm2, _res2 in _r2:
+                            _paced2 = (isinstance(_res2, tuple)
+                                      and len(_res2) == 2 and _res2[1] == "paced")
+                            _pr2 = (_res2[0] if isinstance(_res2, tuple)
+                                   and len(_res2) == 2 else (_res2 or []))
+                            if _paced2:
+                                _app_paced = True
+                                continue
+                            _got += len(_pr2 or [])
+                            all_prices.extend(_pr2 or [])
+                            ch_rows[_app] = ch_rows.get(_app, 0) + len(_pr2 or [])
+                        _fo.note_switch(_nm, _app, ok=bool(_got),
+                                        user_data_dir=session_root)
+                        # 成效入账（r1063 T51）：跨进程的 7 天账本
+                        try:
+                            from core import strategy_ledger as _led
+                            _led.record_failover(switches=1, rows=_got,
+                                                 root=session_root)
+                            if _got:
+                                # 重建之后第一次出数 → 记「恢复」
+                                _led.mark_recovered(_nm, root=session_root)
+                        except Exception:
+                            pass
+                        try:
+                            storage.save_intervention(
+                                platform=_nm, action="strategy_app_fallback",
+                                ok=bool(_got), rows=_got,
+                                note="[app_fallback] 换道 %s→%s 回采 %d 条"
+                                     % (_nm, _app, _got))
+                        except Exception:
+                            pass
+                        if rt.get("pacing") is not None:
+                            # 归因（r1063 T33）：0 条要能说清是哪一种
+                            _rs = ""
+                            if not _got:
+                                _app_kind = str(
+                                    ((rt.get("scene") or {}).get(_app) or {})
+                                    .get("kind") or "")
+                                if _app_paced:
+                                    _rs = "App 通路被节流"
+                                elif _app_kind:
+                                    _rs = "App 通路也被拦（%s）" % _app_kind
+                                else:
+                                    _rs = "App 通路无票/未登录"
+                            rt["pacing"].note_failover(
+                                switched=1, rows=_got, reason=_rs,
+                                note="换道 %s→%s 回采 %d 条%s"
+                                     % (_nm, _app, _got,
+                                        ("（" + _rs + "）") if _rs else ""))
+                        logger.info("[换道] %s 经 %s 回采到 %d 条", _nm, _app, _got)
+                    except Exception as _se:
+                        _fo.note_switch(_nm, _app, ok=False,
+                                        user_data_dir=session_root)
+                        logger.warning("[换道] %s → %s 失败：%s", _nm, _app,
+                                       str(_se)[:80])
+                    finally:
+                        _ex2.shutdown(wait=False)
+            # 耗时构成（r1063 T27）：墙钟 = 提交到收齐；有效工作 = 各任务耗时之和。
+            try:
+                _mine = []
+                with _LAT_LOCK:
+                    keep = []
+                    for _rec in _LAT:
+                        if _rec[0] == _qkey:
+                            _mine.append(_rec)
+                        else:
+                            keep.append(_rec)
+                    _LAT[:] = keep          # 取走自己的条目，表不会无限长
+                if rt.get("pacing") is not None:
+                    _work = sum(r[1] for r in _mine)
+                    _gate = sum(r[3] for r in _mine if r[2])
+                    _paced_n2 = sum(1 for r in _mine if not r[2])
+                    rt["pacing"].note_query_timing(
+                        wall=time.time() - _q_t0, work=_work,
+                        tasks=len(_mine), paced=_paced_n2,
+                        timed_out=len(timed_out or ()), gate=_gate)
+            except Exception:
+                pass
             all_prices = _stable_pool(all_prices)
             storage.save_many(all_prices)
             # 半年走势日桶（r320b）：落库后立即重算本 (航线,日期) 的
@@ -3139,6 +3732,28 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                 list(zip(users, alerters)), logger)
         except Exception as e:
             logger.warning("[渠道告警] 哨异常: %s", e)
+        # **自适应退避**（2026-11-06）：把"这一轮有多不顺"折算成下一轮的
+        # 额外延后，避免环境已经不好时还照 30 分钟一次的固定节奏猛戳。
+        # 依据全部来自 pacing 自己的记录（熔断次数 + 处于挑战/限流冷却的
+        # 渠道数），不引入新判据；全绿即清零，立刻回到正常节奏。
+        try:
+            _snap = (rt.get("pacing").snapshot()
+                     if rt.get("pacing") is not None else {}) or {}
+            _rnd = _snap.get("round") or {}
+            _trips = len(_rnd.get("trips") or [])
+            _blocked = sum(
+                1 for _c in (_snap.get("channels") or {}).values()
+                if str((_c or {}).get("reason") or "") in ("challenge", "ip"))
+            from core.pacing import round_backoff_minutes as _rbm
+            _bo = _rbm(sched_state.get("interval_minutes", 30),
+                       _trips, _blocked)
+            sched_state["backoff_minutes"] = _bo
+            if _bo:
+                logger.warning(
+                    "[节流] 本轮受阻 %d 次（另 %d 个渠道在冷却）→ "
+                    "下一轮额外延后 %d 分钟", _trips, _blocked, _bo)
+        except Exception as _boe:
+            logger.warning("[节流] 自适应退避计算失败: %s", _boe)
         logger.info("===== 本轮扫描结束 =====")
         # 数据窗口维护：删过期明细（extra 大 JSON 是增长主体）。
         # 保留天数单源在 PriceStorage.RAW_RETAIN_DAYS（8 天）：所有
@@ -3265,6 +3880,15 @@ def main():
         _st = _app_status(_cfg, evidence=_app_evidence)
         print(f"Android 运行时：{_st['state']}")
         print(f"  说明：{_st['detail']}")
+        _hd = _st.get("hardening") or {}
+        if _hd:
+            # 空 checks = 读不到（ok=None）也要显示"未确认"，
+            # 否则用户会以为"没有伪装问题"，而那正是静默失效的样子。
+
+            print("  伪装：" + ("已就位" if _hd.get("ok") else
+                              ("未确认" if _hd.get("ok") is None else "缺项")))
+            for _name, _ok, _val in _hd["checks"]:
+                print(f"    [{'x' if _ok else ' '}] {_name}（{_val}）")
         for _s in _st.get("steps") or []:
             print(f"    [{'x' if _s['done'] else ' '}] {_s['label']}")
         if _st.get("next"):
@@ -3303,6 +3927,15 @@ def main():
         _st = _app_status(_cfg)
         print(f"Android 运行时：{_st['state']}")
         print(f"  说明：{_st['detail']}")
+        _hd = _st.get("hardening") or {}
+        if _hd:
+            # 空 checks = 读不到（ok=None）也要显示"未确认"，
+            # 否则用户会以为"没有伪装问题"，而那正是静默失效的样子。
+
+            print("  伪装：" + ("已就位" if _hd.get("ok") else
+                              ("未确认" if _hd.get("ok") is None else "缺项")))
+            for _name, _ok, _val in _hd["checks"]:
+                print(f"    [{'x' if _ok else ' '}] {_name}（{_val}）")
         for _s in _st.get("steps") or []:
             print(f"    [{'x' if _s['done'] else ' '}] {_s['label']}")
         if _st.get("next"):
@@ -3332,6 +3965,8 @@ def main():
     # 自动搬迁，日志/内核目录不搬（切换后新位置生效，旧档保留）。
     _new_db = _anchored(out.get("db_path", "data/prices.db"),
                         "data/prices.db")
+    # 迁移目标只认**配置值**（不跟 `TM_USER_DATA_DIR` 走，见 `_session_user_data`
+    # 的边界说明）：搬迁是一次性动作，而运行期读哪个目录由唯一口径决定。
     _new_ud = _anchored(str((cfg.get("crawler") or {}).get(
         "user_data_dir", "user_data") or "user_data"), "user_data")
     _new_log = _anchored(out.get("log_path", "logs/monitor.log"),
@@ -3384,6 +4019,27 @@ def main():
     # rt["cfg"] 是配置的单一事实源（reload_config 同步更新）
     rt = {}
     rt["cfg"] = cfg
+    # 策略参数热链路（r1063 T14）**启动时也要喂一次**，不能只靠
+    # `reload_config()`：`core/strategy_params` 是唯一求值入口，它自己不会去
+    # 读配置文件——没人喂它就等于首轮所有 `decide()` / `gate_path()` 都按
+    # 目录默认值跑，界面上「生效值/来源」恒为 `default`（配了不生效）。
+    # 位置在建 sweep 之前：**第一次决策**就已经看得见配置，而不是「首轮按默认、
+    # 次轮才对」。
+    # 覆盖字典写错（未知 pid / 未知作用域）时 `set_config()` 会抛 `ValueError`：
+    # 这里**不外抛**——监控进程起不来比「这一层覆盖不生效」更糟，而后者也不是
+    # 静默的：ERROR 日志点名到具体键，随后按 `invalidate()` 全回默认值运行。
+    try:
+        from core import strategy_params
+        strategy_params.set_config(cfg)
+    except Exception as _sp_err:
+        logger.error("[策略] 参数提供者装载失败（覆盖字典写错？）：%s —— "
+                     "本次按目录默认值运行；这条错误不修，覆盖项不会生效",
+                     _sp_err)
+        try:
+            from core import strategy_params as _sp0
+            _sp0.invalidate()
+        except Exception:
+            pass
 
     def build_runtime():
         users = build_users(cfg)
@@ -3458,6 +4114,20 @@ def main():
         """web 配置保存后的热重载：重读 config.yaml 并重建用户/告警器。"""
         nonlocal cfg
         cfg = load_config(str(cfg_path))
+        # 策略参数热链路（r1063 T14）：**参数提供者是唯一热源**。
+        # 为什么这一行是「改值立刻生效」的全部秘密：`set_config()` 存的是这整份
+        # cfg 的引用，而 `resolve()` 每次决策现读、从不缓存——于是 `decide()` /
+        # `gate_path()` / 各闸门在下一次判定时就用新值，不必重建任何对象、
+        # 不必重启进程。反过来，漏了这行则「配置文件改了、界面也说要热生效、
+        # 程序里其实还是目录默认值」，正是本项目列为头号缺陷的「配了不生效」。
+        # 边界：各爬虫私有的 `Pacing` 实例仍只在 `refresh()` / 重建时重读自己的
+        # 阈值（那是节流动件、不是策略参数层）；端口/路径/浏览器内核这类
+        # **启动级**键依旧要重启，界面上的「需重启」提示说的就是这件事。
+        # 放在 `rt["cfg"] = cfg` 之前：坏的覆盖键当场抛 `ValueError`，
+        # 由 `/api/config` 的保存回执原话转给用户，此时还没有任何状态被改过
+        # （不会出现「配置换了一半、用户表还是旧的」这种半截现场）。
+        from core import strategy_params
+        strategy_params.set_config(cfg)
         rt["cfg"] = cfg
         users = build_runtime()
         logger.info("[热重载] %d 用户已生效：%s", len(users),
@@ -3493,6 +4163,35 @@ def main():
                     _pc["breaker_base_s"], _pc["breaker_cap_s"])
         except Exception as e:
             logger.warning("[热重载] 节流参数更新失败: %s", e)
+        # 采集器**私有**节流实例（`crawlers/base.py::_pacing_ctx` /
+        # `crawlers/app_base.py::_pacing_ctx` 懒建那份）也要跟着刷：
+        # 并发/错峰/速率/熔断阈值都是 `parse_pacing` 的产物，而采集器拿不到
+        # `rt`，这份实例只在重建时重读配置——不刷它等于「界面说保存即生效、
+        # 实际要等下一轮重建实例」（复核 2026-11-06 第 5 条）。只刷**已经建过**
+        # 的实例，`refresh()` 只换阈值、保留熔断/令牌桶的既成状态。
+        # 边界如实写明：递进去的 cfg 与构造时同形（只有 `crawler:` 段），所以
+        # 静默窗/调度周期不在本实例可达范围——那两条由上面的
+        # `rt["pacing"].refresh(cfg)` 与调度器承接，热生效的也是那两份。
+        try:
+            from crawlers.base import pacing_cfg_for
+            _ccfg = dict((cfg.get("crawler") or {}))
+            _ccfg["user_data_dir"] = session_root
+            _ccfg["android"] = cfg.get("android") or {}
+            _hot_pcf = pacing_cfg_for(_ccfg)
+            _n_priv = 0
+            with crawler_cache_lock:
+                for _insts in crawler_cache.values():
+                    for _inst in _insts:
+                        _priv = getattr(_inst, "_pacing", None)
+                        if _priv is None:
+                            continue
+                        _priv.refresh(_hot_pcf)
+                        _n_priv += 1
+            if _n_priv:
+                logger.info("[热重载] 采集器私有节流实例已刷新 %d 份"
+                            "（速率/熔断/错峰/并发当场生效）", _n_priv)
+        except Exception as e:
+            logger.warning("[热重载] 采集器私有节流实例刷新失败: %s", e)
         # 调度周期热更新：interval 变化时重排调度器（无需重启）
         try:
             sc = (cfg.get("schedule") or {})
@@ -3638,6 +4337,11 @@ def main():
                       version=__version__, login_saved_cb=rt["clear_crawlers"])
             try:
                 from webui import _State as _WS
+                # 运行时容器挂接（r1063 T10）：「中断本轮」改的是 `rt` 上的
+                # `_round_gen`。T6 给 webui 留了「按任务回调闭包找 rt」的
+                # 兜底，那是在猜一条路径；主流程自己挂一次，中断就不再依赖
+                # 兜底（兜底保留，只作为未挂接时的最后手段）。
+                _WS.rt = rt
                 _WS.pacing = rt.get("pacing")
                 _WS.warm_cb = rt.get("warm_channel")
                 _WS.verify_cb = rt.get("verify_channel")

@@ -132,6 +132,15 @@ class FakeDev:
         if "/data/local/tmp/tm_tuned_0.ok" in cmd and cmd.startswith("shell cat"):
             return self.marker
         if "/data/local/tmp/tm_tuned_0.ok" in cmd and cmd.startswith("shell sh"):
+            # 旧形态（三段 argv `sh -c "echo X > path"`），保留兼容
+            self.marker = cmd.split("echo ")[1].split(" >")[0].strip("'")
+            return ""
+        if "/data/local/tmp/tm_tuned_0.ok" in cmd and cmd.startswith("shell echo"):
+            # **现行形态**：`write_remote` 无 push 能力时退回
+            # `sh_script(dev, "echo <值> <路径>")`，整条脚本是**单个 argv**，
+            # 所以命令串以 `shell echo` 开头而不是 `shell sh`。
+            # （三段 argv 会被 adb 拼回去交给设备 shell 重解析而静默写空，
+            #   见 §6.39；测试替身必须跟着这个契约走，否则"幂等"永远测不到。）
             self.marker = cmd.split("echo ")[1].split(" >")[0].strip("'")
             return ""
         if cmd.startswith("shell settings get"):

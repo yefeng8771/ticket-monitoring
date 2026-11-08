@@ -65,6 +65,9 @@ class AdbDevice:
         # 截止时间让 worker 在**下一个 adb 调用**处主动放弃，从而真正释放锁。
         self._deadline = 0.0
         self.deadline_hits = 0
+        # adb 掉线后是否改走 MuMu root shell（见 _mumu_fallback）
+        self._prefer_mumu = False
+        self._mgr = None
 
     # ---------- 协作式截止 ----------
     def set_deadline(self, budget_s: float = 0, now: float = None) -> float:
@@ -99,6 +102,51 @@ class AdbDevice:
     def _base(self):
         return [self.adb_path, "-s", self.serial]
 
+    # ---------- MuMu root shell 降级通道 ----------
+    #
+    # 为什么需要（2026-11-05 反复实测）：这台 MuMu 的 adbd 很脆——
+    # 跑完一轮设备操作后经常卡在握手阶段（`adb devices` 变 offline、
+    # `adb shell` 挂住，**但设备本身一直健康**：`sys.boot_completed=1`、
+    # props 全对、App 正常运行）。此时唯一还能用的通道是
+    # `MuMuManager sh -v N -c <cmd>`——它走 VMMDev，不经过 adbd，
+    # 而且直接就是 root（`u:r:nemuinit:s0`）。
+    #
+    # 所以设备层做成"adb 优先、MuMu shell 兜底"：adb 一旦回 offline，
+    # 后续命令**自动改走 MuMu shell**，采集不再因为一条通道坏掉而整轮归零。
+    def _mumu_mgr(self):
+        if getattr(self, "_mgr", None) is not None:
+            return self._mgr
+        try:
+            from .vendor import _manager
+            mgr = _manager(vm_index=int(getattr(self, "vm_index", 0) or 0))
+            self._mgr = mgr if mgr.available() else None
+        except Exception:
+            self._mgr = None
+        return self._mgr
+
+    def mumu_available(self) -> bool:
+        return self._mumu_mgr() is not None
+
+    def mumu_sh(self, cmd: str, timeout=None):
+        """用 MuMu root shell 执行一条命令，返回 stdout（失败返回 None）。"""
+        mgr = self._mumu_mgr()
+        if mgr is None:
+            return None
+        try:
+            out = mgr._call(["sh", "-v", str(mgr._vm(None)), "-c", str(cmd)],
+                            timeout=timeout or self.timeout)
+        except Exception:
+            return None
+        return out
+
+    def _as_shell(self, args):
+        """把 adb shell 参数拼成一条设备端命令（去掉开头的 ``shell``）。"""
+        parts = list(args)
+        if parts and parts[0] == "shell":
+            parts = parts[1:]
+        # 参数都是纯标识符/路径时才拼（带空格的命令调用方应直接传字符串）
+        return " ".join(shlex.quote(str(p)) for p in parts)
+
     def _sh(self, *args, timeout=None):
         # 截止时间守卫放在**最前面**：卡死都发生在 adb 上，这里拦住就等于
         # 把"挂 900s"压缩成"立刻放弃 + 释放锁"。
@@ -109,7 +157,7 @@ class AdbDevice:
         proc = _run(self._base() + list(args), timeout or self.timeout)
         if proc is None:
             self.last_error = "timeout or spawn failure"
-            return None
+            return self._mumu_fallback(args, timeout)
         out = _text(proc.stdout)
         err = _text(proc.stderr)
         if proc.returncode != 0:
@@ -117,7 +165,211 @@ class AdbDevice:
             self.last_error = next(
                 (m for m in _OFFLINE_MARKS if m in low),
                 (err or out).strip()[:200] or f"rc={proc.returncode}")
+            if any(m in self.last_error for m in _OFFLINE_MARKS):
+                fb = self._mumu_fallback(args, timeout)
+                if fb is not None:
+                    return fb
         return out
+
+    def _mumu_fallback(self, args, timeout=None):
+        """adb 掉线时的兜底：把这条 shell 命令改走 MuMu root shell。
+
+        **两个必须守的边界**（2026-11-05，踩过）：
+
+        1. 只接管 ``adb shell ...``。``push`` / ``screencap`` 各有专门实现，
+           不能把二进制内容当文本传。
+        2. **`uiautomator` 类命令不许兜底**。实测 MuMu 的 shell 跑在
+           `u:r:nemuinit:s0` 域，起不了 UI 自动化服务——`uiautomator dump`
+           在那里**返回 0 节点**。而"0 节点"在下游看起来和"页面没这个控件"
+           一模一样：App 渠道靠 UI 树定位控件，一旦 dump 走这条路就
+           永远判"不是表单/列表"，整轮 0 条而账本只记 timeout。
+           比报错更糟——这是**静默错判**。
+        """
+        if list(args[:1]) != ["shell"] or not self.mumu_available():
+            return None
+        lowered = " ".join(str(a) for a in args).lower()
+        if "uiautomator" in lowered or "dump" in lowered:
+            return None
+        cmd = self._as_shell(args)
+        out = self.mumu_sh(cmd, timeout=timeout)
+        if out is not None:
+            self.last_error = ""
+            return out
+        return None
+
+    def recover_transport(self) -> dict:
+        """把 adb 传输修回来：先**原序列断开重连**，再退到"换同机别名"。
+
+        为什么需要（2026-11-05 实测）：
+        MuMu 的同一台实例会以**多个** adb 序列同时出现：
+
+            127.0.0.1:16384   ← 项目配置里用的那个（NAT 端口转发）
+            127.0.0.1:5555    ← 实例自带 adbd 直连端口
+            emulator-5554     ← 模拟器控制台别名
+
+        `setprop ctl.restart zygote` 之后，16384 那条常会变成 `offline`
+        甚至"显示 device 但 shell 不响应"；而设备本身一直健康
+        （`MuMuManager sh -v 0 -c` 能读到 `sys.boot_completed=1`）。
+        所以从 adb 这一侧看像"设备挂了"，其实是**传输层**坏了。
+
+        修法分两步，先便宜后兜底：
+
+        1. **原序列 disconnect + connect**（只对 ``host:port`` 形态）：
+           adb 客户端会缓存一条死掉 socket 的会话状态，"显示 device 但
+           shell 挂住"就是这种状态；断开重连能把它清掉。
+        2. 仍然不通 → 换到**能真正应答 `getprop` 的同机别名**。
+
+        安全约束：换序列前必须确认目标能应答 `getprop ro.serialno`。
+        多实例环境下每条别名都会应答，所以这里**额外要求序列号一致**
+        （与本机已知序列号比对；不知道就只接受"唯一候选"）。
+        乱切会把命令打到另一台虚拟机上，那比"调用失败"危险得多。
+
+        返回 ``{"switched", "from", "to", "online", "reconnected"}``。
+        """
+        rep = {"switched": False, "from": self.serial, "to": self.serial,
+               "online": [], "reconnected": False}
+        if self._shell_alive():
+            return rep
+        # ---- 第一步：原序列断开重连 ----
+        if ":" in str(self.serial):
+            _run([self.adb_path, "disconnect", self.serial],
+                 max(10, self.timeout // 3))
+            time.sleep(0.8)
+            _run([self.adb_path, "connect", self.serial],
+                 max(10, self.timeout // 3))
+            time.sleep(1.5)
+            rep["reconnected"] = True
+            if self._shell_alive():
+                rep["to"] = self.serial
+                return rep
+        # ---- 第二步：换同机别名 ----
+        proc = _run([self.adb_path, "devices"], max(10, self.timeout // 3))
+        if proc is None:
+            return rep
+        online = []
+        for line in _text(proc.stdout).splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "device":
+                online.append(parts[0])
+        rep["online"] = online
+        want = self._known_serial()
+        others = [s for s in online if s != self.serial]
+        for target in others:
+            got = self._prop_via(target, "ro.serialno")
+            if not got:
+                continue
+            if want and got != want:
+                continue
+            if not want and len(others) > 1:
+                continue          # 无法判定同机时宁可不切
+            self.serial = target
+            self._size_cache = None
+            rep["switched"] = True
+            rep["to"] = target
+            return rep
+        if not rep["switched"]:
+            self.last_error = ("adb 传输不可用（在线序列=%s，已知序列号=%s）"
+                               % (",".join(online) or "无", want or "未知"))
+        return rep
+
+    def _shell_alive(self, timeout: float = 8.0) -> bool:
+        """shell 通道是否真的能用（不是只看 `adb devices` 的 device 字样）。"""
+        proc = _run([self.adb_path, "-s", self.serial, "shell", "echo", "ok"],
+                    timeout)
+        if proc is None or proc.returncode != 0:
+            return False
+        return "ok" in _text(proc.stdout).lower()
+
+    def _prop_via(self, serial: str, key: str, timeout: float = 8.0) -> str:
+        proc = _run([self.adb_path, "-s", serial, "shell", "getprop", key],
+                    timeout)
+        if proc is None or proc.returncode != 0:
+            return ""
+        return _text(proc.stdout).strip()
+
+    def _known_serial(self) -> str:
+        """本机已知的硬件序列号（用来确认"同机"）。读不到返回空串。"""
+        got = self._prop_via(self.serial, "ro.serialno")
+        if got:
+            self._cached_serialno = got
+            return got
+        return getattr(self, "_cached_serialno", "") or ""
+
+    def push(self, local: str, remote: str, timeout=None) -> bool:
+        """把本地文件推到设备。**返回是否真推成功**。
+
+        为什么单独有这个方法：`as_root()` 要把脚本写到设备上再执行
+        （Windows 上 `sh -c "... | ... > ..."` 的管道和重定向会被本地
+        shell 吃掉，命令根本到不了设备）。以前它靠 `hasattr(dev, "push")`
+        兜圈子，而 `AdbDevice` 其实**没有** push，于是每次都走 subprocess
+        兜底分支——那个分支**不看返回码就认定成功**（又一处假成功）。
+
+        adb 掉线时走 MuMu root shell 兜底（base64 落盘），否则
+        `as_root()` 整条失效、身份写入全盘归零。
+        """
+        proc = _run(self._base() + ["push", str(local), str(remote)],
+                    timeout or self.timeout)
+        if proc is None:
+            self.last_error = "push timeout or spawn failure"
+            return self._push_mumu(local, remote)
+        out = _text(proc.stdout) + _text(proc.stderr)
+        if proc.returncode != 0:
+            low = out.lower()
+            self.last_error = next(
+                (m for m in _OFFLINE_MARKS if m in low),
+                out.strip()[:200] or "rc=%d" % proc.returncode)
+            return self._push_mumu(local, remote)
+        # adb 某些版本 push 失败也返回 0，所以还要看输出里有没有 "error"
+        if "error" in out.lower() and "files pushed" not in out.lower():
+            self.last_error = out.strip()[:200]
+            return self._push_mumu(local, remote)
+        return True
+
+    def _push_mumu(self, local: str, remote: str) -> bool:
+        """通过 MuMu root shell 写文件（base64），adb 不可用时的兜底。"""
+        import base64
+        if not self.mumu_available():
+            return False
+        try:
+            with open(local, "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            return False
+        b64 = base64.b64encode(raw).decode("ascii")
+        # 单条命令：base64 无 shell 元字符，不会再遇到"引号被吃"
+        out = self.mumu_sh("echo %s | base64 -d > %s && echo TMPUSH_OK"
+                           % (b64, str(remote)),
+                           timeout=max(self.timeout, 60))
+        if "TMPUSH_OK" in str(out or ""):
+            self._prefer_mumu = True
+            self.last_error = ""
+            return True
+        return False
+
+    def pull(self, remote: str, local: str, timeout=None) -> bool:
+        """从设备取文件到本地。返回是否真取到。"""
+        proc = _run(self._base() + ["pull", str(remote), str(local)],
+                    timeout or self.timeout)
+        if proc is None:
+            self.last_error = "pull timeout or spawn failure"
+            return False
+        return proc.returncode == 0 and bool((self._sh("shell", "ls", remote)
+                                              or "").strip())
+
+    def run_script(self, script: str, timeout=None) -> str:
+        """在设备上执行一段**带 shell 元字符**的脚本（`$()`、`|`、`>`、`&&`…）。
+
+        唯一正确姿势是把整条脚本作为**单个 argv** 交给 `adb shell`：
+
+            adb -s <serial> shell "f=$(ls -t /d | head -1); head -1 /d/$f"
+
+        **不要写成三段 argv**（`shell` / `sh` / `-c` / 脚本 分四个参数）：adb 会把
+        `shell sh -c <script>` 用空格拼成一条命令交给设备 shell 重新解析，
+        于是内层实际只拿到 `sh -c <第一个词>`，后面的部分被外层吃掉 →
+        命令静默失败（实测写文件写出 0 字节、ANR 探针恒返回空串、
+        `test -e` 探针恒返回 NO）。这个坑在今天修掉了 6 处。
+        """
+        return self._sh("shell", str(script or ""), timeout=timeout) or ""
 
     def connect(self) -> bool:
         proc = _run([self.adb_path, "connect", self.serial], self.timeout)
@@ -125,6 +377,100 @@ class AdbDevice:
             self.last_error = "connect spawn failure"
             return False
         return "connected" in _text(proc.stdout).lower()
+
+    def _devices_map(self, timeout=None) -> dict:
+        """`adb devices` → {serial: state}。解析只保留一份实现。"""
+        proc = _run([self.adb_path, "devices"], timeout or self.timeout)
+        if proc is None:
+            return {}
+        out = {}
+        for line in _text(proc.stdout).splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 2:
+                out[parts[0]] = parts[1]
+        return out
+
+    def state(self, timeout=None) -> str:
+        """该 serial 在 `adb devices` 里的状态：device/offline/unauthorized/absent。
+
+        **为什么要区分**（2026-11-04 血泪）：`offline` 绝大多数是
+        **adb 端点问题**，不是 Android 挂了——
+        * `adb root` 会重启 adbd，TCP 会话被打断；
+        * `adb kill-server` 直接清掉本地侧握手；
+        * MuMu 同一实例还会有第二个端点（`emulator-5554`），
+          它显示 `device` 而 TCP 端点显示 `offline`，就是端点问题无疑。
+
+        我前两轮把这种 offline 归因成"我 `--delete` 了 `ro.adb.secure`
+        / 热改了 `ro.product.*` 把系统搞挂了"，于是去做**重启实例**这种重操作
+        ——实际只需 `kill-server` + `connect` 九秒就好。
+        **误诊比故障更贵**：它让人去修一个不存在的问题，还顺手制造新的。
+        """
+        return self._devices_map(timeout).get(self.serial, "absent")
+
+    def disconnect(self, timeout=None) -> bool:
+        """断开本地侧的 TCP 挂接（不动设备）。"""
+        return _run([self.adb_path, "disconnect", self.serial],
+                    timeout or self.timeout) is not None
+
+    def restart_server(self, timeout=None) -> bool:
+        """`kill-server` + `start-server`：清掉 adb **本地**的坏状态。
+
+        为什么需要：adb server 缓存了设备握手信息，握手坏了之后
+        单纯 `adb connect` 会一直返回 already connected 却仍是 offline。
+        """
+        _run([self.adb_path, "kill-server"], timeout or self.timeout)
+        return _run([self.adb_path, "start-server"],
+                    timeout or self.timeout) is not None
+
+    def reconnect(self, logger=None, settle_s: float = 2.0) -> str:
+        """**逐级**恢复 adb 端点，返回最终状态字符串（含 `recovered` 前缀时
+        表示是恢复成功的）。
+
+        阶梯（从轻到重，能在上一级好起来就不做下一级）：
+
+        1. `connect`：MuMu 首次查询时会话可能还没建立（原有行为）；
+        2. `disconnect` + `connect`：清掉本地侧的僵尸挂接；
+        3. `kill-server` + `start-server` + `connect`：清掉 **adb server
+           自己缓存的坏握手**——这一步是这次真正需要的，
+           单纯 1/2 在 server 状态坏掉时会一直"已连接但 offline"。
+
+        为什么要有这个方法（2026-11-04）：我把 adb 端点的 offline
+        误判成"Android 被我改挂了"，去重启了整个实例，白白丢了
+        一轮采集。端点问题和系统问题**必须先分辨再处置**。
+        """
+        import time as _t
+        if self.online():
+            return "device"
+        st = self.state()
+        # 1) 直接 connect
+        self.connect()
+        _t.sleep(settle_s)
+        if self.online():
+            if logger:
+                logger.info("[adb] %s 由 %s 恢复（connect）", self.serial, st)
+            return "recovered:connect"
+        # 2) disconnect 再 connect
+        self.disconnect()
+        _t.sleep(1.0)
+        self.connect()
+        _t.sleep(settle_s)
+        if self.online():
+            if logger:
+                logger.info("[adb] %s 由 %s 恢复（disconnect+connect）",
+                            self.serial, st)
+            return "recovered:rehandshake"
+        # 3) 重启本地 adb server
+        self.restart_server()
+        _t.sleep(settle_s)
+        self.connect()
+        _t.sleep(settle_s)
+        if self.online():
+            if logger:
+                logger.warning("[adb] %s 由 %s 恢复（重启本地 adb server）——"
+                               "这是端点问题，不是设备故障", self.serial, st)
+            return "recovered:server"
+        return self.state()
+
 
     def online(self) -> bool:
         """`adb devices` 里该 serial 处于 device 态。"""
@@ -213,19 +559,46 @@ class AdbDevice:
         return xml
 
     def screencap(self) -> bytes:
-        """PNG 字节流；失败返回 b""。"""
+        """PNG 字节流；失败返回 b""。
+
+        adb 掉线时走 MuMu root shell 兜底：设备端落盘 → base64 → 解码。
+        比 adb 慢（多两次进程 + base64 33% 膨胀），但**通道坏了还能截**，
+        滑块的缺口识别完全依赖截图，不能因为一条通道废掉就整轮归零。
+        """
         if not self.adb_path:
-            return b""
+            return self._screencap_mumu()
         proc = _run([self.adb_path, "-s", self.serial,
                      "exec-out", "screencap", "-p"],
                     max(self.timeout, 30))
         if proc is None or proc.returncode != 0:
             self.last_error = "screencap failed"
-            return b""
+            return self._screencap_mumu()
         data = proc.stdout or b""
         if not data.startswith(b"\x89PNG"):
             self.last_error = "screencap returned non-png"
+            return self._screencap_mumu()
+        return data
+
+    def _screencap_mumu(self) -> bytes:
+        """MuMu root shell 兜底截图（设备端 base64 → 本地解码）。"""
+        import base64
+        if not self.mumu_available():
             return b""
+        path = "/data/local/tmp/tm_cap.png"
+        out = self.mumu_sh("screencap -p %s >/dev/null 2>&1; "
+                           "base64 %s" % (path, path),
+                           timeout=max(self.timeout, 60))
+        txt = "".join(str(out or "").split())
+        if not txt:
+            return b""
+        try:
+            data = base64.b64decode(txt)
+        except Exception:
+            return b""
+        if not data.startswith(b"\x89PNG"):
+            return b""
+        self._prefer_mumu = True
+        self.last_error = ""
         return data
 
     def current_activity(self) -> str:

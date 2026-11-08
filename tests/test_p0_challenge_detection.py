@@ -3,7 +3,7 @@
 
 Scope: detection + accounting. 自动处置是**可选外挂**：``crawlers/slider.py`` 的
 ``SliderHandler`` 只在显式 ``register_handler()`` 且 ``crawler.slider.auto`` 打开时
-才尝试「几何滑块」，强人机一律不碰；任何情况下都不接第三方打码服务。
+才尝试「几何滑块」，强人机按性价比不投入；外部打码平台默认不接（隐私边界）。
 本文件钉的是识别与记账，不受上述开关影响。
 """
 import json

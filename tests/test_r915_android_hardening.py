@@ -59,12 +59,37 @@ class FakeDev:
         return self._route(cmd)
 
     def _route(self, cmd):
+        # `fingerprint.as_root()` 现在把脚本 **base64** 后传输
+        # （`echo <b64> | base64 -d | sh`）——因为引号经 adb shell 会丢。
+        # 假设备要把它解回来再路由，否则所有 as_root 调用都变成"没执行"。
+        if "base64 -d" in cmd:
+            import base64 as _b64
+            import re as _re
+            m = _re.search(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", cmd)
+            if m:
+                try:
+                    real = _b64.b64decode(m.group(1)).decode("utf-8")
+                except Exception:
+                    return ""
+                return self._route("shell " + real)
+            return ""
         if cmd.startswith("shell getprop "):
             return self.props.get(cmd.split(" ", 2)[2], "")
         if cmd == "shell getprop":
             return "\n".join("[%s]: [%s]" % (k, v) for k, v in self.props.items())
         if "command -v resetprop" in cmd:
             return "/data/adb/magisk/resetprop" if self.can_write else ""
+        # `_magisk()` 现在用 `ls <path>` 直传探测（`sh -c "test -e \'...\'"`
+        # 经 adb shell 后引号会丢，实测误报 TM_NO）。假设备要跟着支持。
+        if cmd.startswith("shell ls "):
+            _p = cmd[len("shell ls "):].strip()
+            if not self.can_write:
+                return ""
+            if _p.endswith("resetprop"):
+                return "/data/adb/magisk/resetprop"
+            if _p.endswith("/magisk"):
+                return "/data/local/tmp/magisk_bin/magisk"
+            return ""
         if "command -v su" in cmd:
             return "/system/bin/su" if self._su else ""
         if "remount,rw" in cmd:
@@ -99,6 +124,23 @@ class FakeDev:
             return self.size
         if cmd.startswith("shell wm density"):
             return self.density
+        # **`_magisk()` 的 delete-then-set 探针是"裸命令"**（参数直接传，
+        # 不经 `sh -c`、不带引号）：`shell <rp> --delete ro.boot.revision`
+        # 和 `shell <rp> ro.boot.revision tmprobe`。要按真实语义回答，
+        # 否则 `_magisk()` 会判"没有可用 resetprop"，apply_props 退化成
+        # `setprop`，整批身份写入的 verified 就空了。
+        if "resetprop" in cmd and "echo" not in cmd:
+            parts = cmd.split()
+            if "--delete" in parts:
+                _i = parts.index("--delete")
+                if _i + 1 < len(parts):
+                    self.props[parts[_i + 1].strip("'")] = ""
+                return ""
+            _i = parts.index("resetprop")
+            if _i + 2 < len(parts) and not self.apply_noop:
+                self.props[parts[_i + 1].strip("'")] = (
+                    parts[_i + 2].strip("'"))
+            return ""
         if "-n " in cmd or "setprop" in cmd:
             # 只解析两种真实形态：`setprop 'KEY' 'VAL'` 与
             # `<path>/resetprop -n 'KEY' 'VAL'`（apply_props 就是把它们拼成
@@ -323,7 +365,14 @@ def test_canary_refuses_when_props_are_readonly(tmp_path):
     rep = abi_canary.run(dev, "ctrip.android.view", {}, _LOG,
                          user_data_dir=str(tmp_path), restart_wait_s=1)
     assert rep["ok"] is False and rep["wrote"] is False
-    assert "读回生效" in rep["error"]
+    # 报错文案要么点出"读回没生效"，要么点出"机型字段不许热改"
+    # （两者都是拒绝，不是放行）。
+    # 三种**都是合法拒绝**（关键是 `wrote=False`，没把只读判成可行）：
+    #   预检未通过      —— 还没动手就拦下（最省事）
+    #   读回没生效      —— 试了但没写进去
+    #   机型字段禁热改  —— 明确不让运行中改
+    assert any(k in rep["error"] for k in
+               ("读回生效", "热改", "官方键", "预检未通过")), rep["error"][:120]
     assert not rep["probe"]                      # 没写进去就不该探活
     assert abi_canary.spoof_allowed("ctrip.android.view", str(tmp_path)) is False
 

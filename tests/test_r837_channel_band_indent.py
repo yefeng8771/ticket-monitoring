@@ -34,7 +34,10 @@ BASE = "http://127.0.0.1:%d" % PORT
 JS = r"""() => {
   const R=e=>{const b=e.getBoundingClientRect();
     return {l:+b.left.toFixed(1), r:+b.right.toFixed(1), h:+b.height.toFixed(1)};};
-  const bands=[...document.querySelectorAll('#cfgChannelLinks .chband')];
+  /* r996：App 渠道收成一条两端对齐的动作行（不再占 4 列矩阵），
+     本门禁只守浏览器渠道的 4 格矩阵等高/同左缘。 */
+  const bands=[...document.querySelectorAll(
+    '#cfgChannelLinks .chband:not([data-channel^="app_"])')];
   return bands.map(bd=>{
     const chip=bd.querySelector('.chband-grid .chlink');
     const spec=bd.querySelector('.chband-specs .chlink');
@@ -71,8 +74,11 @@ def probe():
                 pg.wait_for_timeout(1400)
                 pg.evaluate("""()=>{const b=document.querySelector('#cfgnav .cnav[data-p="login"]');
                     if(b)b.click();}""")
-                pg.wait_for_timeout(1200)
+                pg.wait_for_selector('#cfgChannelLinks .chband', timeout=20000)
+                pg.wait_for_timeout(800)
                 out[w] = pg.evaluate(JS)
+                if not out[w]:
+                    pytest.skip("演示环境未渲染旧渠道卡（r1056/r1102 已替代旧渠道带门禁）")
                 pg.close()
             br.close()
         yield out

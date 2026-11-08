@@ -29,7 +29,8 @@ from core.models import FlightPrice
 
 from .app_base import AppCrawler
 from .app_ctrip_parse import (calendar_xy, is_calendar, is_city_page,
-                              is_form, is_list_page, is_login_wall,
+                              is_form, is_form_page, is_list_page,
+                              is_login_wall,
                               login_slot, nodes, parse_city_candidates,
                               parse_flight_cards, parse_form, parse_months)
 from .app_ctrip_roundtrip import (build_combos, is_round_trip_form,
@@ -61,6 +62,67 @@ def _find_text(xml, want):
         if n["text"] == want:
             return n
     return None
+
+
+def _screen_w(dev):
+    """设备屏幕宽度（读不到返回 None → 调用方按基准宽度算）。"""
+    try:
+        w, _h = dev.window_size()
+        return int(w) or None
+    except Exception:
+        return None
+
+
+def cal_scroll_dir(months, y, m):
+    """日历该往哪边滚：``"back"``（拉出更早的月份）/``"forward"``。
+
+    抽成纯函数是因为这条判断踩过两次坑（2026-11-06）：
+      * 原来只会**前翻**。表单残留远期日期（实测 `2027年2月14日`）时
+        日历就开在 2027-02，目标是 2026-11-16 → 永远滚不到，
+        报「日历滚动后仍找不到」。
+      * 前翻用的滚动坐标还写死成 900×1600 的 `(450,1400)→(450,600)`，
+        在 1260×2800 上只滑到上半屏，**首屏之外的所有日期都取不到**。
+
+    ``months`` 是 `parse_months()` 的结果：``[(年, 月, 表头y), ...]``。
+    空列表时按"前翻"处理（保留原来的行为，不至于更糟）。
+    """
+    try:
+        vis = [(int(a), int(b)) for a, b, _c in months or []]
+    except (TypeError, ValueError):
+        return "forward"
+    if not vis:
+        return "forward"
+    if (int(y), int(m)) < min(vis):
+        return "back"
+    return "forward"
+
+
+def _calendar_day_cell(xml, header_cy, day, block_bottom=None):
+    """在日历 UI 树里找目标「日」的格子中心；找不到返回 None。
+
+    为什么不用 `calendar_xy` 那套常量：它是按 **900×1600** 标定的
+    （COL0=66 / STEP=133.3 / ROW=100）。设备改到 1260×2800 之后列宽变成
+    1260/7≈180，常量算出来的点会落进**相邻日期**，现场表现就是
+    "设日期后日期未变"，账本只记 `app-date timeout`，看不出根因。
+
+    日号在一个月块内是唯一的，所以按文本找格子天然与分辨率无关。
+    `block_bottom` 是下一个月块的表头 y（有的话），用它把搜索限制在
+    本月内，避免捡到相邻月份里同样的日号。
+    """
+    want = str(int(day))
+    best = None
+    for n in nodes(xml or ""):
+        if n["text"] != want:
+            continue
+        if n["cy"] <= float(header_cy):
+            continue
+        if block_bottom is not None and n["cy"] >= float(block_bottom):
+            continue
+        if best is None or n["cy"] < best["cy"]:
+            best = n
+    if best is None:
+        return None
+    return best["cx"], best["cy"]
 
 
 def _find_flight_tile(xml):
@@ -99,6 +161,10 @@ class AppCtripCrawler(AppCrawler):
 
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        # 日期超出 App 视野就直接交浏览器（能力边界，记 unsupported）：
+        # App 日历只支持近未来，远期日期每条白耗 100–150 秒设备时间。
+        if self.reject_far_dates(dates):
+            return []
         rt = self.runtime()
         ok, why = rt.ensure_ready()
         if not ok:
@@ -110,6 +176,18 @@ class AppCtripCrawler(AppCrawler):
         if dev is None:
             self.path_note("android-device", "unsupported",
                            detail="device unavailable")
+            return []
+        # 链路闸门（r1063 T9）：**必须在拿设备锁之前**按阶段问——闸门要等
+        # 时不能占着设备睡（App 渠道的设备是串行独占的，在锁里等＝让排队
+        # 等锁的其它 App 渠道全体陪跑）。一次 fetch 走「登录 → 列表」两段
+        # （往返查询走「登录 → 往返」），两段各问一次；被停用的阶段只记
+        # `paced` 并交空结果，**不记失败**（记失败会把整家渠道的熔断拉开）。
+        if not self.path_gate("app-login", "detail"):
+            return []
+        if ret_date:
+            if not self.path_gate("往返", "round_trip"):
+                return []
+        elif not self.path_gate("app-list", "detail"):
             return []
         with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
@@ -153,12 +231,56 @@ class AppCtripCrawler(AppCrawler):
         page = dev.dump() or ""
         if is_form(page):
             return page
+        # **显式启动"看起来成功"但页面不是表单时，必须先冷启动回首页**
+        # （2026-11-05 实测）。
+        #
+        # 现场：`start_component` 返回真，但落到的是一张 75 节点的半开页
+        # （既不是表单也不是登录墙），在这张页上找「机票」宫格点到的是
+        # 别的东西，然后干等 20 秒超时——整轮 0 条。
+        # 而**先 force-stop 再 monkey 冷启动 → 等首页 → 点宫格**这条路径
+        # 是稳定可用的（实测 260 节点、is_form=True，5 秒内到表单）。
+        #
+        # 判据：页面里既没有表单标记、也不是首页宫格时，说明当前界面是
+        # "别人留下的中间态"，最便宜的处置就是重来一次。
+        if is_form_page(page) is False and _find_flight_tile(page) is None:
+            self.logger.info("[%s] 当前页非表单也非首页，冷启动重来", self.name)
+            try:
+                dev.app_stop(_APP_PKG)
+            except Exception:
+                pass
+            time.sleep(1.5)
+            dev.app_start(_APP_PKG)
+            page = _wait_for(
+                dev, lambda x: x and _find_flight_tile(x) is not None,
+                timeout=25)
         # 冷启动后显式 Activity 可能被系统落到首页：点顶部「机票」宫格。
-        tile = _find_flight_tile(page)
-        if tile is not None:
-            self.logger.info("[%s] 首页点「机票」入口", self.name)
+        #
+        # **要点两轮**（2026-11-05 实测）：冷启动 ~14s，`prepare_device`
+        # 里的 `_ensure_own_app` 只等 2.5s 就返回，此时首页常常还在加载
+        # 骨架——骨架里已经有「机票」节点，但那次点击**落在未就绪的控件上
+        # 无效**，于是干等 20s 超时。隔离测试里我等了 15s 再点，5 秒就到表单，
+        # 差别就在这里。
+        for attempt in range(2):
+            tile = _find_flight_tile(page)
+            if tile is None:
+                break
+            if attempt:
+                # 第二轮前先让首页稳定下来
+                time.sleep(2.5)
+                page = dev.dump() or ""
+                tile = _find_flight_tile(page)
+                if tile is None:
+                    break
+            self.logger.info("[%s] 首页点「机票」入口（第 %d 次）",
+                             self.name, attempt + 1)
             if dev.tap(*_center(tile)):
                 page = _wait_for(dev, is_form, timeout=20)
+            if is_form(page):
+                return page
+            # 没进表单：可能点了空骨架，或落到了中间页 → 重新取页面再来一次
+            page = dev.dump() or ""
+            if is_form(page):
+                return page
         if is_form(page):
             return page
         if is_login_wall(page) and _find_flight_tile(page) is None:
@@ -393,12 +515,23 @@ class AppCtripCrawler(AppCrawler):
 
     def _tap_picker_date(self, dev, page, y, m, d) -> bool:
         for _ in range(5):
-            for yy, mm, cy in parse_months(page):
-                if (yy, mm) == (y, m):
-                    xy = calendar_xy(cy, y, m, d)
-                    if xy is None:
-                        return False
-                    return bool(dev.tap(*xy))
+            months = parse_months(page)
+            for i, (yy, mm, cy) in enumerate(months):
+                if (yy, mm) != (y, m):
+                    continue
+                # **优先从 UI 树里找那一格**（2026-11-05）：
+                # `calendar_xy` 用的是按 900×1600 标定的栅格常量
+                # （COL0=66 / STEP=133.3 / ROW=100），设备换成 1260×2800 后
+                # 列宽变了（1260/7≈180），照常量算出来的点会落进相邻日期，
+                # 于是"设日期后日期未变"、整轮 0 条。
+                # 日号在一个月块内唯一，按文本找格子天然与分辨率无关。
+                bottom = months[i + 1][2] if i + 1 < len(months) else None
+                xy = _calendar_day_cell(page, cy, d, bottom)
+                if xy is None:
+                    xy = calendar_xy(cy, y, m, d, width=_screen_w(dev))
+                if xy is None:
+                    return False
+                return bool(dev.tap(*xy))
             dev.swipe(450, 1250, 450, 700, duration_ms=400)
             time.sleep(1.2)
             page = dev.dump() or ""
@@ -493,19 +626,38 @@ class AppCtripCrawler(AppCrawler):
             self.path_note("app-date", "timeout",
                            detail="点日期位后 15s 未打开日历")
             return False
-        # 目标月不在屏内就上滑；最多 6 次，避免无限滚。
+        # 目标月不在屏内就滚；最多 7 次，避免无限滚。
+        #
+        # **方向要按目标相对可见月份决定**（2026-11-06 修）：
+        # 原实现只会向上滑（= 找更晚的月），一旦表单残留的是**远期日期**
+        # （实测残留 `2027年2月14日`，日历就开在 2027-02），目标是
+        # 2026-11-16 时就永远滚不到，报「日历滚动后仍找不到」。
+        # 向下滑才会把更早的月份拉出来（实测下滑 2 次出现 2026年11月）。
         picked = None
         for _ in range(7):
             months = parse_months(page)
             target_month = next(((yy, mm, cy) for yy, mm, cy in months
                                  if (yy, mm) == (y, m)), None)
             if target_month is not None:
-                xy = calendar_xy(target_month[2], y, m, d)
+                xy = calendar_xy(target_month[2], y, m, d,
+                                 width=_screen_w(dev))
                 if xy is not None:
                     picked = xy
                     break
             # 只滚日历主体，避开顶部「仅看直飞」开关。
-            dev.swipe(450, 1400, 450, 600, duration_ms=400)
+            # **坐标按屏幕比例算**：原来写死 (450,1400)→(450,600) 是
+            # 900×1600 的标定值，在 1260×2800 上只滑到上半屏，滚不动日历。
+            try:
+                _w, _h = dev.window_size() or (900, 1600)
+                _w, _h = int(_w), int(_h)
+            except Exception:
+                _w, _h = 900, 1600
+            _cx = int(_w * 0.5)
+            _y_hi, _y_lo = int(_h * 0.30), int(_h * 0.80)
+            if cal_scroll_dir(months, y, m) == "back":
+                dev.swipe(_cx, _y_hi, _cx, _y_lo, duration_ms=400)  # 回翻
+            else:
+                dev.swipe(_cx, _y_lo, _cx, _y_hi, duration_ms=400)  # 前翻
             time.sleep(1.5)
             page = dev.dump() or ""
             if not is_calendar(page):
@@ -552,6 +704,9 @@ class AppCtripCrawler(AppCrawler):
             self.path_note("android-device", "unsupported",
                            detail="device unavailable")
             return []
+        # 链路闸门（r1063 T9）：价格日历是一个独立阶段，在拿设备锁之前问。
+        if not self.path_gate("app-calendar", "calendar"):
+            return []
         with rt.device_lock(owner=self.name):
             self.prepare_device(dev)
             form = self._ensure_form(dev)
@@ -572,6 +727,33 @@ class AppCtripCrawler(AppCrawler):
                 self.path_note("app-calendar", "timeout",
                                detail="点日期位后 15s 未打开价格日历")
                 return []
+            # **把日历翻回"今天所在月"**（2026-11-06 修）。
+            #
+            # 日历按**表单当前日期所在月份**打开。生产跑过远期航线后
+            # （实测残留 `2027年2月14日`），日历就开在 2027-02；而本方法
+            # 只截一张图就读，读完按「今天起 N 天」过滤 → 一条都不剩，
+            # 账本却记「OCR 未读到日历价」，把状态问题误记成 OCR 问题。
+            # 时间窗口总是从今天起算，所以只要首屏月份晚于今天所在月，
+            # 就向下滑回翻（实测下滑即可拉出更早的月份）。
+            try:
+                _w, _h = dev.window_size() or (900, 1600)
+                _w, _h = int(_w), int(_h)
+            except Exception:
+                _w, _h = 900, 1600
+            _today0 = _date.today()
+            for _ in range(5):
+                _months = parse_months(page)
+                if not _months:
+                    break
+                _first = min((yy, mm) for yy, mm, _cy in _months)
+                if _first <= (_today0.year, _today0.month):
+                    break
+                dev.swipe(int(_w * 0.5), int(_h * 0.30),
+                          int(_w * 0.5), int(_h * 0.80), duration_ms=400)
+                time.sleep(1.2)
+                page = dev.dump() or ""
+                if not is_calendar(page):
+                    break
             png = dev.screencap()
             if not png:
                 self.path_note("android-ocr", "error",
@@ -584,7 +766,8 @@ class AppCtripCrawler(AppCrawler):
                 return []
             from .app_ctrip_calendar import parse_calendar_words
             today = _date.today()
-            rows = parse_calendar_words(words, today=today)
+            rows = parse_calendar_words(words, today=today,
+                                        width=_screen_w(dev))
             end = today + timedelta(days=days - 1)
             out = []
             for r in rows:
@@ -617,6 +800,13 @@ class AppCtripCrawler(AppCrawler):
     def low_fare(self, from_city: str, to_city: str,
                  days: int = 14, anchor_ymd: str = "") -> List[dict]:
         """特价雷达发现源：逐日最低价（OCR 日历与明细同一 App 弹层）。"""
+        # 链路闸门（r1063 T9）：携程的「低价机票」就是价格日历，同一次设备
+        # 交互算**一条路**——所以「低价」与「日历」两个闸门都要放行才跑：
+        # 停「低价」只停特价发现源（日历采集照常），停「日历」则两个都停
+        # （它真的没有另一条路可走）。每一次都记在各自的名字上，面板上
+        # 看得出是哪一档把它停掉的。
+        if not self.path_gate("low-fare", "low_fare"):
+            return []
         return self.calendar(from_city, to_city, days=days)
 
     # ---------- 查询 / 解析 ----------

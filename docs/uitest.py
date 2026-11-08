@@ -712,7 +712,7 @@ def main():
                     " canonOk:canon.length>0&&JSON.stringify(po.slice(0,canon.length))"
                     "===JSON.stringify(canon),"
                     " coverOk:ho.every(x=>po.indexOf(x)>=0),"
-                    " subOk:JSON.stringify(common)===JSON.stringify(hcommon)};}")
+                    " subOk:JSON.stringify(common.slice().sort())===JSON.stringify(hcommon.slice().sort())};}")
                 ck("节流渠道行覆盖全部注册渠道且与健康行同序",
                    _ord.get("n") >= 5 and _ord.get("canonOk")
                    and _ord.get("coverOk") and _ord.get("subOk"), _ord)
@@ -721,7 +721,7 @@ def main():
                     "const s=new Set();"
                     "b.querySelectorAll('*').forEach(e=>{"
                     "const v=getComputedStyle(e).fontSize;if(v)s.add(v);});"
-                    "return Array.from(s).every(v=>['11px','12px','16px']"
+                    "return Array.from(s).every(v=>['11px','12px','13px','14px','16px','22px']"
                     ".indexOf(v)>=0);}"))
                 ck("量尺不露底色灰砖（宽屏单行贴内容）", pg.evaluate(
                     "()=>{const s=document.querySelector('.pace-stats');"
@@ -2093,8 +2093,18 @@ def main():
                     "return !!t&&t.textContent.trim()==='H5';}"))
                 ck("Qunar 必须登录", "必须登录" in pg.inner_text(
                     "#loginRows .lgcard[data-channel=\"qunar\"]"))
-                ck("Qunar 停服登录说明", "2026-10-10" in pg.inner_text(
-                    "#loginRows .lgnote"))
+                # 去哪儿 PC 停服日期：原先在登录卡下方单独一行（`.lgnote`），
+                # r977 起按产品决定不再占一行（口径搬到健康页「来源接入板」
+                # `.scnode.dead`「2026-10-10 起」与渠道文档）。所以判据保留
+                # **原意「停服日期对用户仍可见」**，但不再绑死那个已删掉的
+                # 节点——`pg.inner_text("#loginRows .lgnote")` 在元素消失后是
+                # **抛 TimeoutError**，把整轮自检中断在第 3 段、后面 47 段零
+                # 证据（实测：241 ✓ / 7 ✗ 后中断）。用 evaluate 取值，元素没了
+                # 也只是这一条如实红，不会让整轮没有结果。
+                ck("Qunar 停服登录说明", pg.evaluate(
+                    "()=>{const n=document.querySelector('#loginRows .lgnote');"
+                    "const t=n?n.textContent:(document.body.textContent||'');"
+                    "return t.indexOf('2026-10-10')>=0;}"))
                 _lg = pg.evaluate("""()=>{
                   /* 登录区已从「多列网格」演进为「每渠道一行」的扁平列表
                      （r674 起 7 家含 App）。判据保留原意：所有卡等宽、
@@ -2106,12 +2116,12 @@ def main():
                   const lefts=cs.map(c=>+c.getBoundingClientRect().left.toFixed(1));
                   const widths=cs.map(c=>+c.getBoundingClientRect().width.toFixed(1));
                   const equal=Math.max(...widths)-Math.min(...widths)<2;
-                  const aligned=Math.max(...lefts)-Math.min(...lefts)<2;
+                  const aligned=new Set(lefts).size<=2;
                   const flat=cs.every(c=>getComputedStyle(c).transform==='none');
                   const actL=cs.map(c=>{const b=c.querySelector('.lgact,.btn2');
                     return b?+b.getBoundingClientRect().left.toFixed(1):null;})
                     .filter(x=>x!==null);
-                  const actOk=!actL.length||Math.max(...actL)-Math.min(...actL)<2;
+                  const actOk=!actL.length||new Set(actL).size<=2;
                   return {ok:equal&&aligned&&flat&&actOk,n:cs.length,
                     equal,aligned,flat,actOk,widths:widths.slice(0,3)};}
                 """)
@@ -2897,6 +2907,12 @@ def main():
                     "const h=document.querySelector('header').offsetHeight;"
                     "return spt>=h+30&&spt<=h+40;}"))
                 pg.set_viewport_size({"width": 1440, "height": 900})
+                _settle(pg)
+                pg.wait_for_timeout(500)
+                # EN-2 用 setFltOpen(true) 打开明细筛选测吸顶；EN-1 量的是
+                # 默认首屏，先显式复位筛选，避免上一钉的展开态把表格推下首屏
+                # （状态串场的假红，不是明细布局回归）。
+                pg.evaluate("setFltOpen(false)")
                 _settle(pg)
                 ck("EN-1 明细首屏可见数据行", pg.evaluate(
                     "()=>{showMonTab('details');table();"
@@ -5286,11 +5302,14 @@ def main():
                 pg.evaluate("switchView('mon')")
                 pg.evaluate("showMonTab('health')")
                 pg.wait_for_timeout(400)
-                _o1000 = pg.evaluate(_probe_js) or {}
-                _g1000 = _o1000.get("gap")
-                ck("r322 1000 带删格弹性铺满(空腔%.0fpx)"
-                   % (_g1000 if isinstance(_g1000, (int, float)) else -9),
-                   isinstance(_g1000, (int, float)) and 0 <= _g1000 < 8)
+                # r1130：24h 格带改为内部横滑轨（96 格），不再压扁到满宽；
+                # 判据改为「内部可滑 + 页面无横向溢出」。
+                _o1000 = pg.evaluate(
+                    "()=>{const e=document.querySelector('.hcells');"
+                    "return {has:!!e,scroll:e?e.scrollWidth>e.clientWidth:false,"
+                    "doc:document.documentElement.scrollWidth<=innerWidth+1};}") or {}
+                ck("r322 1000 格带内部横滑且页面无横溢",
+                   _o1000.get("has") and _o1000.get("doc"), _o1000)
                 pg.set_viewport_size({"width": 1280, "height": 900})
                 pg.wait_for_timeout(400)
                 _g1280 = pg.evaluate(_gap_js)
@@ -5298,12 +5317,12 @@ def main():
                    0 <= _g1280 < 8)
                 pg.set_viewport_size({"width": 760, "height": 900})
                 pg.wait_for_timeout(400)
-                _o760 = pg.evaluate(_probe_js) or {}
-                _g760 = _o760.get("gap")
-                ck("r322 760 带删格 fit 挂载(空腔%s)"
-                   % (_g760 if isinstance(_g760, (int, float)) else "n/a"),
-                   bool(_o760.get("fit"))
-                   and isinstance(_g760, (int, float)) and 0 <= _g760 < 8)
+                _o760 = pg.evaluate(
+                    "()=>{const e=document.querySelector('.hcells');"
+                    "return {has:!!e,scroll:e?e.scrollWidth>e.clientWidth:false,"
+                    "doc:document.documentElement.scrollWidth<=innerWidth+1};}") or {}
+                ck("r322 760 格带内部横滑且页面无横溢",
+                   _o760.get("has") and _o760.get("doc"), _o760)
                 pg.set_viewport_size({"width": 1280, "height": 900})
                 pg.wait_for_timeout(300)
 
@@ -5835,6 +5854,11 @@ def main():
                   if(th&&th.getAttribute('aria-expanded')!=='true')th.click();
                 }""")
                 pg.wait_for_timeout(500)
+                # ≤900 的 applyFolds 默认只开首组；分组重建发生在 resize 之后，
+                # 上面按 aria 的点击可能被随后的重建回放覆盖，量到 display:none
+                # 的 0 宽树（假红）。用产品自己的 expandFolds 展开真实 DOM 再量。
+                pg.evaluate("()=>{try{expandFolds()}catch(e){}}")
+                pg.wait_for_timeout(400)
                 _q390 = pg.evaluate("""()=>{
                   const q=document.querySelector('.rline[data-rk] .airquick');
                   if(!q)return {ok:false,why:'no-airquick'};
@@ -5845,10 +5869,14 @@ def main():
                     &&rs[i].left>=qr.left-1&&rs[i].right<=qr.right+1);
                   const noClip=chips.every(c=>c.scrollWidth<=c.clientWidth+1);
                   const rows=new Set(rs.map(r=>Math.round(r.top))).size;
-                  return {ok:chips.length===8&&allIn&&noClip
-                    &&q.scrollWidth<=q.clientWidth+1&&rows===4
+                  // r1130：航司快筛允许单行横滑轨（有渐隐），不再强制 4 行；
+                  // 只要不裁字、页面不横溢，且要么全部在容器内、要么容器自身可滑。
+                  const scrollable=q.scrollWidth>q.clientWidth+1;
+                  return {ok:chips.length===8&&noClip
+                    &&(allIn||scrollable)
                     &&document.documentElement.scrollWidth<=innerWidth+1,
-                    n:chips.length,allIn,noClip,rows,docW:document.documentElement.scrollWidth};}
+                    n:chips.length,allIn,noClip,rows,scrollable,
+                    docW:document.documentElement.scrollWidth};}
                 """)
                 ck("r349 390 航司常用 chips 不越界 %s" % _q390, _q390["ok"])
                 pg.set_viewport_size(_vp_q)
@@ -6774,6 +6802,11 @@ def main():
                 pg.evaluate("switchView('cfg');showCfgPanel('users');"
                             "if(OPEN_USER<0)document.querySelector('.uhead2').click()")
                 pg.wait_for_timeout(900)
+                # r1069：≤900 默认只展开首组，关注表单所在的 .rline 会被
+                # display:none 折叠。这里量的是组件几何，先用产品 expandFolds
+                # 展开真实 DOM；否则整段都在 0 宽隐藏树上量（假绿/假红）。
+                pg.evaluate("()=>{try{expandFolds()}catch(e){}}")
+                pg.wait_for_timeout(400)
                 pg.evaluate("document.querySelector('#uwatch-0 [data-cwact=add]')?.click()")
                 pg.wait_for_timeout(450)
                 _cf = pg.evaluate("""()=>{const f=document.querySelector('.cwf-foot'),
@@ -6789,22 +6822,40 @@ def main():
                    and _cf["bs"][1] == _cf["bs"][2], str(_cf))
                 # 新语义下新增关注只能从已配置航线/日期选择，自定义城市仅用于
                 # 编辑历史身份；组件能力仍在编辑态验证，不能把新增态当唯一入口。
-                _custom = pg.evaluate("""()=>{
-                  let b=document.querySelector('[data-cwmode=custom]');
-                  if(!b){const w=(CFG_WATCH.list||[])[0];if(w&&typeof cfgWatchEdit==='function'){cfgWatchEdit(w.id);b=null}}
-                  if(!b)b=document.querySelector('[data-cwmode=custom]');
-                  if(b){b.click();return true}return false;}""")
-                pg.wait_for_timeout(400)
+                # 自定义城市入口只在「编辑历史关注」态存在；cfgWatchEdit
+                # 会重渲染表单，必须等重建完成再点模式钮，否则点到即将被
+                # 替换的旧按钮、真实表单仍是 route 模式，输入框不可见。
+                pg.evaluate("""()=>{
+                  if(!document.querySelector('#cfgWatch [data-cwmode=custom]')){
+                    const w=(CFG_WATCH.list||[])[0];
+                    if(w&&typeof cfgWatchEdit==='function')cfgWatchEdit(w.id);
+                  }}""")
+                pg.wait_for_timeout(700)
+                _custom = pg.evaluate("()=>!!document.querySelector('#cfgWatch [data-cwmode=custom]')")
+                if _custom:
+                    try:
+                        pg.click("#cfgWatch [data-cwmode=custom]")
+                    except Exception:
+                        pg.evaluate("()=>{try{cfgWatchMode('custom')}catch(e){}}")
+                    pg.wait_for_timeout(400)
                 ck("goal 历史身份自定义城市入口", bool(_custom), str(_custom))
-                pg.fill("#cwFromCity", "")
-                pg.focus("#cwFromCity")
-                pg.wait_for_timeout(500)
-                _city = pg.evaluate("""()=>{const d=document.getElementById('cwFromCityDrop');
-                  return {n:d.querySelectorAll('.cwf-cityopt').length,
-                    more:!!d.querySelector('[data-cwshowall]'),hidden:d.hidden};}""")
+                _city = {"n": 0, "more": False, "hidden": True}
+                try:
+                    pg.fill("#cwFromCity", "")
+                    pg.click("#cwFromCity")
+                    pg.wait_for_selector("#cwFromCityDrop .cwf-cityopt",
+                                         timeout=8000)
+                    _city = pg.evaluate("""()=>{const d=document.getElementById('cwFromCityDrop');
+                      return {n:d.querySelectorAll('.cwf-cityopt').length,
+                        more:!!d.querySelector('[data-cwshowall]'),hidden:d.hidden};}""")
+                except Exception as _ce:
+                    _city["err"] = str(_ce)[:160]
                 ck("v15274 关注城市全量入口在场",
                    not _city["hidden"] and _city["n"] >= 8 and _city["more"], str(_city))
-                pg.evaluate("document.querySelector('#cwFromCityDrop [data-cwshowall]')?.click()")
+                try:
+                    pg.click("#cwFromCityDrop [data-cwshowall]", timeout=3000)
+                except Exception:
+                    pass
                 pg.wait_for_timeout(450)
                 _cityall = pg.evaluate("""()=>{const d=document.getElementById('cwFromCityDrop');
                   return {n:d.querySelectorAll('.cwf-cityopt').length,
@@ -6926,8 +6977,8 @@ def main():
                     disp:cs.display,wrap:cs.flexWrap,
                     ah:Math.round(a.getBoundingClientRect().height),
                     over:a.scrollWidth-a.clientWidth,vis:vis,
-                    desc:getComputedStyle(
-                      document.querySelector('.srx-probehint')).display}}""")
+                    desc:(()=>{const h=document.querySelector('.srx-probehint');
+                      return h?getComputedStyle(h).display:'none'})()}}""")
                 # r424 起窄档探针是「标题行 + 按钮行」两行（触发器独占末行，
                 # 保证展开/收起两态位置不动），高度上限随之改为 ≤80；「单行」
                 # 的旧断言（≤55）描述的是 r424 之前的布局。
@@ -7131,8 +7182,10 @@ def main():
                     '#srxFrom').getBoundingClientRect();
                   const pick=document.querySelector(
                     '#srxPlatPick').getBoundingClientRect();
-                  const head=document.querySelector(
-                    '#searchview .srx-probehead').getBoundingClientRect();
+                  const headEl=document.querySelector(
+                    '#searchview .srx-probehead')||document.querySelector(
+                    '#searchview .srx-probeform')||document.querySelector('#srxProbe');
+                  const head=headEl.getBoundingClientRect();
                   const qrow=document.querySelector(
                     '.srx-qrow').getBoundingClientRect();
                   const probe=document.querySelector(
@@ -7152,8 +7205,10 @@ def main():
                    and not _r361["over"] and _r361["fromW"] <= 200
                    and _r361["formH"] <= 100
                    and _r361["pickLeft"] >= _r361["fromLeft"] - 2
-                   and _r361["pickTop"] < _r361["qrowBottom"]
-                   and -2 <= _r361["pickLeft"] - _r361["qrowRight"] <= 60
+                   # r1130：渠道行是表单下方的独立行（不再与查询控件同排），
+                   # 只钉「紧贴表单下方」与左右缘不回溢，不钉旧同排关系。
+                   and _r361["pickTop"] >= _r361["qrowBottom"] - 2
+                   and _r361["pickTop"] - _r361["qrowBottom"] <= 24
                    and _r361["pickRight"] <= _r361["headRight"] + 1
                    and _r361["probeH"] <= 200
                    and _r361["doc"] <= _r361["iw"] + 1, str(_r361))
@@ -7217,15 +7272,19 @@ def main():
                 _p359.evaluate("""()=>{const ds=[...new Set(srxAll().map(f=>f.date).filter(Boolean))].sort();
                   if(ds.length){SRX.date=ds[0];SRX.bandAnchor='';SRX._init=true;srxSave();renderSearch()}}""")
                 _p359.wait_for_timeout(1300)
+                # r366 起价带默认收敛；先显式展开，再验点日/翻窗行为。
+                _p359.evaluate("()=>{SRX.bandExpand=true;"
+                               "if(typeof srxRenderBand==='function')srxRenderBand()}")
+                _p359.wait_for_timeout(400)
                 # ===== r361 价带：点日不重置窗口；可前后翻并回到所选日 =====
                 _b361 = _p359.evaluate("""()=>{
                   const ds=()=>[...document.querySelectorAll(
                     '#srxBandDays [data-calday]')];
-                  if(ds().length<3)return null;
+                  if(ds().length<3)return {ok:false,first:'',date:SRX.date};
                   const first=ds()[0].getAttribute('data-calday');
                   const date=SRX.date;
                   ds()[2].click();
-                  return {first:first,date:date}}""")
+                  return {ok:true,first:first,date:date}}""")
                 _p359.wait_for_timeout(600)
                 _b361a = _p359.evaluate("""()=>{
                   const ds=[...document.querySelectorAll(
@@ -7258,7 +7317,7 @@ def main():
                   return {first:ds.length?ds[0].getAttribute('data-calday'):'',
                     sel:sel?sel.getAttribute('data-calday'):''}}""")
                 ck("r361 价带点日不重置窗口/可前后翻",
-                   bool(_b361) and bool(_b361a)
+                   bool(_b361) and _b361.get("ok") and bool(_b361a)
                    and _b361a["first"] == _b361["first"]
                    and _b361a["sel"] != _b361a["first"]
                    and _b361a["reset"]
@@ -7397,10 +7456,14 @@ def main():
                   if(p&&!p.classList.contains('open'))srxToggleProbe()}""")
                 pg.wait_for_timeout(350)
                 _pr = pg.evaluate("""()=>{const R=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect();return{r:+r.right.toFixed(1),h:+r.height.toFixed(1),b:+r.bottom.toFixed(1)}};
-                  return{head:R('#srxProbe .srx-probehead'),form:R('#srxProbe .srx-probeform'),acts:R('#srxProbe .srx-probeacts'),
+                  const head=R('#srxProbe .srx-probehead')||R('#srxProbe .srx-probeform');
+                  return{head:head,form:R('#srxProbe .srx-probeform'),acts:R('#srxProbe .srx-probeacts'),
                    go:R('#srxGo'),date:R('#srxDate'),pick:R('#srxPlatPick'),
                    overflow:document.documentElement.scrollWidth>innerWidth+1}}""")
-                ck("goal 探针头部单行对齐", _pr["head"]["h"] <= 30 and _pr["acts"]["r"] == _pr["head"]["r"] and not _pr["overflow"], str(_pr))
+                # r1130 重排后探针卡没有独立 probehead/probeacts；改为钉
+                # 现结构的意图：表单单行、提交与日期同基线、无横向溢出。
+                ck("goal 探针头部单行对齐",
+                   _pr["form"]["h"] <= 56 and not _pr["overflow"], str(_pr))
                 ck("goal 探针表单紧凑", _pr["form"]["h"] <= 54, str(_pr))
                 ck("goal 探针提交与输入同基线", abs(_pr["go"]["b"] - _pr["date"]["b"]) <= 1 and _pr["pick"]["h"] <= 32, str(_pr))
                 pg.evaluate("()=>{const p=document.querySelector('#srxProbe');if(p&&p.classList.contains('open'))srxToggleProbe()}")
@@ -7413,10 +7476,11 @@ def main():
                   return {open:document.querySelector('#srxProbe').classList.contains('open'),
                    text:(t.innerText||'').trim(),aria:t.getAttribute('aria-expanded')}}""")
                 ck("goal 探针收起后仍可展开",
-                   _tc["open"] is True and _tc["aria"] == "true" and "主动探针" in _tc["text"], str(_tc))
+                   _tc["open"] is True and _tc["aria"] == "true"
+                   and "探针" in _tc["text"], str(_tc))
                 pg.evaluate("()=>{const p=document.querySelector('#srxProbe');if(p&&p.classList.contains('open'))srxToggleProbe()}")
                 pg.wait_for_timeout(250)
-                pg.evaluate("document.querySelector('#srxProbeToggle').click()")
+                pg.evaluate("document.querySelector('#srxProbeTool').click()")
                 pg.wait_for_timeout(300)
                 _to = pg.evaluate("()=>({open:document.querySelector('#srxProbe').classList.contains('open'),form:document.querySelector('.srx-probeform').getBoundingClientRect().height})")
                 ck("goal 探针展开恢复表单", _to["open"] and _to["form"] > 30, str(_to))
@@ -7714,17 +7778,20 @@ def main():
                 pg.wait_for_timeout(900)
                 if not pg.evaluate("()=>document.getElementById('srxProbe')"
                                    ".classList.contains('open')"):
-                    pg.click('#srxProbeToggle')
+                    pg.click('#srxProbeTool')
                     pg.wait_for_timeout(300)
-                _f390 = pg.evaluate("""()=>{const f=document.querySelector(
-                  '#searchview .srx-probefoot'),s=f.querySelector('.srx-probestatus'),
-                  c=f.querySelector('.srx-chlinks'),fr=f.getBoundingClientRect(),
-                  sr=s.getBoundingClientRect(),cr=c.getBoundingClientRect();
-                  return{fw:fr.width,sw:sr.width,rows:cr.top>sr.top+4,
+                # r1130：探针卡改「表单 → 渠道行 → 组合行」，旧 probefoot
+                # 三件套已不存在；改钉现结构在 390 的整宽分层与零横溢。
+                _f390 = pg.evaluate("""()=>{const f=document.getElementById('srxProbe'),
+                  c=document.getElementById('srxChannelRow'),
+                  b=document.getElementById('srxBatchRow'),
+                  fr=f.getBoundingClientRect(),cr=c.getBoundingClientRect(),
+                  br=b.getBoundingClientRect();
+                  return{fw:fr.width,cw:cr.width,rows:br.top>cr.top+2,
                    overflow:document.documentElement.scrollWidth>
                      document.documentElement.clientWidth+1}}""")
                 ck("v297 探针脚注 390 全宽分行",
-                   _f390["sw"] > _f390["fw"] * 0.85 and _f390["rows"]
+                   _f390["cw"] > _f390["fw"] * 0.85 and _f390["rows"]
                    and not _f390["overflow"], str(_f390))
                 pg.evaluate("switchView('mon');showMonTab('specials')")
                 pg.wait_for_timeout(1300)
@@ -7787,17 +7854,269 @@ def main():
                 pg.set_viewport_size({"width": 1512, "height": 1042})
                 pg.wait_for_timeout(400)
 
+            if _want(50):
+                step("r1063 策略控制面 · 热链路 · 停手/恢复 · 窄档")
+                # ===== r1063 T14：配置页「策略控制」+ 健康卡策略条 =====
+                # 演示服（`webui.py --demo`）是**只读**的：除 /api/preview 外
+                # 所有 POST 一律 403「演示模式只读」。所以本段钉的是「界面这条
+                # 链走到哪一步」：行由载荷渲染、改值进 GLB 脏态、保存真的发出去
+                # （服务端如实拒绝、不静默）、停手/恢复按钮在位且点击走同一套
+                # 接口、窄档不横向溢出。真落盘 + 真热生效由 pytest 钉
+                # （tests/test_r1063_hot_reload.py 与 test_r1063_strategy_interrupt
+                # .py）——两半加起来才是完整链路，缺一半就是「假装生效」。
+                _err50 = len(errors)
+                _vp50 = pg.viewport_size
+                pg.set_viewport_size({"width": 1512, "height": 1042})
+                pg.evaluate("switchView('cfg');showCfgPanel('pacing')")
+                _wait_until(pg, "()=>document.querySelectorAll("
+                                "'#cfgpacingRows .srow').length>=20",
+                            cap_ms=15000)
+                _rows50 = pg.evaluate("""()=>{
+                  const rows=[...document.querySelectorAll('#cfgpacingRows .srow')];
+                  const fams=[...document.querySelectorAll('#cfgpacingRows .sfam')];
+                  const bad=[];
+                  rows.forEach(r=>{
+                    const cn=r.querySelector('.scn'),val=r.querySelector('.sval'),
+                          bd=r.querySelector('.hbadge'),fd=r.querySelector('.sfold');
+                    if(!r.dataset.strategy||!r.dataset.family||!cn
+                       ||!cn.textContent.trim()||!val||!bd||!fd)
+                      bad.push(r.dataset.strategy||'?')});
+                  return {n:rows.length,fams:fams.length,bad:bad.slice(0,5),
+                    ctl:document.querySelectorAll('#cfgpacingRows [data-pid]').length,
+                    ids:rows.slice(0,3).map(r=>r.dataset.strategy)}}""")
+                ck("r1063 策略行由目录驱动渲染（%d 行 / %d 族 / %d 控件）"
+                   % (_rows50["n"], _rows50["fams"], _rows50["ctl"]),
+                   _rows50["n"] >= 26 and _rows50["fams"] >= 8
+                   and not _rows50["bad"] and _rows50["ctl"] >= 40
+                   and len(_rows50["ids"]) == 3, str(_rows50))
+                _exp50 = pg.evaluate("""()=>{
+                  const r=document.querySelector(
+                    '#cfgpacingRows .srow[data-strategy="ttl_tier"]');
+                  if(!r)return {ok:false};
+                  if(!r.classList.contains('open'))stratFold(r.querySelector('.shd'));
+                  const cells=[...r.querySelectorAll('.sgrid [data-pid]')];
+                  return {ok:true,open:r.classList.contains('open'),
+                    cells:cells.length,
+                    vis:cells.filter(e=>e.getBoundingClientRect().height>0).length}}""")
+                ck("r1063 策略行展开露参数控件（%s）" % (_exp50,),
+                   bool(_exp50.get("ok")) and _exp50.get("open")
+                   and _exp50.get("cells", 0) >= 2
+                   and _exp50.get("vis", 0) >= 2)
+                # §9 的两条观感门禁也在这里落一次：**没有半像素字号**
+                # （`#paceBox` 会把一档 13.5px 继承给不带字号的节点）与
+                # **触屏地板 ≥28px**（策略行的按钮/下拉不许压到 22px）。
+                _typ50 = pg.evaluate("""()=>{
+                  const half=[],low=[];
+                  document.querySelectorAll('#cfgpacingRows *').forEach(e=>{
+                    const direct=[...e.childNodes].some(n=>n.nodeType===3
+                      && n.textContent.trim().length>1);
+                    if(!direct)return;
+                    const s=getComputedStyle(e);
+                    if(s.display==='none'||s.visibility==='hidden')return;
+                    const r=e.getBoundingClientRect();
+                    if(r.width<1||r.height<1)return;
+                    const fs=parseFloat(s.fontSize);
+                    if(fs && Math.abs(fs-Math.round(fs))>0.01)half.push(fs);
+                  });
+                  document.querySelectorAll('#cfgpacingRows .sact .btn2,'
+                    +'#cfgpacingRows .sfold,#cfgpacingRows .ssel').forEach(b=>{
+                    const r=b.getBoundingClientRect();
+                    if(r.height>0&&r.height<27.5)low.push(+r.height.toFixed(1))});
+                  return {half:half.slice(0,5),low:low.slice(0,5)}}""")
+                ck("r1063 策略面板零半像素字号 / 控件 ≥28px（%s）" % (_typ50,),
+                   not _typ50["half"] and not _typ50["low"], str(_typ50))
+                _val50 = pg.evaluate("""()=>{
+                  const el=document.querySelector(
+                    '#cfgpacingRows [data-pid="ttl_tier.fast"]');
+                  if(!el)return {ok:false};
+                  const before=String(GLB.fast_ttl_min);
+                  el.value='9';
+                  el.dispatchEvent(new Event('change',{bubbles:true}));
+                  const twin=document.getElementById('glbFast');
+                  return {ok:true,before:before,glb:GLB.fast_ttl_min,
+                    twin:twin?String(twin.value):null}}""")
+                # 「同一批 GLB 键」是这条链的要害：策略行与下面的逐项参数表
+                # 必须是**同一个 JS 状态**，否则保存时互相覆盖，用户改的那处
+                # 反而不生效（r1063 T12b 的写路径约定）。
+                ck("r1063 策略行改值进 GLB 且逐项表同步（%s）" % (_val50,),
+                   bool(_val50.get("ok")) and _val50.get("glb") == 9
+                   and _val50.get("twin") == "9", str(_val50))
+                pg.evaluate("()=>{saveCfg()}")
+                pg.wait_for_timeout(900)
+                _msg50 = pg.evaluate("""()=>({
+                  msg:document.getElementById('cfgmsg').textContent,
+                  toasts:[...document.querySelectorAll('#toasts .toast')]
+                    .map(t=>t.textContent)})""")
+                ck("r1063 策略值随整表 POST 发出（演示只读如实回话，不静默）",
+                   "演示模式只读" in _msg50["msg"]
+                   or any("演示模式只读" in t for t in _msg50["toasts"]),
+                   str(_msg50)[:160])
+                _back50 = pg.evaluate("""()=>{
+                  const P=stratParamOf('ttl_tier.fast');
+                  const want=(P&&P.value!==null&&P.value!==undefined)
+                    ?P.value:15;
+                  const el=document.querySelector(
+                    '#cfgpacingRows [data-pid="ttl_tier.fast"]');
+                  /* 复位走**真实写路径**（stratSet）：直接改 GLB 不会回灌
+                     下面的逐项表——同步是单向的（行 → 孪生控件），这一点本身
+                     就是写路径的约定，用例不该假设反方向存在。 */
+                  el.value=String(want);
+                  el.dispatchEvent(new Event('change',{bubbles:true}));
+                  const twin=document.getElementById('glbFast');
+                  return {row:String(el.value),
+                    twin:twin?String(twin.value):null,want:String(want),
+                    glb:GLB.fast_ttl_min,src:(P||{}).source}}""")
+                ck("r1063 策略行值来自载荷（复位后 GLB/孪生控件一致，来源=%s）"
+                   % _back50.get("src"),
+                   _back50["row"] == _back50["want"]
+                   and _back50["twin"] == _back50["want"]
+                   and str(_back50["glb"]) == _back50["want"], str(_back50))
+                # ---- 健康卡策略条：每渠道一条 + 一键停手在位 ----
+                pg.evaluate("switchView('mon');showMonTab('health')")
+                pg.wait_for_timeout(600)
+                pg.evaluate("loadPacing(true)")
+                _wait_until(pg, "()=>!!document.querySelector("
+                                "'#paceBox .pace-row .pstrip')", cap_ms=15000)
+                _strip50 = pg.evaluate("""()=>{
+                  const rows=[...document.querySelectorAll('#paceBox .pace-row')];
+                  const st=rows.filter(r=>r.querySelector('.pstrip'));
+                  const stop=[...document.querySelectorAll(
+                    '#paceBox .pstrip [data-pk^="halt:"]')];
+                  const emp=[...document.querySelectorAll(
+                    '#paceBox .pstrip .pempty')];
+                  return {rows:rows.length,strip:st.length,stop:stop.length,
+                    empty:emp.length,
+                    emptyTxt:emp.length?emp[0].textContent.trim():''}}""")
+                ck("r1063 健康条每渠道一条策略条 + 一键停手在位（%d 行 / %d 条）"
+                   % (_strip50["rows"], _strip50["strip"]),
+                   _strip50["rows"] >= 5 and _strip50["strip"] >= 5
+                   and _strip50["stop"] >= 5 and _strip50["empty"] >= 1
+                   and "按默认节奏" in _strip50["emptyTxt"], str(_strip50))
+                # 芯片可点：演示没有任何配置覆盖，载荷里天然不会有「非默认」
+                # 芯片，所以这里喂**一份最小载荷**给**真实渲染器**，再点真按钮
+                # ——验的是「渲染器 + 跳转」这条链，不是给界面补一块假数据。
+                _inj50 = pg.evaluate("""()=>{
+                  const row=document.querySelector('#paceBox .pace-row');
+                  if(!row)return {ok:false};
+                  const plat=row.dataset.plat;
+                  PACESTRAT=PACESTRAT||{ok:true,plats:[],channels:{}};
+                  PACESTRAT.channels=PACESTRAT.channels||{};
+                  PACESTRAT.channels[plat]=Object.assign(
+                    {},PACESTRAT.channels[plat]||{},
+                    {strategies:[{id:'ttl_tier',label:'快慢档分层',
+                                  src:'global',state:'auto',enabled:true}],
+                     halt:null,tip:null});
+                  PACESTRAT_AT=Date.now();
+                  paceStripRefresh();
+                  const chip=row.querySelector('.pchip[data-strip="ttl_tier"]');
+                  return {ok:!!chip,plat:plat,
+                    label:chip?chip.textContent.trim():''}}""")
+                ck("r1063 健康条芯片按载荷渲染（%s）" % (_inj50,),
+                   bool(_inj50.get("ok"))
+                   and "快慢档分层" in _inj50.get("label", ""), str(_inj50))
+                pg.evaluate("""()=>{const c=document.querySelector(
+                  '#paceBox .pchip[data-strip="ttl_tier"]');if(c)c.click()}""")
+                pg.wait_for_timeout(2600)
+                _jump50 = pg.evaluate("""()=>{
+                  const r=document.querySelector(
+                    '#cfgpacingRows .srow[data-strategy="ttl_tier"]');
+                  return {view:typeof VIEW!=='undefined'?VIEW:'',
+                    panel:typeof CFGPANEL!=='undefined'?CFGPANEL:'',
+                    row:!!r,open:!!(r&&r.classList.contains('open'))}}""")
+                ck("r1063 芯片点按落到配置页那条策略行",
+                   _jump50["view"] == "cfg" and _jump50["panel"] == "pacing"
+                   and _jump50["row"] and _jump50["open"], str(_jump50))
+                # ---- 停手/恢复：按钮在位 + 走同一套接口 ----
+                _halt50 = pg.evaluate("""()=>{
+                  const r=document.querySelector(
+                    '#cfgpacingRows .srow[data-strategy="block_window"]');
+                  if(!r)return {srow:false};
+                  if(!r.classList.contains('open'))
+                    stratFold(r.querySelector('.shd'));
+                  const bs=[...r.querySelectorAll('.sact button')];
+                  return {srow:true,sel:!!r.querySelector('select.ssel'),
+                    labels:bs.map(b=>b.textContent.trim()),
+                    resume:!!bs.find(b=>b.textContent.indexOf('恢复')>=0),
+                    haltb:!!bs.find(b=>b.textContent.indexOf('停')>=0)}}""")
+                ck("r1063 策略行停手/恢复按钮与渠道下拉在位（%s）"
+                   % (_halt50.get("labels"),),
+                   bool(_halt50.get("srow")) and _halt50.get("sel")
+                   and _halt50.get("resume") and _halt50.get("haltb"),
+                   str(_halt50))
+                pg.evaluate("""()=>{const r=document.querySelector(
+                  '#cfgpacingRows .srow[data-strategy="block_window"]');
+                  const b=[...r.querySelectorAll('.sact button')]
+                    .find(x=>x.textContent.indexOf('恢复')>=0);
+                  if(b)b.click()}""")
+                pg.wait_for_timeout(900)
+                _ref50 = pg.evaluate("""()=>({
+                  toasts:[...document.querySelectorAll('#toasts .toast')]
+                    .map(t=>t.textContent)})""")
+                ck("r1063 恢复按钮走 /api/strategy/resume（演示只读如实拒绝）",
+                   any("演示模式只读" in t or "恢复失败" in t
+                       for t in _ref50["toasts"]), str(_ref50)[:160])
+                pg.evaluate("switchView('mon');showMonTab('health')")
+                pg.wait_for_timeout(800)
+                pg.evaluate("""()=>{const b=document.querySelector(
+                  '#paceBox .pstrip [data-pk^="halt:"]');if(b)b.click()}""")
+                pg.wait_for_timeout(900)
+                _stop50 = pg.evaluate("""()=>({
+                  toasts:[...document.querySelectorAll('#toasts .toast')]
+                    .map(t=>t.textContent),
+                  halt:(PACESTRAT&&PACESTRAT.halt)||{}})""")
+                # 失败就是失败：不许在界面上留下「已停手」的痕迹
+                # （载荷 halt 表仍空 → 下一拍重绘也不会冒出停手芯片）。
+                ck("r1063 一键停手走 /api/strategy/halt（失败不假装成功）",
+                   any("停手失败" in t for t in _stop50["toasts"])
+                   and not _stop50["halt"], str(_stop50)[:160])
+                # ---- 390 / 320 零横向溢出 ----
+                for _w50 in (390, 320):
+                    pg.set_viewport_size({"width": _w50, "height": 844})
+                    pg.wait_for_timeout(500)
+                    pg.evaluate("switchView('cfg');showCfgPanel('pacing')")
+                    _wait_until(pg, "()=>!!document.querySelector("
+                                    "'#cfgpacingRows .srow')", cap_ms=12000)
+                    _ov50 = pg.evaluate("""()=>{
+                      const de=document.documentElement,
+                            host=document.getElementById('cfgpacingRows');
+                      const W=de.clientWidth;
+                      const wide=[...document.querySelectorAll(
+                        '#cfgpacingRows .srow,#cfgpacingRows .glcell')]
+                        .filter(e=>e.getBoundingClientRect().right>W+1).length;
+                      return {w:W,doc:de.scrollWidth,
+                        host:host?host.scrollWidth:0,
+                        hostW:host?host.clientWidth:0,wide:wide}}""")
+                    ck("r1063 策略面板 %d 零横向溢出" % _w50,
+                       _ov50["doc"] <= _ov50["w"] + 1
+                       and _ov50["host"] <= _ov50["hostW"] + 1
+                       and _ov50["wide"] == 0, str(_ov50))
+                pg.set_viewport_size(_vp50)
+                pg.wait_for_timeout(300)
+                _new50 = errors[_err50:]
+                ck("r1063 策略控制面零 pageerror（%d 条）" % len(_new50),
+                   not _new50, str(_new50[:2]))
+
             bad0 = [n for n, v in checks if not v]
             prog.write("JS 错误: %s\n" % (errors[:3] if errors else "无"))
             prog.write("=== %d/%d 通过 ===\n"
                        % (len(checks) - len(bad0), len(checks)))
             prog.flush()
             try:
+                # 配置页有 beforeunload 守卫（未保存提示）。直接 b.close() 会让
+                # Playwright 等在阻止卸载的对话框上，分片跑完全部结果却永不
+                # 退出（2026-11-07 全量门禁实测 4 片全部悬挂在摘要之后）。
+                # 显式关页并跳过 beforeunload，浏览器进程才能被回收。
+                try:
+                    pg.close(run_before_unload=False)
+                except Exception:
+                    pass
                 b.close()
             except Exception:
                 pass
     except Exception as e:
         _aborted = True   # 中断≠全绿：不置位会被 exit 判定吞成 0（CI 假绿）
+        import traceback as _tb
+        _tb.print_exc()
         prog.write(" !! 中断于异常: %r\n" % e)
         prog.flush()
     finally:

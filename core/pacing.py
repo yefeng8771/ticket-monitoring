@@ -18,6 +18,7 @@ import math
 import re
 import threading
 import time
+import warnings
 
 from .models import CAL_PATH_FAMILY
 from collections import deque
@@ -27,6 +28,23 @@ from urllib.parse import urlparse
 # 浏览器渠道与 App 渠道都来自零依赖的 core/channels.py（曾在此另写一份，
 # 加渠道必然漏改；r813 起直接用别名，不再手抄）。
 from core.channels import APP_CHANNELS, BROWSER_CHANNELS, path_cn  # noqa: E402
+
+# 策略参数的**唯一求值入口**（r1063 T7）。链路闸门必须在这里现读，否则
+# `crawler.strategy_overrides` 里的 `渠道/维度/链路` 覆盖配了不生效——
+# 那是本仓库列为头号缺陷的一类问题。模块级导入不成环：strategy_params
+# 只依赖 channels 与 strategy_contract，后者不反向依赖 pacing。
+from core import strategy_params as sp  # noqa: E402
+
+# 策略开关（`<sid>.enabled`）的读法在参数层（`sp.switch_on`，r1063 fix-wave 2）：
+# 读点跨模块（节流/熔断在这里，统一闸门在两个采集器基类），私有名 import 会
+# 把「私有」当装饰。这里只留 import，读法本身不在这里再抄一份。
+from core.strategy_params import switch_on  # noqa: E402
+
+# 布尔词表只有**一份**（参数层 `switch_on()` 与本文件的 `_path_enabled()` 共用
+# 同一批词）：绑别名，不是第二份抄本——抄两份迟早分叉，而 r519 那三类「界面
+# 显示已关闭、后端照旧执行」正是从「两处各自理解 false」开始的。
+_TRUE_WORDS = sp.TRUE_WORDS
+_FALSE_WORDS = sp.FALSE_WORDS
 
 PLATFORMS = BROWSER_CHANNELS
 
@@ -40,9 +58,44 @@ _IP_MARKS = ("风控", "限流", "179991", "ip封", "ip 封")
 _CAPTCHA_MARKS = ("验证码", "滑块", "人机验证", "访问验证", "安全验证",
                   "challenge", "captcha")
 _LOGIN_MARKS = ("请登录", "未登录", "需登录", "登录失效", "会话失效")
+# **硬风控标记**（2026-11-06）：这些不是"解个验证码就过去"的挑战，而是
+# 服务端对该设备/账号的限制。实测：携程 50003「环境存在风险」、飞猪
+# 「账号风险检测 / 需实名核验」、阿里 `ContainerActivity` 白屏。
+# 对它们按小时重试**本身就在加重风险分**，所以单独给长时间冷却。
+_HARD_BLOCK_MARKS = ("安全容器", "限制登录", "已被限制", "实名核验",
+                     "账号风险", "行为异常", "环境存在风险", "baxia",
+                     "ContainerActivity", "无线安全")
 # 软拒：边缘节点/会话层没有正面拒绝，但也没给业务响应。它不是"真无票"，
 # 也不该按 IP 限流熔断——正确动作是下一轮先养会话再查。
 _SOFT_MARKS = ("软拒", "444", "202 空", "202空")
+
+def round_backoff_minutes(interval_minutes, trips=0, blocked=0,
+                           cap_min=240):
+    """本轮受阻后，下一轮该**额外延后**多少分钟（纯函数）。
+
+    为什么需要（2026-11-06）：`interval_minutes` 是固定节奏（默认 30 分钟），
+    不管上一轮是被风控拦了 5 家还是全绿，下一轮照常半小时后再来。
+    环境已经不友好时，这种"照常节奏"正是风险继续累积的来源。
+
+    规则（可预测、有界）：
+      * 本轮完全顺利（trips=0 且 blocked=0）→ 0，立刻回到正常节奏；
+      * 有 1–2 次受阻 → 延后一个正常间隔（等于把节奏减半）；
+      * ≥3 次受阻 → 延后两个正常间隔；
+      * 统一封顶 `cap_min`（默认 240 分钟），不让一次坏运气把监控冻住。
+
+    `trips` 是本轮熔断次数，`blocked` 是处于硬风控/限流冷却的渠道数。
+    纯函数：不读时钟、不碰全局，调用方决定何时用它。
+    """
+    try:
+        iv = max(0, int(interval_minutes or 0))
+        n = max(0, int(trips or 0)) + max(0, int(blocked or 0))
+    except (TypeError, ValueError):
+        return 0
+    if n <= 0 or iv <= 0:
+        return 0
+    extra = iv if n < 3 else iv * 2
+    return int(min(max(0, int(cap_min or 0) or 240), extra))
+
 
 DEFAULTS = {
     "scan_quiet_start": "",
@@ -55,6 +108,9 @@ DEFAULTS = {
     "breaker_base_s": 300,
     "breaker_cap_s": 3600,
     "login_cooldown_s": 900,
+    # 硬风控（安全容器/限制登录/实名核验）的冷却。默认 6 小时：
+    # 这类拦截按小时重试会加重风险分，宁可停久一点等它自然衰减。
+    "challenge_cooldown_s": 21600,
     "min_gap_s": 0,
     "per_minute": 0,
     "warmup_enabled": True,
@@ -108,6 +164,46 @@ def _num(v, default, lo, hi, cast=int):
     return max(lo, min(hi, n))
 
 
+# 策略开关（`<sid>.enabled`）的**读法本身**在参数层：`sp.switch_on(pid,
+# *, plat=…, dim=…, path=…)`（r1063 fix-wave 2 从这里的 `_strat_on()` 搬过去）。
+# 为什么搬：消费方跨模块（本文件的节奏/限速/熔断，与两个采集器基类的统一
+# 闸门），`from core.pacing import _strat_on` 这种私有名 import 是把「私有」
+# 当装饰；而契约的可开启轴认的正是「pid 交给一个能走到 `resolve(` 的函数」。
+# 三条边界没有变，只是跟着函数搬走了：默认 True / 读不懂 fail-open 留痕 /
+# 每次决策现读、绝不缓存成实例属性。
+#
+# 这一族读点仍在**决策点**上（节奏/限速/熔断/静默/并发）；另一族在
+# `core/policy.py`（倍率/停手/风险姿态）。审计逐条核 pid 字面量。
+
+# 同一个坏值只喊一次：链路闸门是每请求必经的路径，逐次告警会刷爆日志。
+# `switch_on()` 搬走时带走了它自己的去重集合（`strategy_params._SWITCH_WARNED`），
+# 这一份留给 `_path_enabled()`：它的告警词不同（「已按启用处理，要停用请写
+# false」），合并成一条反而分不清是哪个键写错了。
+_WARNED: set = set()
+
+
+def _warn_once(tag, msg):
+    """读不懂的配置值留痕（同一个值只喊一次）。
+
+    为什么不能只是「按启用处理」了事：拼错的 `flase` 会让用户以为通路
+    已经停了，而它照常跑——「配了不生效」最难查的一类。
+    """
+    key = repr(tag)
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    warnings.warn(msg, RuntimeWarning, stacklevel=3)
+
+
+def _degraded_snapshot() -> dict:
+    """能力降级读数（r1063 T60）。账本坏了就当没有，不影响排期。"""
+    try:
+        from core import degraded as _dg
+        return _dg.snapshot()
+    except Exception:
+        return {}
+
+
 def parse_pacing(cfg):
     """把 config.yaml 的 schedule / crawler.rate / crawler.breaker 归一成
     扁平字典；非法值回默认并钳位（宁缺勿错：坏配置不该让监控整轮停摆）。"""
@@ -118,12 +214,16 @@ def parse_pacing(cfg):
     brk = crw.get("breaker") or {}
 
     out = dict(DEFAULTS)
+    # 静默窗策略关掉 = 不静默（`quiet_window.enabled=False`）。关掉时把起止清空：
+    # `quiet_now()`/`in_window()` 见到空串就当「不在窗内」，于是整条链路（含
+    # 调度重排 `seconds_until_quiet_end`）一次都不用改判据——一处开关收口。
+    _quiet_on = switch_on("quiet_window.enabled")
     out["scan_quiet_start"] = (
         str(sc.get("scan_quiet_start") or "").strip()
-        if parse_hhmm(sc.get("scan_quiet_start")) is not None else "")
+        if _quiet_on and parse_hhmm(sc.get("scan_quiet_start")) is not None else "")
     out["scan_quiet_end"] = (
         str(sc.get("scan_quiet_end") or "").strip()
-        if parse_hhmm(sc.get("scan_quiet_end")) is not None else "")
+        if _quiet_on and parse_hhmm(sc.get("scan_quiet_end")) is not None else "")
     out["fast_ttl_min"] = _num(sc.get("fast_ttl_min"),
                                DEFAULTS["fast_ttl_min"], 5, 1440)
     out["slow_ttl_min"] = _num(sc.get("slow_ttl_min"),
@@ -132,8 +232,12 @@ def parse_pacing(cfg):
         out["slow_ttl_min"] = out["fast_ttl_min"]
     out["near_ratio"] = _num(sc.get("near_ratio"),
                              DEFAULTS["near_ratio"], 0.0, 1.0, float)
-    out["stagger_seconds"] = _num(sc.get("stagger_seconds"),
-                                  DEFAULTS["stagger_seconds"], 0, 120)
+    out["stagger_seconds"] = (
+        _num(sc.get("stagger_seconds"), DEFAULTS["stagger_seconds"], 0, 120)
+        # 调度时钟策略关掉 = **不错峰起跑**（整点齐发在这条开关下是用户的明示
+        # 选择）。周期与随机扰动不在这条开关的管辖内：它们由调度层读配置，
+        # 关掉「错峰」不会顺手把定时也停掉——那是另一条策略。
+        if switch_on("schedule_clock.enabled") else 0)
     out["breaker_enabled"] = _flag(
         brk.get("enabled"), DEFAULTS["breaker_enabled"])
     out["breaker_base_s"] = _num(brk.get("base_s"),
@@ -144,6 +248,9 @@ def parse_pacing(cfg):
         out["breaker_cap_s"] = out["breaker_base_s"]
     out["login_cooldown_s"] = _num(brk.get("login_cooldown_s"),
                                    DEFAULTS["login_cooldown_s"], 0, 86400)
+    out["challenge_cooldown_s"] = _num(brk.get("challenge_cooldown_s"),
+                                       DEFAULTS["challenge_cooldown_s"],
+                                       0, 604800)
     out["min_gap_s"] = _num(rate.get("min_gap_s"),
                             DEFAULTS["min_gap_s"], 0, 300, float)
     if out["min_gap_s"] == int(out["min_gap_s"]):
@@ -202,6 +309,11 @@ def parse_pacing(cfg):
         out["max_concurrency"] = max(0, min(5, int(
             crw.get("max_concurrency") or 0)))
     except (TypeError, ValueError):
+        out["max_concurrency"] = 0
+    # 并发策略关掉 = **不限并发**（0 的语义就是「跟随渠道数」，`main.py` 按这个
+    # 值分批开浏览器）。为什么读点在这：并发上限的那一份值就是在这里成型的，
+    # 关掉开关必须让**下游拿到的数**变，而不是在别处再判一次（两处判就会打架）。
+    if not switch_on("concurrency.enabled"):
         out["max_concurrency"] = 0
     out["near_days"] = _num(sc.get("near_days"),
                             DEFAULTS["near_days"], 0, 30)
@@ -404,6 +516,58 @@ def classify_evidence(statuses, note="") -> str:
     return "status=%s" % (",".join(sorted(set(sts))) or "none")
 
 
+def _book_key(plat, path=""):
+    """限速/熔断的记账键：不带链路 → `渠道`；带链路 → `渠道|链路`。
+
+    为什么是字符串而不是元组：既有快照、日志、界面都把键当字符串用
+    （`snapshot()["channels"][plat]`、`paced_by[plat]`），复合键必须能一眼
+    拆开；拆的时候**只切一刀**（`split("|", 1)`），因为链路名自己可能带
+    `/`（`core/channels.py` 里有真实通路 `H5/API`）。
+
+    缺省 `path=""` 时返回的就是渠道本身——所以既有的渠道级调用
+    （`main.py` 的 `record(platform)` / `wait_hint(platform)`）行为一字未变。
+
+    分隔符用 `|` 而不是 `/`：`/` 在通路名里真的出现过（`H5/API`），而
+    `core/channels.py::PATH_CN` 的通路名里没有 `|`，所以「只切一刀」是安全的。
+    """
+    p = str(plat or "")
+    q = str(path or "")
+    return p if not q else "%s|%s" % (p, q)
+
+
+def _book_base(key):
+    """复合键 → 渠道段（快照按渠道聚合时用）。"""
+    return str(key or "").split("|", 1)[0]
+
+
+def _bucket_keys(plat, path="", channel=True):
+    """一次外发要记进哪些桶：默认渠道桶**总是**记；带链路时再记链路桶。
+
+    渠道桶是「这家站点看到的总请求量」的账，链路桶是「这条路自己发了几次」
+    的账。只记后者会把「渠道每分钟 N 次」放大成「每条链路 N 次」。
+
+    `channel=False`（r1063 T8）时**只写链路桶**：渠道桶的账由
+    `main.py` 为每条查询记过一次（`pac.record(c.name)`），采集器在链路
+    闸门里再记一次就是**同一个请求记两遍**——`per_minute` 当场减半、
+    `min_gap` 当场翻倍，两个数字都还是"合法值"，查起来只能靠猜。
+    默认 `True` 保持既有调用方逐位不变。
+    """
+    p = str(plat or "")
+    q = str(path or "")
+    if not q:
+        return (p,) if channel else ()
+    return (p, _book_key(p, q)) if channel else (_book_key(p, q),)
+
+
+# 链路被策略停用的说明前缀。T8/T9 的 `path_gate` 拿 `allow=False` 的
+# `why` 直接写进 `path_note(path, "paced", detail=…)`：**禁用是"没发"，
+# 不是"失败"**——记成 failed 会让一条被停用的链路把整家渠道熔断。
+PATH_DISABLED = "链路被策略停用"
+# 人工停手（r1063 T18）的说明前缀。与 `PATH_DISABLED` 分开：一个是**配置**
+# 决定的（改参数就能恢复），一个是**人**按下的（到点自动恢复，或点恢复）。
+PATH_HALTED = "链路被人工停手"
+
+
 class ChannelBreaker:
     """渠道级熔断：指数退避 + 封顶，成功即复位。
 
@@ -411,16 +575,21 @@ class ChannelBreaker:
       ip / captcha → 阶梯退避（base·2^(n-1)，封顶 cap），累积 strikes
       login        → 固定冷却（默认 15min），不累积 strikes，打 needs_login
       busy         → 0 秒（自家锁冲突，本轮让位即可）
+
+    记账键（r1063 T7）：不带 `path` 时键就是渠道（旧行为）；带 `path` 时是
+    `渠道|链路`，于是「PC 这条路被风控」不会把同渠道的 H5 一起停掉。
+    `snapshot()` 仍**按渠道聚合**输出——界面与既有门禁只认 `[plat]` 那一层。
     """
 
     def __init__(self, base_s=300, cap_s=3600, enabled=True,
-                 login_cooldown_s=900):
+                 login_cooldown_s=900, challenge_cooldown_s=21600):
         self._lock = threading.Lock()
         self._st = {}
-        self.configure(base_s, cap_s, enabled, login_cooldown_s)
+        self.configure(base_s, cap_s, enabled, login_cooldown_s,
+                       challenge_cooldown_s)
 
     def configure(self, base_s=None, cap_s=None, enabled=None,
-                  login_cooldown_s=None):
+                  login_cooldown_s=None, challenge_cooldown_s=None):
         with self._lock:
             if base_s is not None:
                 self.base_s = max(30, int(base_s))
@@ -432,39 +601,136 @@ class ChannelBreaker:
                 self.enabled = bool(enabled)
             if login_cooldown_s is not None:
                 self.login_cooldown_s = max(0, int(login_cooldown_s))
+            if challenge_cooldown_s is not None:
+                self.challenge_cooldown_s = max(0, int(challenge_cooldown_s))
 
-    def mark_cause(self, plat, kind):
+    def mark_cause(self, plat, kind, *, path=""):
         """只记「这轮被什么拦的」，不改变任何节流动件（r626）。
 
         用于「功能已被用户关掉」的场景：事实要留痕，但不该再要求一个
         不会执行的动作（如 needs_warmup）。
+
+        `path=""` 的语义与 `reset`/`note_ok` 一致：**这一渠道的全部层级**
+        （`_targets`）——归因是人对整家的观察；给了 `path` 才只落那一层。
         """
         with self._lock:
-            st = self._rec(str(plat))
-            st["reason"] = str(kind or "")
+            for key in self._targets(plat, path):
+                st = self._rec(key)
+                st["reason"] = str(kind or "")
 
     def _rec(self, plat):
         return self._st.setdefault(str(plat), {
             "strikes": 0, "until": 0.0, "reason": "", "needs_login": False,
             "needs_warmup": False, "ok_streak": 0})
 
-    def allow(self, plat, now=None):
+    @staticmethod
+    def _keys(plat, path=""):
+        """**读取**一次判定要查的键：不带链路只查渠道；带链路**两级都查**。
+
+        渠道级冷却是一次「整家被风控」的结论，对它下面的每条链路都成立；
+        链路级冷却只停那一条。少查渠道级会让停手信号在链路粒度的调用里
+        凭空消失（T10 验收的就是这条）。
+        """
+        p = str(plat or "")
+        q = str(path or "")
+        return (p,) if not q else (p, _book_key(p, q))
+
+    def _targets(self, plat, path=""):
+        """**写入/清除**要落到的键。
+
+        `path=""` 的语义统一为**「这一渠道的全部层级」**：渠道级键 + 该渠道
+        下所有 `plat|链路` 键（复核 2026-11-06 裁决）。因为不带 path 的调用方
+        （`/api/pacing/reset`、`note_ok`、`note_warmup_ok`、`mark_cause`）都是
+        「人对整家渠道的动作」：只清 `plat` 会让链路级冷却与标记**永远清不掉**
+        ——面板显示「冷却中」，操作员点「解除」台账写成功、行马上又变回冷却；
+        或者一次链路级软拒把整家渠道钉在「每轮强制预热」上。
+
+        带 `path` 时**只**落到那一层（不动渠道层）：调用方点名了哪条链路，
+        就不该顺手免掉整家渠道的冷却。今天没有 `plat|*` 键，所以单层行为逐位不变。
+        """
+        p = str(plat or "")
+        q = str(path or "")
+        if q:
+            return (_book_key(p, q),)
+        keys = [p]
+        for k in self._st:
+            k = str(k)
+            if k.startswith(p + "|"):
+                keys.append(k)
+        return tuple(keys)
+
+    def _enabled_for(self, plat, path="", dim=""):
+        """总开关 `breaker_switch.enabled` 在**这个作用域**生效与否。
+
+        读点在判定那一刻、按 `渠道[/维度][/链路]` 求值，而不是只认
+        `self.enabled`：后者是 `parse_pacing` 从 `crawler.breaker.enabled`
+        算出来的**全局层**旧值（`configure()` 装进来的），它永远看不见
+        `crawler.strategy_overrides` 里的渠道/维度/链路覆盖。只读它，界面
+        会按 `source=channel/dimension` 渲染成「已停用（本层覆盖）」而熔断
+        照旧——正是本项目列为头号缺陷的「配了不生效」（复核 2026-11-06
+        Critical）。
+
+        `dim`（r1063 fix-wave 2）：`渠道/维度` 层要命中它才查得到；只递
+        `path` 不给 `dim` 时链路层同样命不中（键的第二段永远是维度）。缺省
+        空串 = 只看渠道层，与迁移前逐位相同。
+
+        `fallback=self.enabled` 保证**没有覆盖**时逐位等于旧行为（含只给
+        `crawler:` 段构造实例的单测/嵌入方）。
+        """
+        return switch_on("breaker_switch.enabled", plat=plat, dim=dim,
+                         path=path, fallback=self.enabled)
+
+    def allow(self, plat, now=None, *, path="", dim=""):
+        """`dim` 只影响**开关求值**（`_enabled_for`），不影响记账键：
+        熔断的键仍是 `渠道` / `渠道|链路`（`_keys`），维度不单独建键——
+        同一维度的冷却本来就是同一家渠道的结论，多一层键会让「解除」点不完。
+        """
         now = time.time() if now is None else now
         with self._lock:
-            if not self.enabled:
+            if not self._enabled_for(plat, path, dim):
                 return True, 0
-            st = self._rec(plat)
-            if st["until"] > now:
-                return False, int(round(st["until"] - now))
+            wait = 0
+            for key in self._keys(plat, path):
+                until = float((self._st.get(key) or {}).get("until") or 0)
+                if until > now:
+                    wait = max(wait, int(round(until - now)))
+            if wait > 0:
+                return False, wait
             return True, 0
 
-    def trip(self, plat, kind, now=None, retry_after=0):
+    def trip(self, plat, kind, now=None, retry_after=0, note="", *, path="",
+             dim=""):
+        """记一次熔断。`path` 是 **keyword-only**：`note` 与 `path` 都是字符串，
+        位置调用会把「PC」绑成 note（复核 2026-11-06 指出）。`dim` 同样是
+        keyword-only，只参与**开关求值**（熔断键仍是 `渠道[/链路]`）：`渠道/
+        维度` 层写的 `breaker_switch.enabled: false` 要在这一层被看到，否则
+        界面上「这个维度已停熔断」只是文案。"""
         now = time.time() if now is None else now
         kind = str(kind or "ip")
         if kind == "busy":
             return 0
         with self._lock:
-            st = self._rec(plat)
+            st = self._rec(_book_key(plat, path))
+            # **硬风控：单独给长时间冷却**（2026-11-06）。
+            # 安全容器 / 限制登录 / 需实名核验这类拦截不是"解个验证码"能过的，
+            # 按 1 小时阶梯重试只会持续加重风险分。命中证据就停 challenge_cooldown_s，
+            # 且**不计 strikes**（这不是普通限流，累积次数没有意义）。
+            #
+            # r1063 T12c：这条长冷却受**两条策略开关**管辖，缺省即今天的行为——
+            # `challenge_cooldown.enabled` 关掉 = 退回普通阶梯（用户自担风险）；
+            # `captcha_solve.enabled` 关掉 = 程序不再"解个验证码就继续"，
+            # 验证码一律按硬风控长冷却处理（不识别就别硬试，越试分越高）。
+            _hard_cd = (self.challenge_cooldown_s
+                        if switch_on("challenge_cooldown.enabled", plat=plat,
+                                     dim=dim, path=path) else 0)
+            _solve_on = switch_on("captcha_solve.enabled", plat=plat, dim=dim,
+                                  path=path)
+            if kind == "captcha" and _hard_cd > 0:
+                _note = str(note or "")
+                if not _solve_on or any(k in _note for k in _HARD_BLOCK_MARKS):
+                    st["reason"] = "challenge"
+                    st["until"] = max(st["until"], now + _hard_cd)
+                    return _hard_cd
             if kind == "soft":
                 # 软拒只要求下一轮先预热，不冷却、不计 strikes：
                 # 用整家熔断去惩罚"会话没养好"会错杀已能出数的渠道。
@@ -472,14 +738,30 @@ class ChannelBreaker:
                 st["reason"] = "soft"
                 return 0
             if kind == "login":
+                # `login_cooldown.enabled` 关掉 = 登录墙后不再固定冷却（重登入口
+                # 仍在，`needs_login` 照旧置位：关的是**等待**，不是「该重登」）。
+                _lc = (self.login_cooldown_s
+                       if switch_on("login_cooldown.enabled", plat=plat,
+                                    dim=dim, path=path) else 0)
                 st["needs_login"] = True
                 st["reason"] = "login"
-                st["until"] = max(st["until"], now + self.login_cooldown_s)
-                return self.login_cooldown_s
-            if not self.enabled:
+                st["until"] = max(st["until"], now + _lc)
+                return _lc
+            if not self._enabled_for(plat, path, dim):
                 return 0
+            # `slider_guard.enabled` 关掉 = 滑块/验证码失败**不再逐次拉黑**：
+            # 失败照旧留证、照旧给一档基础冷却，但清除 strikes → 冷却不再
+            # 2^n 升级（一个手抖连点不会把整家锁到封顶）。
+            if kind == "captcha" and not switch_on(
+                    "slider_guard.enabled", plat=plat, dim=dim, path=path):
+                st["strikes"] = 0
             st["strikes"] = min(16, st["strikes"] + 1)
-            cd = min(self.cap_s, self.base_s * (2 ** (st["strikes"] - 1)))
+            # `breaker_ladder.enabled` 关掉 = **不按阶梯升级**（恒 base_s）。
+            # 封顶仍在：它属于同一条策略的参数，关掉开关不等于允许无限长冷却。
+            if switch_on("breaker_ladder.enabled", plat=plat, dim=dim, path=path):
+                cd = min(self.cap_s, self.base_s * (2 ** (st["strikes"] - 1)))
+            else:
+                cd = min(self.cap_s, self.base_s)
             try:
                 ra = int(retry_after or 0)
             except (TypeError, ValueError):
@@ -492,82 +774,145 @@ class ChannelBreaker:
             st["reason"] = kind
             return cd
 
-    def note_ok(self, plat, need=2):
+    def note_ok(self, plat, need=2, *, path="", dim=""):
         """连续成功 need 次才清 strikes；软拒标记单独清零。
 
         - strikes/冷却：连续成功才复位，避免抖动渠道反复横跳；
         - needs_warmup：成功出数本身就是"会话已养熟"的最强证据，
           立即清（否则面板会一直提示"软拒待预热"）。
+
+        不带 `path` 时**对所有层级都记一次成功**（见 `_targets`）：否则一次
+        链路级软拒写下的 `needs_warmup` 没有任何代码会清，`_merge` 再把它抬成
+        渠道级——整家渠道就被钉在「每轮强制预热」上（`r626` 要杀的那种粘滞标记）。
+
+        **`path` 给的是哪条链路成功（r1063 fix-wave 1 把范围写死）**：
+        `path=""` 的语义是「这一渠道的**全部层级**」（`_targets`）；给了
+        `path` 时只清 **渠道层 + 这一条链路层**（`_keys` 的读集），**不动别的
+        链路层**——`H5` 的实时冷却不许被 `PC` 的一次成功顺手免掉（复核
+        2026-11-06 第 3 条）。渠道层照清是对的：一次成功出数就证明整家还活着，
+        软拒标记留着就会变成上面那种粘滞标记；而读取侧（`_keys`）本来就把
+        渠道级冷却算到每条链路上，整家冷却期间根本发不出成功请求，所以清渠道
+        层不会放宽任何真实拦截。
+
+        `dim`（r1063 fix-wave 2）**在这一层不参与任何决策**：成功复位不读
+        参数层的开关，记账键也只有 `渠道` / `渠道|链路`。它被接受是为了让
+        「决策家族」（`allow` / `trip` / `observe` / `note_ok`）签名一致——
+        调用方（`main.py` 的落地归因）手上就一个 `dim`，不该为了这一句去
+        背哪个方法吃它、哪个不吃。传进来不会改变任何行为，也不会被拿去
+        改键布局。
         """
         with self._lock:
-            st = self._rec(plat)
-            st["ok_streak"] = int(st.get("ok_streak") or 0) + 1
-            st["needs_warmup"] = False
-            if st.get("reason") == "soft":
-                st["reason"] = ""
-            if st["ok_streak"] >= max(1, int(need or 2)):
-                st["strikes"] = 0
-                st["until"] = 0.0
-                st["reason"] = ""
-                st["needs_login"] = False
-            return st["ok_streak"]
+            streak = 0
+            keys = self._keys(plat, path) if str(path or "") \
+                else self._targets(plat, path)
+            for key in keys:
+                st = self._rec(key)
+                st["ok_streak"] = int(st.get("ok_streak") or 0) + 1
+                st["needs_warmup"] = False
+                if st.get("reason") == "soft":
+                    st["reason"] = ""
+                if st["ok_streak"] >= max(1, int(need or 2)):
+                    st["strikes"] = 0
+                    st["until"] = 0.0
+                    st["reason"] = ""
+                    st["needs_login"] = False
+                streak = max(streak, st["ok_streak"])
+            return streak
 
-    def note_warmup_ok(self, plat):
+    def note_warmup_ok(self, plat, *, path=""):
         """预热真的拿到风控 cookie 才清软拒标记。
 
         只访问首页不算数——没下发风控 cookie 的预热，深链仍会被 444。
+        不带 `path` 时清该渠道**所有层级**的标记（理由见 `_targets`）；带
+        `path` 时范围与 `note_ok` 同一条（渠道层 + 这一条链路层），别的链路的
+        标记不碰。
         """
         with self._lock:
-            st = self._rec(plat)
-            st["needs_warmup"] = False
-            if st["reason"] == "soft":
-                st["reason"] = ""
+            keys = self._keys(plat, path) if str(path or "") \
+                else self._targets(plat, path)
+            for key in keys:
+                st = self._rec(key)
+                st["needs_warmup"] = False
+                if st["reason"] == "soft":
+                    st["reason"] = ""
 
-    def reset(self, plat):
+    def reset(self, plat, *, path=""):
+        """复位（成功即复位、人工「解除」也走这里）。
+
+        不带 `path` 时清**这一渠道的全部层级**（渠道级 + 所有 `plat|链路`）：
+        面板给操作员的只有渠道级「解除」按钮，只清 `plat` 会让链路级冷却
+        点完立刻回红（复核 2026-11-06 Important 1）。带 `path` 时只清那一层
+        ——调用方点名了哪条链路，就不该顺手免掉整家渠道的冷却。
+        """
         with self._lock:
-            self._st[str(plat)] = {
-                "strikes": 0, "until": 0.0, "reason": "",
-                "needs_login": False, "needs_warmup": False,
-                "ok_streak": 0}
+            for key in self._targets(plat, path):
+                self._st[key] = {
+                    "strikes": 0, "until": 0.0, "reason": "",
+                    "needs_login": False, "needs_warmup": False,
+                    "ok_streak": 0}
+
+    @staticmethod
+    def _row(st, now):
+        until = float((st or {}).get("until") or 0)
+        return {
+            "state": "cooldown" if until > now else "ok",
+            "remain_s": max(0, int(round(until - now))),
+            "strikes": int((st or {}).get("strikes") or 0),
+            "reason": str((st or {}).get("reason") or ""),
+            "needs_login": bool((st or {}).get("needs_login")),
+            "needs_warmup": bool((st or {}).get("needs_warmup")),
+            "ok_streak": int((st or {}).get("ok_streak") or 0),
+        }
+
+    @staticmethod
+    def _merge(rows):
+        """多条链路 → 一条渠道视图（快照兼容层）。
+
+        主行取「冷却最长」的那条（`reason` 跟着它，否则界面会显示一个早就
+        到期了的原因）；`strikes` 取最大、`needs_*` 取或、`ok_streak` 取最小
+        ——三个都朝「更保守」的方向合，避免几条链路里最差的那条被掩盖。
+
+        刻意**不**把 `渠道|链路` 的键漏给调用方：`snapshot()["channels"][plat]`
+        的形状是界面与既有门禁的读法，多一层键就是一次静默破坏。
+        """
+        if not rows:
+            return None
+        dom = max(rows, key=lambda r: (r["remain_s"], r["strikes"]))
+        out = dict(dom)
+        out["state"] = ("cooldown" if any(r["state"] == "cooldown"
+                                          for r in rows) else "ok")
+        out["remain_s"] = max(r["remain_s"] for r in rows)
+        out["strikes"] = max(r["strikes"] for r in rows)
+        out["needs_login"] = any(r["needs_login"] for r in rows)
+        out["needs_warmup"] = any(r["needs_warmup"] for r in rows)
+        out["ok_streak"] = min(r["ok_streak"] for r in rows)
+        return out
 
     def snapshot(self, now=None):
         now = time.time() if now is None else now
-        out = {}
+        grouped = {}
         with self._lock:
             for p in PLATFORMS:
-                st = self._st.get(p) or {}
-                until = float(st.get("until") or 0)
-                out[p] = {
-                    "state": "cooldown" if until > now else "ok",
-                    "remain_s": max(0, int(round(until - now))),
-                    "strikes": int(st.get("strikes") or 0),
-                    "reason": str(st.get("reason") or ""),
-                    "needs_login": bool(st.get("needs_login")),
-                    "needs_warmup": bool(st.get("needs_warmup")),
-                    "ok_streak": int(st.get("ok_streak") or 0),
-                }
-            for p in self._st:
-                if p in out:
-                    continue
-                st = self._st[p]
-                until = float(st.get("until") or 0)
-                out[p] = {
-                    "state": "cooldown" if until > now else "ok",
-                    "remain_s": max(0, int(round(until - now))),
-                    "strikes": int(st.get("strikes") or 0),
-                    "reason": str(st.get("reason") or ""),
-                    "needs_login": bool(st.get("needs_login")),
-                    "needs_warmup": bool(st.get("needs_warmup")),
-                    "ok_streak": int(st.get("ok_streak") or 0),
-                }
+                grouped.setdefault(p, [])
+            for key, st in self._st.items():
+                grouped.setdefault(_book_base(key), []).append(
+                    self._row(st, now))
+        out = {}
+        for p, rows in grouped.items():
+            out[p] = self._merge(rows) or self._row({}, now)
         return out
 
 
 class TokenBucket:
-    """渠道级请求预算：最小间隔 + 每分钟上限。
+    """请求预算：最小间隔 + 每分钟上限，按 `(渠道[, 链路])` 记账。
 
     `wait_hint` 只算不睡。分钟窗口是滑动的（deque），因为站点的限流
     窗口几乎都不是整分钟对齐的，固定窗口会放过 2 倍突发。
+
+    记账键（r1063 T7）：不带 `path` 时键就是渠道（**与旧行为一致**，
+    `main.py` 的渠道级调用一行都不用改）；带 `path` 时是 `渠道|链路`，
+    于是「PC 刚发过」不会让同渠道的 H5 跟着白等。`snapshot()` 仍按渠道
+    聚合输出（见 `_book_base`）。
     """
 
     def __init__(self, min_gap_s=0, per_minute=0):
@@ -583,43 +928,88 @@ class TokenBucket:
             if per_minute is not None:
                 self.per_minute = max(0, int(per_minute))
 
-    def wait_hint(self, plat, now=None):
+    def wait_hint(self, plat, now=None, *, path="", min_gap_s=None,
+                  per_minute=None):
+        """还要等几秒才轮得到这条链路。
+
+        `min_gap_s` / `per_minute` 给定时**按这两个数算**（缺省=用本桶的
+        全局值）：链路级覆盖要从这里进来，否则 `tongcheng/intl/PC：{rate_
+        per_minute.value: 3}` 这种覆盖配了也不生效。
+        """
         now = time.time() if now is None else now
+        key = _book_key(plat, path)
+        gap = (self.min_gap_s if min_gap_s is None
+               else max(0.0, float(min_gap_s)))
+        pm = (self.per_minute if per_minute is None
+              else max(0, int(per_minute)))
         with self._lock:
             wait = 0.0
-            last = self._last.get(str(plat))
-            if self.min_gap_s > 0 and last is not None:
-                wait = max(wait, last + self.min_gap_s - now)
-            if self.per_minute > 0:
-                dq = self._win.get(str(plat)) or deque()
+            last = self._last.get(key)
+            if gap > 0 and last is not None:
+                wait = max(wait, last + gap - now)
+            if pm > 0:
+                dq = self._win.get(key) or deque()
                 while dq and now - dq[0] >= 60:
                     dq.popleft()
-                if len(dq) >= self.per_minute:
+                if len(dq) >= pm:
                     wait = max(wait, dq[0] + 60 - now)
             return max(0.0, round(wait, 1))
 
-    def record(self, plat, now=None):
+    def record(self, plat, now=None, *, path="", channel=True):
+        """记一次真实外发。带链路时**渠道桶与链路桶各记一次**。
+
+        为什么渠道桶也记（复核 2026-11-06 Important 2）：`per_minute` 是
+        **渠道上限**。只记链路桶的话，T8/T9 改成一链路一次闸门之后，
+        「10 次/分钟」会变成「PC 10 + H5 10 + API 10 = 30 次/分钟」，
+        站点看到的正是最坏的那一面。渠道桶兜住总量，链路桶只在用户显式
+        给该链路配了更紧的值时才进一步收紧。
+
+        `channel=False`（r1063 T8）时**只写 `plat|链路` 桶**：渠道桶已由
+        `main.py` 为每条查询记过一次，采集器的链路闸门再记一次就是重复
+        计数（见 `_bucket_keys`）。
+        """
         now = time.time() if now is None else now
+        keys = _bucket_keys(plat, path, channel=channel)
         with self._lock:
-            p = str(plat)
-            self._last[p] = now
-            dq = self._win.setdefault(p, deque())
-            dq.append(now)
-            while dq and now - dq[0] >= 60:
-                dq.popleft()
+            for key in keys:
+                self._last[key] = now
+                dq = self._win.setdefault(key, deque())
+                dq.append(now)
+                while dq and now - dq[0] >= 60:
+                    dq.popleft()
 
     def snapshot(self, now=None):
+        """按**渠道**聚合的快照：`渠道|链路` 的键在输出前合回渠道。
+
+        兼容性是硬要求（T7）：`snapshot()[plat]["last_ago_s"/"per_min_used"]`
+        的形状一字不改。
+
+        **不许重复计数**：`record(path=…)` 会同时记渠道桶与链路桶，所以
+        `per_min_used` 取渠道桶自己的次数（它本来就是全渠道总量），只有该
+        渠道没有渠道桶键（例如只有链路级记录）时才把各链路加起来。
+        `last_ago_s` 取全渠道最近一次。
+        """
         now = time.time() if now is None else now
         with self._lock:
+            last_at = {}
+            used = {}
+            plat_used = {}
+            for key in set(list(self._last) + list(self._win)):
+                base = _book_base(key)
+                t = self._last.get(key)
+                if t is not None and (base not in last_at or t > last_at[base]):
+                    last_at[base] = t
+                n = sum(1 for x in (self._win.get(key) or ()) if now - x < 60)
+                used[base] = used.get(base, 0) + n
+                if str(key) == base:
+                    plat_used[base] = n
             out = {}
-            for p in set(list(self._last) + list(PLATFORMS)):
-                dq = list(self._win.get(p) or ())
-                recent = sum(1 for t in dq if now - t < 60)
-                last = self._last.get(p)
+            for p in list(PLATFORMS) + [b for b in used if b not in PLATFORMS]:
+                t = last_at.get(p)
                 out[p] = {
-                    "last_ago_s": (max(0, int(round(now - last)))
-                                   if last is not None else -1),
-                    "per_min_used": recent,
+                    "last_ago_s": (max(0, int(round(now - t)))
+                                   if t is not None else -1),
+                    "per_min_used": int(plat_used.get(p, used.get(p, 0))),
                 }
             return out
 
@@ -1042,11 +1432,38 @@ class Pacing:
         self.cfg = parse_pacing(cfg or {})
         self._breaker = ChannelBreaker(
             self.cfg["breaker_base_s"], self.cfg["breaker_cap_s"],
-            self.cfg["breaker_enabled"], self.cfg["login_cooldown_s"])
+            self.cfg["breaker_enabled"], self.cfg["login_cooldown_s"],
+            self.cfg["challenge_cooldown_s"])
         self._bucket = TokenBucket(self.cfg["min_gap_s"],
                                    self.cfg["per_minute"])
         self._last = {}
-        self._health = {}
+        # 每个 (渠道, 航线, 日期) 最近一次**尝试**时间（不管成没成）。
+        # 与 `_last`（最近一次**成功**取价）分开：cadence 要按尝试算，
+        # 否则"从未成功"的渠道永远没有基线、每轮都被跑（见 plan_query）。
+        self._tries = {}
+        # 每渠道连续失败次数（成功即清零）。用来把 cadence 升级：
+        # 连续失败越多，越不该按正常节奏去戳它。
+        self._fail_streak = {}
+        self._health_all = {}
+        # 兼容视图（见 `_health` property）：老代码只读，不写。
+        # 人工停手读点（r1063 T18）：由调用方注入，未注入即「没有停手」。
+        self._halt_reader = None
+        # 换跑道（r1063 T23）成效计数：预置次数 / 实际换道次数 / 换道回采条数。
+        # 放在 pacing 里是为了**一份状态**（面板、健康卡、接口都读 snapshot）。
+        self._failover = {"preloads": 0, "switches": 0, "rows": 0,
+                          "last": "", "reasons": {}}
+        # 耗时构成（r1063 T27）：墙钟 / 有效工作 / 任务数 / 节流跳过数。
+        # 每渠道「在等」累计（r1063 T30）：闸门 + 渠道内部限速/退避。
+        self._chan_wait = {}
+        # 会话重建次数（r1063 T48）：健康行要能说「这家已重建 N 次」，
+        # 否则用户不知道系统有没有动过档案。
+        self._chan_resets = {}
+        # 会话重建的判据链（r1063 T49）：连续被拦次数/类型/上次时刻/今日次数。
+        # 界面要能回答「凭什么判它该重建」，而不是只显示一个次数。
+        self._sr_view = {}
+        self._timing = {"n": 0, "wall": 0.0, "work": 0.0,
+                        "tasks": 0, "paced": 0, "timed_out": 0,
+                        "gate": 0.0}
         # 最近一次失败归类（熔断关闭时也要能说清被什么拦的）
         self._cause = {}
         self._plan = []
@@ -1063,7 +1480,8 @@ class Pacing:
         # 构成反向顺序，虽当前无环，但保持「同一时刻只持一把锁」最省心
         self._breaker.configure(
             new["breaker_base_s"], new["breaker_cap_s"],
-            new["breaker_enabled"], new["login_cooldown_s"])
+            new["breaker_enabled"], new["login_cooldown_s"],
+            new["challenge_cooldown_s"])
         self._bucket.configure(new["min_gap_s"], new["per_minute"])
         return new
 
@@ -1101,61 +1519,537 @@ class Pacing:
                          parse_hhmm(self.cfg["scan_quiet_end"]))
 
     # ---------- 2 区：熔断 ----------
-    def allow(self, plat, now=None):
-        return self._breaker.allow(plat, now)
+    def allow(self, plat, now=None, *, path="", dim=""):
+        """`dim`（r1063 fix-wave 2）只递给开关求值：`breaker_switch.enabled`
+        在 `渠道/维度` 层写的 `false` 要让这条决策看到，否则维度级覆盖只是
+        界面文案。记账键不受影响（仍是 `渠道` / `渠道|链路`）。"""
+        return self._breaker.allow(plat, now, path=path, dim=dim)
 
-    def trip(self, plat, kind, now=None, retry_after=0):
-        return self._breaker.trip(plat, kind, now, retry_after)
+    def trip(self, plat, kind, now=None, retry_after=0, note="", *, path="",
+             dim=""):
+        return self._breaker.trip(plat, kind, now, retry_after, note,
+                                  path=path, dim=dim)
 
-    def reset(self, plat):
-        self._breaker.reset(plat)
+    def reset(self, plat, *, path=""):
+        # 一旦成功就清零连续失败：立刻回到正常节奏
+        with self._lock:
+            self._fail_streak[str(plat)] = 0
+        self._breaker.reset(plat, path=path)
 
-    def note_ok(self, plat, need=2):
-        return self._breaker.note_ok(plat, need)
+    def note_ok(self, plat, need=2, *, path="", dim=""):
+        """`dim` 只为签名同族一致（`allow`/`trip`/`observe` 都吃它）：成功
+        复位既不读开关、也不按维度建账，传进来不改变行为（见
+        `ChannelBreaker.note_ok`）。"""
+        return self._breaker.note_ok(plat, need, path=path)
 
-    def note_warmup_ok(self, plat):
-        self._breaker.note_warmup_ok(plat)
+    def note_warmup_ok(self, plat, *, path=""):
+        self._breaker.note_warmup_ok(plat, path=path)
+
+    def warmup_on(self, plat, dim="", path=""):
+        """「首页预热」这条策略对该作用域生效与否（`warmup.enabled`）。
+
+        读点在**调用那一刻**过参数层，`self.cfg["warmup_enabled"]`（由
+        `parse_pacing` 从 `crawler.warmup.enabled` 归一出来的全局层旧值）只在
+        没人配过这个键时兜底。为什么必须是方法而不是让调用方读 `pac.cfg`：
+        `pac.cfg` 是 `refresh()` 那一刻的快照，而渠道级覆盖、以及"`main.py`
+        的 rt["pacing"] 与采集器私有实例"这两份实例，只有现读参数层才一致
+        （复核 2026-11-06 第 1 条）。
+
+        `dim`/`path` 是作用域（r1063 fix-wave 2 起由调用点真递）：`渠道/维度`
+        与 `渠道/维度/链路` 层写的 `warmup.enabled: false` 只有给了它们才查
+        得到——「这条路不预热」是维度/链路级可调的正当需求。
+        """
+        return switch_on("warmup.enabled", plat=plat, dim=dim, path=path,
+                         fallback=self.cfg.get("warmup_enabled", True))
+
+    def health_penalty_on(self, plat, dim="", path=""):
+        """「成功率保护」这条策略对该作用域生效与否（`health_penalty.enabled`）。
+
+        **作用域只到渠道级（波次六对账后的实话）**：本方法的唯一消费者是
+        `set_health(plat, rate, attempts)`，而 `set_health` 拿到的是
+        `main.py` 从 `storage.path_stats(24)` 取来的**渠道级聚合**
+        （一个渠道一个 `rate`/`attempts`，账本里本来就没有按维度分开的
+        成功率）。所以 `dim`/`path` 留在签名里只为与 `warmup_on` 同族、
+        将来真按维度算健康度时才用得上，今天**递进来也不会改变判定**。
+        契约 `core/strategy_contract.py` 的 `health_penalty.scope` 因此只写
+        `global/channel`，`effect` 也明说「只在渠道级生效」——声明不许比
+        代码宽，否则用户在维度层配了 `false`、界面显示「已停用」、降频照旧，
+        正是本项目列为头号缺陷的那一类。
+        """
+        return switch_on("health_penalty.enabled", plat=plat, dim=dim,
+                         path=path,
+                         fallback=self.cfg.get("health_penalty_enabled", True))
 
     # ---------- 5 区：令牌桶 ----------
-    def wait_hint(self, plat, now=None):
-        return self._bucket.wait_hint(plat, now)
+    def wait_hint(self, plat, now=None, *, path=""):
+        return self._bucket.wait_hint(plat, now, path=path)
 
-    def record(self, plat, now=None):
-        self._bucket.record(plat, now)
+    def record(self, plat, now=None, *, path="", channel=True):
+        self._bucket.record(plat, now, path=path, channel=channel)
+
+    # ---------- 6 区：链路闸门（r1063 T7） ----------
+    def _param(self, pid, plat, dim, path):
+        """按 `渠道/维度/链路` 求一个策略参数；没有值就用**策略声明**的默认值。
+
+        默认值不在这里重抄一份数字：`sp.PARAMS[pid].default` 是契约里那一份，
+        闸门只消费它。抄第二份的后果是契约改了默认值、门却还按旧数字跑
+        （复核 2026-11-06）。
+
+        热链路（r1063 T14 已接线）：`main.py` 在启动路径与 `reload_config()`
+        两处都调 `strategy_params.set_config(cfg)`，所以 `resolve()` 读到的是
+        用户此刻的配置——global/channel/dimension/path 各层当场接管，闸门不必
+        重建（本实例的 `self.cfg` 只在 `refresh()` 时重读，那是节流动件那一层，
+        与策略参数是两回事）。门禁 `tests/test_r1063_hot_reload.py` 钉这条：
+        同一个 `Pacing` 对象，改配置后 `gate_path()` 立刻按新速率判。
+
+        目录里查不到该 pid（例如策略被撤掉）时返回 `None`，由调用方兜底：
+        闸门是采集的必经路径，不能因为参数目录的变化就抛异常停采。
+        """
+        pid = str(pid)
+        decl = sp.PARAMS.get(pid)
+        if decl is None:
+            return None
+        try:
+            got = sp.resolve(pid, plat=str(plat or ""),
+                             dim=str(dim or ""), path=str(path or ""))
+        except KeyError:
+            return decl.default
+        if got.source == "default":
+            return decl.default
+        return got.value
+
+    @staticmethod
+    def _scope_key(plat, dim, path):
+        """给人看的作用域串（`tongcheng/intl/PC`；缺段不拼空斜杠）。"""
+        return "/".join([x for x in (str(plat or ""), str(dim or ""),
+                                     str(path or "")) if x])
+
+    def _path_enabled(self, plat, dim, path):
+        """这条链路是否被策略停用（`path_fallback.enabled`，缺省启用）。
+
+        `None`（YAML 里写了 `enabled:` 却没有值）按「没配」处理 → 启用：
+        一个空值把整条链路静默关掉，是这类缺陷里最难查的一种。
+
+        读不懂的值（`"flase"` 这种拼错的）**fail-open 但留痕**：一条根本
+        启用不了的通路，如果连一行日志都没有，用户会以为自己配好了。
+        """
+        got = self._param("path_fallback.enabled", plat, dim, path)
+        if got is None:
+            return True
+        if isinstance(got, bool):
+            return got
+        if isinstance(got, (int, float)):
+            return bool(got)
+        text = str(got).strip().lower()
+        if not text:                      # 写了键却没写值：等于没配
+            return True
+        if text in _TRUE_WORDS:
+            return True
+        if text in _FALSE_WORDS:
+            return False
+        _warn_once(got, "crawler.path_fallback.enabled 的值 %r 读不懂"
+                        "（%s）：已按启用处理，要停用请写 false"
+                        % (got, self._scope_key(plat, dim, path)))
+        return True
+
+    def _rate_limits(self, plat, dim, path):
+        """该链路生效的 (min_gap_s, per_minute)——两层各算一次。
+
+        返回 `(渠道层, 链路层)`：渠道层按**渠道/全局**口径（`dim`/`path` 不参与
+        求值，渠道桶是全渠道共享的一份总预算），链路层按 `渠道/维度/链路` 全口径
+        求值（于是 `渠道/维度/链路` 的覆盖只收紧这一条路）。
+
+        **开关按本次作用域求值**（r1063 fix-wave 2）：`rate_min_gap.enabled` /
+        `rate_per_minute.enabled` 在 `渠道/维度[/链路]` 层写 `false` 时，这一次
+        判定里的两腿都不设限——「这条路放开限速」正是路径级覆盖的意义。
+        影响面被 `gate_path()` 的调用粒度天然框住：换个作用域再问一次，开关
+        重新按那个作用域求值（它不写任何状态，也不改 `self.cfg`）。
+
+        参数目录里查不到时退回本实例 cfg（`parse_pacing` 的结果），不抛异常。
+        """
+        def _gap(v):
+            try:
+                return max(0.0, float(v))
+            except (TypeError, ValueError):
+                return float(self.cfg["min_gap_s"] or 0)
+
+        def _pm(v):
+            try:
+                return max(0, int(v))
+            except (TypeError, ValueError):
+                return int(self.cfg["per_minute"] or 0)
+
+        # 两条限速策略各自可关（r1063 T12c）：关掉 = 这一维不设限，**另一维照旧**
+        # （最小间隔与每分钟上限是两个旋钮，关一个不该把另一个一起废掉）。
+        _gap_on = switch_on("rate_min_gap.enabled", plat=plat, dim=dim,
+                            path=path)
+        _pm_on = switch_on("rate_per_minute.enabled", plat=plat, dim=dim,
+                           path=path)
+        gap_c = _gap(self._param("rate_min_gap.value", plat, "", "")) if _gap_on else 0.0
+        pm_c = _pm(self._param("rate_per_minute.value", plat, "", "")) if _pm_on else 0
+        gap_p = _gap(self._param("rate_min_gap.value", plat, dim, path)) if _gap_on else 0.0
+        pm_p = _pm(self._param("rate_per_minute.value", plat, dim, path)) if _pm_on else 0
+        return (gap_c, pm_c), (gap_p, pm_p)
+
+    def gate_path(self, plat, dim="", path=""):
+        """**用某条链路之前**问一次：能不能用、要等多久、为什么。
+
+        返回 `(allow, wait_s, why)`：
+
+        * `allow=False` —— `why` 说清原因。调用方**只跳过这一条链路**，
+          不要 `return` 整个查询，也不要把它记成 `failed`：记 `paced`
+          （一条被策略停用的链路若记成失败，会把整家渠道的熔断拉开，
+          那正是「停一条路 = 停一家渠道」的连坐）。
+        * `wait_s > 0` —— 令牌桶还要等多久。**睡眠由调用方在锁外做**，
+          本模块不在锁内睡（铁律 1）。
+
+        三个判据依次是「策略停用 → 熔断 → 限速」：
+          1. `path_fallback.enabled`：按 `渠道/维度/链路` 覆盖求值，被点名
+             停用的那条直接拒绝，同渠道其它链路**不受影响**；
+          2. 熔断：渠道级冷却对该渠道所有链路生效，`渠道|链路` 级冷却只停
+             那一条（复合键存在的理由）。**开关本身按本次作用域求值**
+             （r1063 fix-wave 2）：`breaker_switch.enabled=false` 写在
+             `渠道/维度` 层时，这个维度的链路一律放行，同渠道别的维度照旧；
+          3. 限速：`rate_min_gap` / `rate_per_minute` 同样按 `渠道/维度/链路`
+             覆盖求值（含它们的 `enabled` 开关，见 `_rate_limits`），**渠道桶
+             与链路桶各算一次、取较大者**——`per_minute` 是渠道上限，只按
+             链路桶算会把它放大成「每条链路 N 次」。
+        """
+        plat = str(plat or "")
+        dim = str(dim or "")
+        path = str(path or "")
+        scope = self._scope_key(plat, dim, path)
+        # 0. **人工停手**（r1063 T18）：人按下的停手优先于一切自动策略。
+        #    按「链路 → 维度 → 渠道」找：链路级停手只停这一条路，同维度
+        #    其它通路照常（「可精准控制」在干预面上的落点）。
+        #    读点由调用方注入（`set_halt_reader`），本模块不 import 持久化层。
+        _hk, _hr = self._halt_of(plat, dim, path)
+        if _hk:
+            try:
+                _until = float(_hr.get("until") or 0)
+            except (TypeError, ValueError):
+                _until = 0.0
+            _left = max(0, int(_until - time.time()))
+            _when = time.strftime("%m-%d %H:%M", time.localtime(_until))
+            return False, 0.0, (
+                "%s：人工停手至 %s（%s，剩 %d 分钟）——只停这一条，"
+                "同渠道其它链路照常"
+                % (PATH_HALTED, _when, _hk, (_left + 59) // 60))
+        if not self._path_enabled(plat, dim, path):
+            return False, 0.0, (
+                "%s：path_fallback.enabled=false（%s）——只停这一条链路，"
+                "同渠道其它链路照常" % (PATH_DISABLED, scope))
+        ok, remain = self.allow(plat, path=path, dim=dim)
+        if not ok:
+            return False, float(remain), (
+                "链路冷却中：%s 还要 %d 秒（熔断按 渠道|链路 记账，"
+                "到点自动恢复，不建议手动解除）" % (scope, remain))
+        (gap_c, pm_c), (gap_p, pm_p) = self._rate_limits(plat, dim, path)
+        # 成功率保护按作用域缩放**链路**限速（r1063 T16）：
+        # 该链路自己成功率差 → 只有它自己的最小间隔按倍数拉长；同维度其它
+        # 链路（例如 PC 与 H5/API）不受影响。这就是「通路也算独立维度」在
+        # 限速侧的落点——不缩放渠道桶，否则一条烂路会把整家拖慢。
+        _pen = self._health_penalty(plat, dim, path)
+        _pen_note = ""
+        if path and _pen > 1.0:
+            gap_p = (gap_p or gap_c) * _pen
+            _pen_note = "，成功率保护 ×%.1f" % _pen
+        wait_c = self._bucket.wait_hint(plat, min_gap_s=gap_c, per_minute=pm_c)
+        wait_p = 0.0
+        if path:
+            wait_p = self._bucket.wait_hint(plat, path=path, min_gap_s=gap_p,
+                                            per_minute=pm_p)
+        wait = max(wait_c, wait_p)
+        why = ""
+        if wait > 0:
+            why = ("链路限速：%s 还要等 %.1fs（渠道最小间隔 %.1fs%s）"
+                   % (scope, wait, gap_c,
+                      ("，每分钟上限 %d 次" % pm_c) if pm_c else "")
+                   + _pen_note)
+        return True, float(wait), why
 
     # ---------- 3 区：分层 TTL ----------
-    def set_health(self, plat, rate, attempts):
+    #
+    # 成功率保护的作用域是**三级**（r1063 T16）：
+    #   链路 `(plat, dim, path)` > 维度 `(plat, dim, "")` > 渠道 `(plat, "", "")`
+    # 账本里每一级都有真实样本（`path_stats` 的 `paths` / `dims` / 渠道节点），
+    # 所以「H5/API 烂、PC 好」可以只压 H5/API，而不是整家一起慢下来。
+    @property
+    def _health(self):
+        """渠道级健康读数的**兼容视图**（老形状 `{plat: {...}}`）。
+
+        内部只有 `self._health_all` 一份状态（无包袱重构）；这里给既有门禁
+        与旧读点留一个只读投影，别再往它写。"""
+        with self._lock:
+            return {k[0]: dict(v) for k, v in self._health_all.items()
+                    if k[1] == "" and k[2] == ""}
+
+    def _health_scope_key(self, plat, dim="", path=""):
+        return (str(plat), str(dim or ""), str(path or ""))
+
+    def note_chan_wait(self, plat, sec) -> None:
+        """记某渠道「在等」的秒数（r1063 T30）：闸门睡眠 + 渠道内部限速。
+
+        它和抓取耗时分开：面板要能回答「这家慢是在等我方限速，还是真的在抓」。
+        """
+        try:
+            v = float(sec or 0)
+        except (TypeError, ValueError):
+            return
+        if v <= 0:
+            return
+        with self._lock:
+            k = str(plat or "")
+            self._chan_wait[k] = round(
+                float(self._chan_wait.get(k) or 0) + v, 1)
+
+    def note_reset(self, plat, n: int = 1) -> None:
+        """记一次「会话重建」（r1063 T47/T48）：界面据此显示「已重建 N 次」。"""
+        try:
+            add = max(1, int(n or 1))
+        except (TypeError, ValueError):
+            add = 1
+        with self._lock:
+            k = str(plat or "")
+            self._chan_resets[k] = int(self._chan_resets.get(k) or 0) + add
+
+    def _failover_view(self, channels) -> dict:
+        """换道成效 + **每家渠道的判据输入**（r1063 T50）。
+
+        只有成效（预置/换道/回采）回答不了用户的问题：**为什么这次没换？**
+        预算还剩几次、冷却还要多久、上次换到哪、成没成——这些是决策真正的输入，
+        由 `core.failover.state()` 从**同一个账本**读出（读数与决策同源）。
+        """
+        out = self.failover_stats()
+        # 账本/判据的根目录：生产默认 `user_data`；`TM_USER_DATA_DIR` 只作
+        # **测试注入**（端到端用例必须能把它指到临时目录，否则会读到真实账本，
+        # 更糟的是会动真实档案——真实发生过一次）。
+        import os as _os
+        _ud = _os.environ.get("TM_USER_DATA_DIR") or "user_data"
+        try:
+            from core import failover as _fo
+            keys = [k for k in (channels or {}) if not str(k).startswith("app_")]
+            out["plats"] = _fo.states(keys, None, user_data_dir=_ud)
+        except Exception:
+            out["plats"] = {}
+        # 7 天成效（r1063 T51）：进程内计数重启归零，历史账本才不会归零——
+        # 用户据此判断"这条自动策略对我到底有没有用"。
+        try:
+            from core import strategy_ledger as _led
+            out["history"] = _led.summary(days=7, root=_ud)
+        except Exception:
+            out["history"] = {}
+        return out
+
+    def note_sr_state(self, plat, **kw) -> None:
+        """记会话重建的**判据输入**（只保留会变的那几项，缺省项保留旧值）。
+
+        键：`fails` 连续被拦次数 · `kind` 被拦类型 · `last_ts` 上次重建时刻 ·
+        `day` 今日次数 · `why` 上一轮给出的判断理由（人话）。
+        """
+        k = str(plat or "")
+        with self._lock:
+            cur = dict((self._sr_view or {}).get(k) or {})
+            for key in ("fails", "kind", "last_ts", "day", "why"):
+                if key in kw:
+                    cur[key] = kw[key]
+            self._sr_view[k] = cur
+
+    def reset_count(self, plat) -> int:
+        with self._lock:
+            return int((self._chan_resets or {}).get(str(plat or "")) or 0)
+
+    def note_query_timing(self, *, wall=0.0, work=0.0, tasks=0, paced=0,
+                          timed_out=0, gate=0.0):
+        """记一条查询的**耗时构成**（r1063 T27）：墙钟 / 有效工作 / 空等。
+
+        为什么要这三个数：一轮慢，可能是"活多"（有效工作占比高），也可能是
+        "在等"（栅栏模型下最慢的那家决定整条查询时长）。两者的解法完全不同——
+        前者要提并发或砍请求，后者要打破栅栏（跨查询流水线）。
+        没有这两个数就优化，只能靠猜。
+        """
+        try:
+            w = float(wall or 0)
+            k = float(work or 0)
+        except (TypeError, ValueError):
+            return
+        if w < 0 or k < 0:
+            return
+        with self._lock:
+            t = self._timing
+            t["n"] = int(t.get("n") or 0) + 1
+            t["wall"] = round(float(t.get("wall") or 0) + w, 1)
+            t["work"] = round(float(t.get("work") or 0) + k, 1)
+            t["tasks"] = int(t.get("tasks") or 0) + int(tasks or 0)
+            t["paced"] = int(t.get("paced") or 0) + int(paced or 0)
+            # 超时次数（r1063 T28）：栅栏超时是**纯浪费**的墙钟，必须单列——
+            # 它和"节流跳过"不同，后者是我方主动不发，前者是在白等。
+            t["timed_out"] = int(t.get("timed_out") or 0) + int(timed_out or 0)
+            # 限速等待（r1063 T29）：有效工作里**有多少是在等我方的令牌桶**。
+            # 这个数和"抓取耗时"必须分开——前者是风控代价，后者才是可优化项。
+            t["gate"] = round(float(t.get("gate") or 0) + float(gate or 0), 1)
+
+    def timing_stats(self) -> dict:
+        """本轮耗时构成 + 派生占比（空等 = 1 - 工作/墙钟）。"""
+        with self._lock:
+            t = dict(self._timing)
+        w = float(t.get("wall") or 0)
+        k = float(t.get("work") or 0)
+        t["idle_ratio"] = (round(max(0.0, 1.0 - (k / w)), 3) if w > 0 else None)
+        g = float(t.get("gate") or 0)
+        t["gate_ratio"] = (round(min(1.0, g / k), 3) if k > 0 else None)
+        t["fetch"] = round(max(0.0, k - g), 1)
+        return t
+
+    def note_failover(self, *, preload=0, switched=0, rows=0, note="",
+                      reason=""):
+        """记一次换跑道（r1063 T23）：预置几家、真换了几次、回采到几条。
+
+        `rows` 是关键读数——换道如果一直回采 0 条，说明这条 App 通路也一起
+        被拦了，界面上要能看出来（否则用户以为"换道在生效"）。
+        """
+        with self._lock:
+            f = self._failover
+            f["preloads"] = int(f.get("preloads") or 0) + int(preload or 0)
+            f["switches"] = int(f.get("switches") or 0) + int(switched or 0)
+            f["rows"] = int(f.get("rows") or 0) + int(rows or 0)
+            if note:
+                f["last"] = str(note)[:120]
+            # 归因（r1063 T33）：换道为什么没回采到数。四种原因处理方式不同，
+            # 混成一句"回采 0 条"等于没信息。
+            if reason:
+                rs = f.setdefault("reasons", {})
+                rs[str(reason)] = int(rs.get(str(reason)) or 0) + 1
+
+    def failover_stats(self) -> dict:
+        with self._lock:
+            out = dict(self._failover)
+            out["reasons"] = dict(out.get("reasons") or {})
+            return out
+
+    def set_halt_reader(self, fn):
+        """注入「人工停手表读点」（r1063 T18）。
+
+        签名 `fn(plat, dim, path) -> (key, {"until","note"})`，没命中返回
+        `("", {})`。**由调用方注入**而不是在 pacing 里 import `core.policy`：
+        这个模块要能脱离磁盘单测（现有门禁全是不碰 user_data 的纯内存用例）。
+        """
+        self._halt_reader = fn
+
+    def _halt_of(self, plat, dim="", path=""):
+        """查询当前作用域是否被人工停手（链路 → 维度 → 渠道）。"""
+        fn = getattr(self, "_halt_reader", None)
+        if not fn:
+            return "", {}
+        try:
+            key, rec = fn(str(plat or ""), str(dim or ""), str(path or ""))
+        except Exception:
+            return "", {}          # 读停手表失败 ≠ 停手：宁可继续跑并留日志
+        if not key:
+            return "", {}
+        try:
+            if float((rec or {}).get("until") or 0) <= time.time():
+                return "", {}      # 已到点：视同没有停手
+        except (TypeError, ValueError):
+            return "", {}
+        return str(key), dict(rec or {})
+
+    def set_health(self, plat, rate, attempts, dim="", path=""):
         """按近 24h 成功率自动加罚（成功率保护，不是熔断）。
 
         熔断只管"对方明确拒绝"；持续解析失败/空结果不会触发它，却同样
-        烧请求。这里按账本自动拉长该渠道的 TTL：0.4 以下 ×3、0.7 以下
+        烧请求。这里按账本自动拉长该作用域的 TTL：0.4 以下 ×3、0.7 以下
         ×1.5，样本 <5 次不判（避免首轮波动就误降频）。
+
+        `dim` / `path` 非空即写到该级；渠道级（都为 ""）是维度和链路的
+        回落口径，也是今天行为的逐位延续。
         """
         try:
             r = float(rate or 0)
             n = int(attempts or 0)
         except (TypeError, ValueError):
             return
+        key = self._health_scope_key(plat, dim, path)
         # 用户关掉「成功率保护」时：仍然记账（界面要显示 rate/attempts），
         # 但不产生任何降频。宁可多打几次，也不接受自动拉长 TTL。
-        _pen_on = bool(self.cfg.get("health_penalty_enabled", True))
+        # 读点在**决策那一刻**过参数层（`health_penalty.enabled`，可到链路级）。
+        _pen_on = self.health_penalty_on(plat, dim=key[1], path=key[2])
         if not _pen_on:
             with self._lock:
-                self._health[str(plat)] = {"rate": round(r, 3),
-                                           "attempts": n, "penalty": 1.0,
-                                           "disabled": True}
+                self._health_all[key] = {"rate": round(r, 3), "attempts": n,
+                                         "penalty": 1.0, "disabled": True}
             return
-        if n < int(self.cfg.get("health_min_samples", 5)):
+        # 五个阈值按作用域求值（r1063 T62）：渠道/维度/链路可以各自定
+        # "多低算差、罚几倍、多少样本才判"——以前只读全局，界面上的格子是装饰。
+        _pl, _dm, _pt = key
+        _need = int(self._scoped("health_penalty.min_samples", _pl, _dm, _pt,
+                                 self.cfg.get("health_min_samples", 5)))
+        if n < _need:
             penalty = 1.0
-        elif r >= float(self.cfg.get("health_ok_ratio", 0.7)):
+        elif r >= float(self._scoped("health_penalty.ok_ratio", _pl, _dm, _pt,
+                                     self.cfg.get("health_ok_ratio", 0.7))):
             penalty = 1.0
-        elif r >= float(self.cfg.get("health_slow_ratio", 0.4)):
-            penalty = float(self.cfg.get("health_slow_factor", 1.5))
+        elif r >= float(self._scoped("health_penalty.slow_ratio", _pl, _dm, _pt,
+                                     self.cfg.get("health_slow_ratio", 0.4))):
+            penalty = float(self._scoped("health_penalty.slow_factor",
+                                         _pl, _dm, _pt,
+                                         self.cfg.get("health_slow_factor", 1.5)))
         else:
-            penalty = float(self.cfg.get("health_slowest_factor", 3.0))
+            penalty = float(self._scoped("health_penalty.slowest_factor",
+                                         _pl, _dm, _pt,
+                                         self.cfg.get("health_slowest_factor",
+                                                      3.0)))
         with self._lock:
-            self._health[str(plat)] = {"rate": round(r, 3), "attempts": n,
-                                       "penalty": penalty}
+            self._health_all[key] = {"rate": round(r, 3), "attempts": n,
+                                     "penalty": penalty}
+
+    def _health_at(self, key, need):
+        """某作用域的记录，样本够才算数（内联用，调用方已持锁）。"""
+        rec = self._health_all.get(key) or {}
+        if rec and int(rec.get("attempts") or 0) >= need:
+            return float(rec.get("penalty") or 1.0)
+        return None
+
+    def _scoped(self, pid, plat, dim, path, fallback):
+        """按作用域取参数（r1063 T57）：**参数层有意见才采用**，否则用全局值。
+
+        为什么需要它：TTL / 邻近窗口这些参数声明了 channel/dimension/path
+        作用域，但消费方原先读的是 `parse_pacing` 解析出的**全局标量**——界面
+        上按渠道改 TTL 完全无效（实测 `resolve(...)` 给 5、`cfg` 仍是 15）。
+
+        与 `crawlers/slider.py::_pval` 同一条优先级：参数层是**默认来源**，
+        不是永远优先——没配过时必须让既有全局值继续说算。
+        """
+        try:
+            from core import strategy_params as _sp
+            got = _sp.resolve(str(pid), plat=str(plat or ""),
+                              dim=str(dim or ""), path=str(path or ""))
+            if str(getattr(got, "source", "default")) != "default":
+                return got.value
+        except Exception:
+            pass
+        return fallback
+
+    def _health_penalty(self, plat, dim="", path=""):
+        """取该作用域的成功率保护倍数（r1063 T16）。
+
+        顺序：链路（**该链路自己样本够**）→ 维度 → 渠道 → 1.0。
+        为什么不「有就给」：一个作用域只有 2 条样本时按它降频，等于让噪声
+        决定速度；逐级回落是有意的保守。"""
+        plat = str(plat)
+        dim = str(dim or "")
+        path = str(path or "")
+        need = int(self._scoped("health_penalty.min_samples", plat, dim, path,
+                                self.cfg.get("health_min_samples", 5)))
+        with self._lock:
+            for key in ((plat, dim, path), (plat, dim, ""), (plat, "", "")):
+                if key[1:] == ("", "") and (dim or path):
+                    continue            # 别把渠道级算两遍
+                got = self._health_at(key, need)
+                if got is not None:
+                    return got
+            got = self._health_at((plat, "", ""), need)
+        return got if got is not None else 1.0
 
     def note_fetch(self, plat, key, price, ok=True):
         """只有"真拿到价"才刷新 TTL；失败/空结果不刷新，下一轮照常重试
@@ -1192,20 +2086,29 @@ class Pacing:
             self._last[k] = (ts, p)
         return True
 
-    def plan_query(self, plat, key, threshold=0, days_ahead=None):
+    def plan_query(self, plat, key, threshold=0, days_ahead=None, dim="",
+                   path=""):
         """返回 (tier, 原因)。tier ∈ fast/slow/skip。
 
         `days_ahead` 是出发日距今天数：临期行程价格变化快，给一个更短的
         TTL；远期只做低频基线。它只缩短 TTL，不会让本该跳过的查询变快。
+
+        r1063 T15/T16：`dim`/`path` 非空时按**该链路 → 该维度 → 渠道**的
+        成功率保护倍数拉长 TTL（每级样本不足自动回落，见 `_health_penalty`）。
         """
         now = self._clock()
         with self._lock:
             last = self._last.get((str(plat),) + tuple(key))
-            near_ratio = float(self.cfg["near_ratio"])
-            fast_ttl = int(self.cfg["fast_ttl_min"])
-            slow_ttl = int(self.cfg["slow_ttl_min"])
-            pen = float((self._health.get(str(plat)) or {}).get("penalty")
-                        or 1.0)
+            # 按作用域求值（r1063 T57）：渠道/维度/链路的覆盖真的生效；
+            # 没配过时回落到 parse_pacing 解析出的全局值（行为不变）。
+            near_ratio = float(self._scoped("near_window.ratio", plat, dim,
+                                            path, self.cfg["near_ratio"]))
+            fast_ttl = int(self._scoped("ttl_tier.fast", plat, dim, path,
+                                        self.cfg["fast_ttl_min"]))
+            slow_ttl = int(self._scoped("ttl_tier.slow", plat, dim, path,
+                                        self.cfg["slow_ttl_min"]))
+        # 惩罚值单独取（`_health_penalty` 自己加锁，别在持锁时再进）
+        pen = self._health_penalty(plat, dim, path)
         # 成功率保护：账本差就自动拉长 TTL，而不是等它撞出 429 再熔断
         fast_ttl = max(5, int(round(fast_ttl * pen)))
         slow_ttl = max(5, int(round(slow_ttl * pen)))
@@ -1216,22 +2119,54 @@ class Pacing:
         except (TypeError, ValueError):
             _d = None
         if _d is not None and _d >= 0:
-            if _d <= int(self.cfg.get("near_days") or 3):
-                fast_ttl = max(5, int(round(fast_ttl / 2.0)))
-            elif _d >= 30:
-                slow_ttl = min(1440, int(round(slow_ttl * 2.0)))
+            # 邻近比价窗口策略关掉 = **不做临期加密/远期翻倍**（TTL 只按
+            # `ttl_tier` 的两档与健康惩罚走）。
+            if switch_on("near_window.enabled", plat=plat):
+                _nd = int(self._scoped("near_window.days", plat, dim,
+                                       path,
+                                       self.cfg.get("near_days") or 3))
+                if _d <= _nd:
+                    fast_ttl = max(5, int(round(fast_ttl / 2.0)))
+                elif _d >= 30:
+                    slow_ttl = min(1440, int(round(slow_ttl * 2.0)))
+        # **cadence 按「尝试」算，且在「无基线」判定之前**（2026-11-06 修）。
+        # 原顺序是 `if not last: return "fast"` → cadence 永远走不到，
+        # 于是从未出过数的渠道每轮都被跑（qunar 实测一天 52 次、0 成功）。
+        _k = (str(plat),) + tuple(key)
+        try_ts = self._tries.get(_k)
+        # 渠道节奏策略关掉 = **不做这家的最小间隔拦截**（0 在本文件的语义就是
+        # 「跟随全局 TTL」，所以关掉只是让本家不再被 cadence 单独压住）。
+        floor = (int((self.cfg.get("cadence") or {}).get(str(plat), 0) or 0)
+                 if switch_on("cadence.enabled", plat=plat) else 0)
+        # **连续失败升级**：基础 cadence ×（1/2/4），总上限 720 分钟。
+        # 让"一直失败的渠道"自己慢慢退到每天探两次，而不是靠人调配置。
+        if floor:
+            with self._lock:
+                _streak = int(self._fail_streak.get(str(plat), 0) or 0)
+            _mult = 1 if _streak < 3 else (2 if _streak < 6 else 4)
+            floor = min(720, floor * _mult)
+        if floor:
+            _refs = [t for t in ((last[0] if last else None), try_ts)
+                     if t is not None]
+            if _refs:
+                _age = max(0.0, (now - max(_refs)) / 60.0)
+                if _age < floor:
+                    return "skip", "渠道节奏 %.0f/%d 分钟" % (_age, floor)
         if not last:
             return "fast", "无历史基线"
         ts, price = last
         age = max(0.0, (now - ts) / 60.0)
-        floor = int((self.cfg.get("cadence") or {}).get(str(plat), 0) or 0)
-        if floor and age < floor:
-            # 渠道节奏是硬地板：这家慢，就别用全局 30 分钟的节奏催它
-            return "skip", "渠道节奏 %.0f/%d 分钟" % (age, floor)
         th = float(threshold or 0)
         near = True
         if th > 0 and price > 0:
             near = abs(price - th) / th <= near_ratio
+        # 分层 TTL 策略关掉 = **不分层**：不再区分「快档/慢档」，统一按快档 TTL
+        # 判定（TTL 内跳过、过点就采）。关的只是那层"冷门航线可以放两小时"，
+        # 不是把 TTL 整个去掉——去掉就等于每轮全量重抓，那是另一件事。
+        if not switch_on("ttl_tier.enabled", plat=plat):
+            if age < fast_ttl:
+                return "skip", "单档 TTL 内（%.0f/%.0f 分钟）" % (age, fast_ttl)
+            return "fast", "单档 TTL 已过，%.0f 分钟未采" % age
         tier = tier_of(age, near, fast_ttl, slow_ttl)
         if tier == "skip":
             ttl = fast_ttl if near else slow_ttl
@@ -1256,6 +2191,20 @@ class Pacing:
                 self._plan.append({
                     "plat": plat, "key": "-".join(str(x) for x in key),
                     "tier": tier, "why": why})
+
+    def note_try(self, plat, key, now=None):
+        """记录一次"真的发了请求"（不论成败）。供 cadence 按尝试时间拦截。"""
+        now = self._clock() if now is None else now
+        try:
+            k = (str(plat),) + tuple(key)
+        except TypeError:
+            return
+        with self._lock:
+            self._tries[k] = float(now)
+            # 只保留最近的一批，避免长跑内存无界增长
+            if len(self._tries) > 4096:
+                for _k in list(self._tries)[:1024]:
+                    self._tries.pop(_k, None)
 
     def note_sent(self, plat):
         """真正发出一次渠道请求（不含预热；预热另计）。"""
@@ -1296,24 +2245,45 @@ class Pacing:
                 {"plat": plat, "kind": kind, "cooldown_s": int(cooldown_s),
                  "retry_after": int(retry_after or 0)})
 
-    def observe(self, plat, statuses, note="", retry_after=0):
+    def observe(self, plat, statuses, note="", retry_after=0, *, path="",
+                dim=""):
         """一次采集落地后调用：真拒绝→熔断；拿到数据→复位。
 
         `retry_after` 来自响应头（秒）。有它就以它为准，没有才用自算阶梯。
         返回 (kind, cooldown_s)；kind 空串表示"不算拒绝"。
+
+        `path`（r1063 fix-wave 1）：**这次证据来自哪条链路**（能确定时由
+        调用方给）。给了就按 `渠道|链路` 记账，于是「PC 这条路被风控」不会
+        把同渠道的 H5 一起停掉（`gate_path` 的熔断腿本来就会查这一层）；
+        空串=渠道级结论（证据跨多条链路 / 调用方不知道）。关键字专用：
+        `note` 与 `path` 都是字符串，位置调用会把「PC」绑成 note。
+
+        `dim`（r1063 fix-wave 2）：这次证据属于哪个**维度**。它只参与下面
+        两条开关的求值（`breaker_switch.enabled` / `warmup.enabled`），不改
+        记账键：熔断键仍是 `渠道` / `渠道|链路`。少了它，策略里写
+        `飞猪/intl: breaker_switch.enabled: false` 就只有界面文案生效、
+        熔断照旧——与「配了不生效」同一类缺陷。
 
         熔断开关关闭时（r625）：分类照做（`cause` 仍记在通道状态里供界面
         显示「这次是被什么拦的」），但**不返回 kind**——调用方拿 kind 当
         「已熔断」的信号（写 auto_trip 台账、打「命中…熔断 Ns」、自动弹窗）。
         原实现在此只让 trip() 返回 0，kind 照旧返回，于是关掉开关后界面仍
         宣称「已熔断」、账本仍写一条自动干预 —— 开关看起来生效了，实际没有。
+        开关本身**每次判定现读参数层**（`breaker_switch.enabled`，可到渠道/
+        维度/链路级），`self.cfg["breaker_enabled"]` 只在没人配过时兜底。
         """
         kind = classify_failure(statuses, note)
         if not kind:
             if any(str(s) == "ok" or str(s) == "calendar"
                    for s in (statuses or [])):
-                self.reset(plat)
+                self.reset(plat, path=path)
             return "", 0
+        # 连续失败计数（cadence 升级用）：hard/ip/captcha/login 都算失败，
+        # 唯独 soft（会话没养熟）不算——那是我们自己的功课没做好。
+        if kind != "soft":
+            with self._lock:
+                self._fail_streak[str(plat)] = int(
+                    self._fail_streak.get(str(plat), 0)) + 1
         # 留证（2026-11-04）：把"是哪一条证据判的"记下来。原来只打「命中captcha」，
         # 而日志里智行 22 次 captcha 大多是"设置航线失败"被归错——没有证据串
         # 就查不动根因。这条只写内存/快照，不改任何冷却决策。
@@ -1324,14 +2294,18 @@ class Pacing:
                 "evidence": classify_evidence(statuses, note),
                 "statuses": [str(s or "") for s in (statuses or [])][:6],
                 "note": str(note or "")[:160],
+                "path": str(path or ""),
+                "dim": str(dim or ""),
             }
-        if not self.cfg["breaker_enabled"] and kind not in ("soft", "login"):
+        if not switch_on("breaker_switch.enabled", plat=plat, dim=dim,
+                         path=path, fallback=self.cfg["breaker_enabled"]) \
+                and kind not in ("soft", "login"):
             # 未熔断，但把归因留在 Pacing 上（可见性不因开关而消失）：
             # 面板仍能说「这次是被验证码拦的」，只是不再宣称已熔断。
             with self._lock:
                 self._cause[str(plat)] = kind
             return "", 0
-        if kind == "soft" and not self.cfg.get("warmup_enabled"):
+        if kind == "soft" and not self.warmup_on(plat, dim, path=path):
             # 预热开关关闭（r626）：不置 needs_warmup。那个标志只有
             # note_warmup_ok()（预热成功）才会清，而预热被关掉就永远不执行
             # ——标记会**永久挂着**；等用户哪天重开预热，一个几小时前的软拒
@@ -1339,13 +2313,14 @@ class Pacing:
             # 面板仍能说「这轮是软拒」，只是不再要求一个被关掉的动作。
             # 不调 trip()：它的 soft 分支会置 needs_warmup，而预热被关掉
             # 之后没有任何代码会清它。这里只留归因。
-            self._breaker.mark_cause(str(plat), "soft")
+            self._breaker.mark_cause(str(plat), "soft", path=path)
             with self._lock:
                 self._cause[str(plat)] = "soft"
             return "soft", 0
         # 软拒不清 needs_warmup：预热成功（拿到风控 cookie）后由
         # note_warmup_ok() 清；否则下一轮继续先预热。
-        cd = self.trip(plat, kind, retry_after=retry_after)
+        cd = self.trip(plat, kind, retry_after=retry_after, note=note,
+                       path=path, dim=dim)
         self.note_trip(plat, kind, cd, retry_after)
         return kind, cd
 
@@ -1364,19 +2339,45 @@ class Pacing:
             _soft = sorted((rnd.get("soft_by") or {}).keys())
         channels = self._breaker.snapshot(now)
         with self._lock:
-            health = {k: dict(v) for k, v in self._health.items()}
+            health = {k[0]: dict(v) for k, v in self._health_all.items()
+                      if k[1] == "" and k[2] == ""}
+            health_dims, health_paths = {}, {}
+            for (p, d, pth), v in self._health_all.items():
+                if pth:
+                    health_paths.setdefault(p, {})["%s/%s" % (d, pth)] = dict(v)
+                elif d:
+                    health_dims.setdefault(p, {})[d] = dict(v)
             cause = dict(self._cause)
         # 熔断关闭时的归因（r625）：未熔断不等于没被拦。把它挂到通道上，
         # 界面才能说「这轮被验证码拦了，熔断已关」而不是一片正常。
         for p, k in cause.items():
             if p in channels and not channels[p].get("reason"):
                 channels[p]["blocked_but_open"] = k
+        for p, wsec in (self._chan_wait or {}).items():
+            if p in channels and wsec:
+                channels[p]["waited_s"] = wsec
+        for p, nres in (getattr(self, "_chan_resets", None) or {}).items():
+            if p in channels and nres:
+                channels[p]["resets"] = int(nres)
+        for p, sv in (getattr(self, "_sr_view", None) or {}).items():
+            if p in channels and sv:
+                channels[p]["sr"] = dict(sv)
         for p, b in self._bucket.snapshot(now).items():
             if p in channels:
                 channels[p]["bucket"] = b
         for p, h in health.items():
             if p in channels:
                 channels[p]["health"] = h
+        # 维度级成功率保护读数（r1063 T15）：界面据此说清「是哪个维度被降频」，
+        # 而不是只看到一个渠道级倍数。没有维度样本的渠道不出现这个键。
+        for p, hd in health_dims.items():
+            if p in channels and hd:
+                channels[p]["health_dims"] = hd
+        # 链路级成功率保护读数（r1063 T16）：键 `"维度/通路"`，例如
+        # `"detail/H5/API"`。策略面板据此逐链路显示「这一条被压到几倍」。
+        for p, hp in health_paths.items():
+            if p in channels and hp:
+                channels[p]["health_paths"] = hp
         return {
             "cfg": cfg,
             "quiet": {
@@ -1395,4 +2396,13 @@ class Pacing:
                           else None),
             },
             "plan": plan,
+            # 换跑道成效（r1063 T23）：预置次数 / 换道次数 / 回采条数。
+            # 面板与健康卡据此说「换道这轮救回了几条」，而不是只有一句"已启用"。
+            "failover": self._failover_view(channels),
+            # 耗时构成（r1063 T27）：墙钟 / 有效工作 / 空等占比。
+            # 提速先看这个：空等高 = 在等最慢的那家（栅栏），工作高 = 活真的多。
+            "timing": self.timing_stats(),
+            # 能力降级账本（r1063 T60）：fail-soft 的地方要留下可查的证据。
+            # 「能力悄悄关掉」≠「一切正常」——上轮的定位失效就藏在这里。
+            "degraded": _degraded_snapshot(),
         }

@@ -43,9 +43,13 @@ def test_readme_special_source_count_matches_code():
     cn = io.open(os.path.join(ROOT, "README.md"), encoding="utf-8").read()
     en = io.open(os.path.join(ROOT, "README_EN.md"), encoding="utf-8").read()
     assert _errors(cn, en) == [], _errors(cn, en)
-    # 负控：七源旧文案必须报错
-    assert _errors(cn.replace("九源官方特价", "七源官方特价", 1), en), (
+    # 负控：七源旧文案必须报错。
+    # **按当前源数取词**再替换——原来写死「九源」，源数一变（9→10）
+    # 替换就落空，负控恒过、形同虚设（2026-11-06 实际踩到）。
+    _n = _n_sources()
+    _cur_cn = "%s源官方特价" % CN_WORD[_n]
+    _cur_en = "%s official sources" % EN_WORD[_n]
+    assert _errors(cn.replace(_cur_cn, "七源官方特价", 1), en), (
         "负控失败：CN 七源没被拦")
-    assert _errors(cn, en.replace("nine official sources",
-                                  "seven official sources", 1)), (
+    assert _errors(cn, en.replace(_cur_en, "seven official sources", 1)), (
         "负控失败：EN 七源没被拦")

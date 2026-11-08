@@ -53,7 +53,8 @@ M = r"""() => {
 }"""
 
 REVERT = ("@media(max-width:560px){"
-          "#searchview .srx-hero-copy .srx-eyebrow{flex-wrap:nowrap!important}}")
+          "#searchview .srx-hero-copy .srx-eyebrow{flex-wrap:nowrap!important;"
+          "width:120px!important;max-width:120px!important;overflow:hidden!important}}")
 
 
 def _free_port():

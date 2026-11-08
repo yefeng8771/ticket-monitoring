@@ -296,6 +296,53 @@ def set_flight_route(dev, from_name: str, to_name: str, date_ymd: str,
         else:
             stable = 0
     if stable < 2:
+        # **冷启动落在首页时，先点「机票」宫格进表单**（2026-11-05 修）。
+        #
+        # 原实现假设「冷启动会恢复到上次停留的表单页」，找不到「机票查询」
+        # 就一路按 BACK —— 可实测冷启动常常直接落在 **首页**
+        # （`MainActivity`，241 个节点，有「机票」宫格但没有「机票查询」）。
+        # 这时按 BACK 只会把 App 退出去，越退越糟，最后报「首页未就绪」。
+        #
+        # 实测：首页「机票」在 (770,501)，点进去就是表单
+        # （出现 国内/国际/往返/多程 档位 + 城市位 + 「机票查询」）。
+        for _try in range(2):
+            tile = None
+            for m in re.finditer(r"<node[^>]*>", xml or ""):
+                tag = m.group(0)
+                t = re.search(r'text="([^"]*)"', tag)
+                ds = re.search(r'content-desc="([^"]*)"', tag)
+                s = ((t.group(1) if t else "")
+                     or (ds.group(1) if ds else "")).strip()
+                if s != "机票":
+                    continue
+                b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+                if not b:
+                    continue
+                y1 = int(b.group(2))
+                if y1 < 300:          # 顶部营销 banner 里的「机票」不要
+                    continue
+                cx = (int(b.group(1)) + int(b.group(3))) // 2
+                cy = (y1 + int(b.group(4))) // 2
+                if tile is None or cy < tile[1]:
+                    tile = (cx, cy)
+            if tile is None:
+                break
+            say("[zhixing] 首页点「机票」宫格 %s" % (tile,))
+            dev.tap(*tile)
+            stable = 0
+            for _f in range(6):
+                time.sleep(2.5)
+                xml = dev.dump()
+                if ("机票查询" in xml
+                        and "Search_Calendar_Dialog_Title" not in xml):
+                    stable += 1
+                    if stable >= 2:
+                        break
+                else:
+                    stable = 0
+            if stable >= 2:
+                break
+    if stable < 2:
         # App 会恢复到上次停留的弹层/子页（实测：卡在「选择日期」透明
         # Activity）。按返回键退出去比反复重启有效——实测一次返回即可。
         # 退到 6 级：重载弹层可能是两层（日历 + 城市），4 级会差一步。
@@ -306,8 +353,9 @@ def set_flight_route(dev, from_name: str, to_name: str, date_ymd: str,
             if "机票查询" in xml:
                 break
         else:
-            return False, ("首页未就绪（等 %d 帧 / 约 %ds 并回退 6 级仍找不到"
-                           "「机票查询」）" % (frames, int(time.time() - _t_first)))
+            return False, ("首页未就绪（等 %d 帧 / 约 %ds、点过宫格、"
+                           "回退 6 级仍找不到「机票查询」）"
+                           % (frames, int(time.time() - _t_first)))
 
     # 国际/国内是两个不同的表单：不切档就设国际城市，输入框里搜得到但
     # 首页城市位与结果页仍是国内那套，整轮白跑。切档放在设城市之前。
@@ -372,28 +420,62 @@ def set_flight_route(dev, from_name: str, to_name: str, date_ymd: str,
     return True, "已发起查询"
 
 
-def _city_row(ns, side: str):
-    """城市行：首页第二行左右两端各一个城市。
+_CITY_ROW_SKIP = (
+    # 模块宫格
+    "酒店", "民宿", "客栈", "机票", "火车票", "租车", "旅游", "门票",
+    "汽车票", "接送机", "跟团游", "打车", "国际酒店", "酒店套餐",
+    # 档位/筛选
+    "国内", "国际", "往返", "多程", "特价", "单程",
+    # 日期快捷
+    "今天", "明天", "后天", "周天", "周一", "周二", "周三", "周四",
+    "周五", "周六", "周日",
+)
 
-    实测首页布局：'上海'[74,472] 与 '北京'[826,472] 同一 y。判据是
-    **同一 y 上有两个中文名**——按固定 y 带取最左/最右曾被国际档打过：
-    国际表单多出的「返程日期」也在那条带里（cx=798，比窄城市名更靠右），
-    目的地会选中「返程日期」。改成先找"同行有两个候选"的 y 再取两端。
+
+def _city_row(ns, side: str):
+    """城市行：表单里左右两端各一个城市名。
+
+    **不再用写死的 y 带**（2026-11-05）。原判据是 `380 <= y <= 620`，
+    那是 900×1600 的实测带；设备换成 1260×2800 后这条带里坐的是
+    **模块宫格行**（酒店/民宿/机票/火车票，y≈501），于是"城市行"取到了
+    「酒店」→ 点下去切到酒店频道 → 城市页永远打不开，账本记
+    「设出发地失败：未进入城市选择页」。而真实城市行在 **y≈892**
+    （海口 137 / 上海 1123）。
+
+    新判据与分辨率无关：
+      1. 排除模块宫格/档位/日期这类**非城市名**；
+      2. 同一行至少两个候选，且**横向跨度要够大**（城市位分居左右两端，
+         实测跨度 ≈ 全宽 78%，而宫格行只有 ~66%）；
+      3. 取跨度最大的那一行，左端=出发、右端=到达。
     """
     cands = [n for n in ns
-             if 2 <= len(n.text) <= 4
-             and all("\u4e00" <= c <= "\u9fff" for c in n.text)]
+             if 2 <= len(n.text) <= 6
+             and all("\u4e00" <= c <= "\u9fff" for c in n.text)
+             and n.text not in _CITY_ROW_SKIP]
+    if not cands:
+        return None
+    max_x = max(n.cx for n in cands) or 1
     rows = {}
     for n in cands:
-        rows.setdefault(n.cy, []).append(n)
-    # 同一 y（±12px 容差）至少两个候选，才算城市行
-    for y in sorted(rows, key=lambda v: (v < 380, v)):
-        if not (380 <= y <= 620):
+        # ±12px 容差内并成一行
+        key = min((k for k in rows if abs(k - n.cy) <= 12),
+                  default=None, key=lambda k: abs(k - n.cy)) \
+            if any(abs(k - n.cy) <= 12 for k in rows) else n.cy
+        rows.setdefault(key, []).append(n)
+    best = None
+    for _y, group in rows.items():
+        if len(group) < 2:
             continue
-        same = sorted(rows[y], key=lambda n: n.cx)
-        if len(same) >= 2:
-            return same[0] if side == "from" else same[-1]
-    return None
+        group.sort(key=lambda n: n.cx)
+        span = group[-1].cx - group[0].cx
+        if span < max_x * 0.5:      # 城市位分居左右两端
+            continue
+        if best is None or span > best[0]:
+            best = (span, group)
+    if best is None:
+        return None
+    group = best[1]
+    return group[0] if side == "from" else group[-1]
 
 
 def _pick_city(dev, ns, name: str, side: str, log=None) -> tuple:
@@ -415,11 +497,19 @@ def _pick_city(dev, ns, name: str, side: str, log=None) -> tuple:
     time.sleep(3)
 
     xml = dev.dump()
-    ns2 = nodes(xml)
-    # 进入城市选择页的判据：出现搜索输入框，否则说明没跳转，直接失败
+    # 进入城市选择页的判据：**页面上有城市列表或有搜索框**。
+    # 实测（2026-11-06）有些版本的城市页根本没有 EditText（搜索框是文本
+    # 占位符），但「热门城市 / 常去-历史搜索」里就有目标城市。
+    # 原实现硬性要求搜索框，导致页面明明打开了却报"未进入城市选择页"。
     box = edit_box(xml)
     if box is None:
-        return False, "未进入城市选择页（没有搜索输入框）"
+        hit = city_result(xml, name)
+        if hit is None:
+            return False, "未进入城市选择页（既没有搜索框也没有城市列表）"
+        # 目标城市直接列在页面上 → 点它，省掉搜索这一步
+        dev.tap(hit.cx, hit.cy)
+        time.sleep(2)
+        return True, "从热门/历史直接选中"
     dev.tap(box.cx, box.cy)
     time.sleep(1)
     # 用中文输入；App 城市页支持中文搜索

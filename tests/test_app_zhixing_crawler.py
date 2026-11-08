@@ -180,12 +180,19 @@ def test_out_of_window_date_is_explained_not_silent():
 
     智行日历条只覆盖首屏约 7–8 天，配置里的远期日期永远命中 0 条。
     「这几天没价」是数据，「不在窗口内」是能力边界，处置完全不同。
+
+    2026-11-05 起这条由**更早的通用守卫** `reject_far_dates` 兜住
+    （所有 App 渠道共用，避免每条远期航线白耗 100–150 秒设备时间），
+    落账 path 随之从「日历」变成 `app-date`。断言按**意图**写：
+    必须存在一条 unsupported，且 detail 说清是"窗口/视野"问题。
     """
     c, _, _ = _make()
     out = c.safe_fetch("SHA", "BJS", ["2027-03-15"])
     assert out == []
-    rec = [p for p in c.paths if p["path"] == "日历"][-1]
-    assert "窗口外" in rec["detail"], rec["detail"]
+    unsup = [p for p in c.paths if p.get("status") == "unsupported"]
+    assert unsup, c.paths
+    rec = unsup[-1]
+    assert ("窗口外" in rec["detail"]) or ("视野" in rec["detail"]), rec["detail"]
 
 
 def test_try_long_calendar_signature_matches_callsite():

@@ -179,19 +179,33 @@ def test_detail_filter_shows_configured_unscanned_channel(page):
 
 
 def test_radar_form_declares_each_channel_capability(page):
+    from core.specials import SPECIAL_CAPABILITY
+
     _goto(page)
     page.evaluate("()=>{switchView('mon');showMonTab('specials');"
                   "srxRadarLoadFromUser(true);}")
     page.wait_for_function(
         "()=>{const el=document.getElementById('spRadarCaps');"
-        "return el&&/飞猪 App：未接入低价源/.test(el.textContent||'');}",
+        "return el&&/飞猪 App/.test(el.textContent||'');}",
         timeout=15000)
     text = page.evaluate(
         "()=>document.getElementById('spRadarCaps').textContent")
-    assert "飞猪 App：未接入低价源" in text, (
-        "雷达勾选区没有如实说明 app_fliggy 无发现源", text)
-    for name in ("携程", "去哪儿 App", "智行 App"):
+    # 每个渠道都得出现（勾选区不能对用户隐瞒"这个渠道参不参与"）
+    for name in ("携程", "去哪儿 App", "智行 App", "飞猪 App"):
         assert name in text, (name, text)
+    # **有发现源的渠道不得再被写成「未接入」**——反过来，没源的也必须写清楚。
+    # 2026-11-06 起 app_fliggy 的价格日历已接成真实源，旧断言正好写反了。
+    for plat, spec in SPECIAL_CAPABILITY.items():
+        from core.channels import plat_cn
+        name = plat_cn(plat)
+        if name not in text:
+            continue
+        if spec.get("sources"):
+            assert "%s：未接入低价源" % name not in text, (
+                "%s 已有发现源 %s，却仍被写成未接入" % (name, spec["sources"]))
+        else:
+            assert "%s：未接入低价源" % name in text, (
+                "%s 没有发现源，却没有如实说明" % name)
 
 
 def _src():

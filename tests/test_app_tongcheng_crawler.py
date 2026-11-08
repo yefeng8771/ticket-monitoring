@@ -176,21 +176,28 @@ def test_radar_deals_use_calendar_source(monkeypatch):
 
         def low_fare(self, fc, tc, days=14, anchor_ymd=""):
             calls.update(fc=fc, tc=tc, days=days, anchor=anchor_ymd)
+            _d0 = dt.date.today()
             return [
-                {"date": "2026-11-05", "price": 360.0},
-                {"date": "2026-11-09", "price": 400.0},
+                {"date": _d0.isoformat(), "price": 360.0},
+                # 区间外的一天，必须被过滤掉
+                {"date": (_d0 + dt.timedelta(days=4)).isoformat(),
+                 "price": 400.0},
             ]
 
     monkeypatch.setattr("crawlers.app_tongcheng.AppTongchengCrawler",
                         FakeCrawler)
+    # **用相对日期**：parse_query 拒绝"开始日期早于今天"，
+    # 写死具体日期会在跨过午夜后必然失败（2026-11-06 实际踩到）。
+    _t0 = dt.date.today()
     q = sr.parse_query({"from": "上海", "to": "北京",
-                        "start": "2026-11-05", "end": "2026-11-08",
+                        "start": _t0.isoformat(),
+                        "end": (_t0 + dt.timedelta(days=3)).isoformat(),
                         "channels": ["app_tongcheng"]})
     rows, st = sr._app_tongcheng_deals(q, logging.getLogger("tc_radar_test"))
     assert st["status"] == "ok", st
     assert calls == {"fc": "SHA", "tc": "BJS", "days": 4,
-                     "anchor": "2026-11-05"}, calls
-    assert [r.date for r in rows] == ["2026-11-05"], rows
+                     "anchor": _t0.isoformat()}, calls
+    assert [r.date for r in rows] == [_t0.isoformat()], rows
     r = rows[0]
     assert r.src == "app_tongcheng" and r.src_price == 360.0
     assert r.tax_included is None and r.price_basis_label == "口径未标注"

@@ -280,7 +280,13 @@ def test_safe_fetch_clears_stale_evidence(tmp_path):
     c.last_scene = {"png": "old"}
     c._last_page = object()
     assert c.safe_fetch("SHA", "PEK", ["2027-06-01"]) == []
-    assert c.paths == []
+    # 陈旧证据必须清干净（本轮 blocked/Retry-After/现场都不能复用），
+    # **但本轮自己的留痕要在**：§6.52 起 `_yield_note` 对"既没出数、
+    # 又一条通路都没记"的轮次补一条 `web-silent`（允许说不出原因，
+    # 不允许什么都不说）。异常轮次正属于这种——`fetch()` 在记任何通路前
+    # 就抛了，若不补这一条，这一轮在账本里完全无法归因。
+    assert [p.get("path") for p in c.paths] == ["web-silent"], (
+        "陈旧证据要清掉，但本轮自己的 web-silent 留痕必须在：%r" % (c.paths,))
     assert c.retry_after_s == 0
     assert c.last_block_url == ""
     assert c.last_block_api == ""

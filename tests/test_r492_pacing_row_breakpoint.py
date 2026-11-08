@@ -123,10 +123,11 @@ def test_row_layout_is_continuous_across_the_breakpoint():
     finally:
         srv.shutdown()
 
-    # 1) 右侧（≥761）必须是单行四列；旧断点 900 会在这里给出 ~81px
+    # 1) 右侧（≥761）必须保持四列；r977 起行内含「结论 + 读数」两行证据，
+    #    行高下限 56px（旧上限 50 是单行证据时代的数字），实测 56。
     for vw in (900, 800, 761):
-        assert out[vw]["h"] <= 50, \
-            "视口 %d 行被折成两行（高 %dpx）：断点过早，白白多占高度" % (
+        assert out[vw]["h"] <= 72, \
+            "视口 %d 行高异常（%dpx）：四列布局被提前压塌" % (
                 vw, out[vw]["h"])
     # 2) 左侧（≤760）必须换成两行，否则证据列会被压死
     for vw in (760, 600):

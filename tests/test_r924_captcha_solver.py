@@ -12,7 +12,7 @@
 简易算数 ``3+7=?``              纯文本解析（不依赖 OCR，最可靠）
 简易文字 ``AB12``               系统 OCR + cv2 预处理（原图/预处理取更长）
 几何滑块                        见 slider.py（边缘成对找缺口）
-强人机（极验 v4/天御/baxia/      **一律不做**，交人工
+强人机（极验 v4/天御/baxia/      按性价比**不投入**，交人工
 reCAPTCHA/点选/人脸）
 ============================  ==========================================
 
@@ -112,9 +112,20 @@ def test_classify_strong_is_not_solvable(html):
     assert k.name == "strong" and k.solvable is False
 
 
-def test_classify_click_is_not_solvable():
+def test_classify_click_is_solvable_only_with_a_detector(monkeypatch):
+    """点选题（r1063 T21 起）：**图像定位题**，有检测后端才可解。
+
+    旧契约是"点选一律不可解"，那属于限制性设计（用户要求清掉）。新契约把
+    判断绑定到后端是否真的可用：没有后端时仍然不可解——这样"可解"永远是
+    真话，不会出现「声称能解、实际点不了」。
+    """
+    monkeypatch.setattr(cp, "_det_backend", lambda: None)
     k = cp.classify_kind("请按顺序点击下方文字")
     assert k.name == "click" and k.solvable is False
+
+    monkeypatch.setattr(cp, "_det_backend", lambda: object())
+    k2 = cp.classify_kind("请按顺序点击下方文字")
+    assert k2.name == "click" and k2.solvable is True
 
 
 def test_classify_unknown():

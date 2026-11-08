@@ -190,17 +190,36 @@ def test_search_channel_chips_fit_phone_width(mobile_page):
     mobile_page.wait_for_timeout(1200)
     assert opened["showFilters"], "手机端「展开筛选」没生效"
     assert opened["boxW"] > 0, "手机端展开筛选后渠道快筛仍不可见"
+    # r1052：渠道快筛在窄档不再 10 家铺成 3~4 行，而是**单行横滑**
+    # （轨内 overflow-x:auto + 右缘渐隐）。因此“无横向溢出”不再是正确判据——
+    # 重要的是：单行、文字不裁、左端首家完整可见、滑到末尾末家完整可达、
+    # 容器自身不出视口、容器高度只有一行。
     out = mobile_page.evaluate("""(() => {
       const box=document.getElementById('srxPlats');
       if(!box) return {exists:false};
       const chips=[...box.querySelectorAll('.srx-chip')];
-      return {exists:true, boxW:Math.round(box.getBoundingClientRect().width),
+      const cs=getComputedStyle(box);
+      const tops=chips.map(c=>Math.round(c.getBoundingClientRect().top));
+      const rows=new Set(tops).size;
+      const boxR=box.getBoundingClientRect();
+      const first=chips[0]?chips[0].getBoundingClientRect():null;
+      const before={scrollW:box.scrollWidth,clientW:box.clientWidth,
+        rows, h:Math.round(boxR.height),
+        chipsH:chips.map(c=>Math.round(c.getBoundingClientRect().height)),
+        overflowX:cs.overflowX, wrap:cs.flexWrap,
+        mask:(cs.maskImage||cs.webkitMaskImage||'none')!=='none',
+        boxL:Math.round(boxR.left),boxR:Math.round(boxR.right),
+        firstL:first?Math.round(first.left):null};
+      box.scrollLeft=box.scrollWidth;
+      const last=chips.length?chips[chips.length-1].getBoundingClientRect():null;
+      const lastVisible=last?(last.right<=Math.round(boxR.right)+1&&last.left>=Math.round(boxR.left)-1):false;
+      box.scrollLeft=0;
+      return {exists:true, boxW:Math.round(boxR.width),
         n:chips.length,
         labels:chips.map(c=>(c.textContent||'').trim()),
         clipped:chips.filter(c=>c.scrollWidth>c.clientWidth+1).length,
-        outside:chips.filter(c=>{const r=c.getBoundingClientRect();
-          return r.left<-1||r.right>window.innerWidth+1}).length,
-        over:box.scrollWidth>box.clientWidth+1};
+        before, lastVisible,
+        scrollable:before.scrollW>before.clientW+1};
     })()""")
     if not out.get("exists"):
         pytest.skip("检索台未渲染渠道快筛")
@@ -208,9 +227,36 @@ def test_search_channel_chips_fit_phone_width(mobile_page):
     for name in BROWSERS + APPS:
         assert any(t.startswith(name) for t in out["labels"]), (
             "390 档检索台缺「%s」：%s" % (name, out["labels"]))
-    assert not out["over"], "390 档快筛一行溢出"
+    b = out["before"]
+    assert b["rows"] == 1, "390 档渠道快筛应单行，实为 %s 行" % b["rows"]
+    assert b["wrap"] == "nowrap", "390 档渠道快筛仍允许换行：%s" % b["wrap"]
+    assert b["overflowX"] in ("auto", "scroll"), "390 档渠道快筛不是可横滑轨：%s" % b["overflowX"]
+    # 单行高度：容器不高于一个 chip 太多（含内衬）
+    assert b["h"] <= max(b["chipsH"]) + 16, (
+        "390 档快筛容器高 %s 超过单行 chip 高 %s" % (b["h"], max(b["chipsH"])))
+    assert b["mask"], "390 档快筛缺少右缘渐隐提示"
+    assert b["boxL"] >= -1 and b["boxR"] <= 390 + 1, "390 档快筛容器越出视口：%s~%s" % (
+        b["boxL"], b["boxR"])
+    assert b["firstL"] is not None and b["firstL"] >= b["boxL"] - 1, "首家渠道被裁在左缘外"
+    assert out["scrollable"], "390 档 10 家渠道应超出一行并可横滑"
+    assert out["lastVisible"], "滑到末尾时末家渠道不可完整到达"
     assert out["clipped"] == 0, "390 档快筛文字被裁"
-    assert out["outside"] == 0, "390 档快筛越出视口"
+    # r1052b：渐隐随滚动位置换边——滑到末端必须撤掉右缘蒙层（否则最后
+    # 一家 chip 的文字仍被淡化）、改在左缘提示「前面还有」。
+    mobile_page.evaluate("""(() => {const b=document.getElementById('srxPlats');
+      b.scrollLeft=b.scrollWidth})()""")
+    mobile_page.wait_for_timeout(150)
+    end = mobile_page.evaluate("""(() => {
+      const b=document.getElementById('srxPlats');const cs=getComputedStyle(b);
+      return {cls:b.className, atEnd:b.scrollLeft+b.clientWidth>=b.scrollWidth-1,
+        mask:(cs.maskImage||cs.webkitMaskImage||'none')};
+    })()""")
+    assert end["atEnd"], "渠道快筛没能滑到末端"
+    assert "rail-fade-left" in end["cls"], "末端缺少左缘渐隐提示"
+    assert "rail-fade-right" not in end["cls"], "末端仍盖着右缘渐隐，最后一家文字会被淡化"
+    assert end["mask"] != "none", "末端左缘渐隐没有真正生效"
+    mobile_page.evaluate("""(() => {const b=document.getElementById('srxPlats');
+      b.scrollLeft=0})()""")
 
 
 def test_login_modal_fits_phone_viewport(mobile_page):

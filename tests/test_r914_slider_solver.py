@@ -155,9 +155,24 @@ def test_apply_trajectory_calls_move_and_tolerates_errors():
 # ---------------------------------------------------------------------------
 # 4. 预算 / 黑名单
 # ---------------------------------------------------------------------------
-def test_should_attempt_is_off_by_default():
+def test_should_attempt_is_on_by_default():
+    """r944：默认**允许尝试**简易题。
+
+    旧立场是"必须操作员显式打开"，实际结果是这套能力从没生效过
+    （配了不注册、注册了默认还是关的）。现在边界交给 `classify()` 的
+    分级守：`strong`/`unknown` 一律不碰，`simple` 默认就试。
+    """
     ok, why = slider.should_attempt("ctrip", {}, user_data_dir=".")
-    assert ok is False and "auto" in why
+    assert ok is True and why == "ok"
+
+
+def test_should_attempt_can_still_be_turned_off_explicitly():
+    """操作员仍要能一键退回纯人工——这是"默认开"而不是"不能关"。"""
+    for off in (False, "off", "false", "0"):
+        ok, why = slider.should_attempt(
+            "ctrip", {"slider": {"auto": off}}, user_data_dir=".")
+        assert ok is False, off
+        assert ("关闭" in why) or ("auto" in why)
 
 
 def test_daily_cap_and_two_strikes_blacklist(tmp_path):
@@ -300,12 +315,14 @@ def test_handler_ignores_strong_and_unknown(tmp_path):
     assert h.on_navigation(page2, _Ctx(body="")).handled is False
 
 
-def test_handler_respects_budget_switch(tmp_path):
-    h = slider.SliderHandler({}, user_data_dir=str(tmp_path), logger=_LOG)
+def test_handler_respects_explicit_off(tmp_path):
+    """显式关掉时必须一次都不拖（默认开不等于不能关）。"""
+    h = slider.SliderHandler({"slider": {"auto": False}},
+                             user_data_dir=str(tmp_path), logger=_LOG)
     page = _Page2('<div class="slide-verify">拖动滑块</div>', _png())
     out = h.on_navigation(page, _Ctx(body="拖动滑块"))
     assert out.handled is False
-    assert "auto" in out.detail
+    assert "auto" in out.detail or "关闭" in out.detail
     assert page.mouse.events == []
 
 

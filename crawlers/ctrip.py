@@ -12,6 +12,7 @@ import re
 import json
 import time
 import urllib.parse
+from contextlib import nullcontext
 from typing import List
 
 from core.models import FlightPrice, price_band_ok
@@ -159,16 +160,27 @@ class CtripCrawler(BaseCrawler):
         if is_intl_route(from_city, to_city):
             return self._fetch_intl(from_city, to_city, dates)
         results: List[FlightPrice] = []   # init 恢复（r324 协调）：ret_date 编辑曾连带吞行，生产 15:49 起 NameError 零落库
-        with self.browser() as ctx:
-            page = self.new_page(ctx)
+        # 链路闸门（r1063 T8）：H5 列表这条通路被策略停用/冷却时**只跳过
+        # 它**——下面的 PC 列表补采照常接手，不 return 整个查询。
+        # 闸门在**开浏览器之前**判（复核 2026-11-06）：全局同时只放
+        # `CHANNEL_GATE` 个渠道浏览器，被停用的通路白占一个名额，就是让
+        # 别的渠道干等。被跳过时不进 `self.browser()`（空上下文顶上），
+        # 下面的预热与逐日循环也随之不跑。
+        _h5_ok = self.path_gate("H5", "domestic")
+        if not _h5_ok:
+            self.logger.info("[ctrip] H5 通路被链路闸门跳过，直接走 PC 列表")
+        with (self.browser() if _h5_ok else nullcontext()) as ctx:
+            page = self.new_page(ctx) if _h5_ok else None
             # 首页预热：直捣机票页会被风控软拒（列表接口报服务器异常），
-            # 先访问 m.ctrip.com 首页让风控 JS 下发 cookie
+            # 先访问 m.ctrip.com 首页让风控 JS 下发 cookie。
+            # 闸门跳过 H5 时连预热都不打（预热本身就是一次真实请求）。
             try:
-                page.goto("https://m.ctrip.com/html5/", wait_until="domcontentloaded")
-                page.wait_for_timeout(4000)
+                if _h5_ok:
+                    page.goto("https://m.ctrip.com/html5/", wait_until="domcontentloaded")
+                    page.wait_for_timeout(4000)
             except Exception as e:
                 self.logger.warning("[ctrip] 预热失败: %s", e)
-            for date in dates:
+            for date in (dates if _h5_ok else []):
                 url = self._entry_url(from_city, to_city, date)
                 self.logger.info("[ctrip] GET %s", url)
                 captured = self.attach_xhr_collector(page, self.XHR_KEYS)
@@ -278,9 +290,12 @@ class CtripCrawler(BaseCrawler):
             try:
                 self.logger.info("[ctrip][dom] H5 缺 %d 日，补 PC 列表: %s",
                                  len(missing), ",".join(missing))
+                # 链路闸门（r1063 T8）在 `_fetch_intl_list_pc` 入口问一次
+                # （`dim="domestic"`）：被停用时它返回空，这里的 try/except
+                # 与既有「补采失败」同一条兜底，不牵连 H5 已出的行。
                 results.extend(self._fetch_intl_list(
                     from_city, to_city, from_city, to_city, missing,
-                    url_tpl=self.URL_LIST_DOM, label="国内"))
+                    url_tpl=self.URL_LIST_DOM, label="国内", dim="domestic"))
             except Exception as e:
                 self.logger.warning("[ctrip][dom] PC 列表补采失败: %s", e)
         return results
@@ -365,7 +380,8 @@ class CtripCrawler(BaseCrawler):
 
     def _fetch_intl_list(self, from_city: str, to_city: str,
                          fc: str, tc: str, dates: List[str],
-                         url_tpl: str = "", label: str = "国际") -> List[FlightPrice]:
+                         url_tpl: str = "", label: str = "国际",
+                         dim: str = "intl") -> List[FlightPrice]:
         """PC 列表入口的身份闸：这条路径必须用桌面 UA/视口。
 
         CtripCrawler 默认 use_mobile=True（H5 主路径）。PC 列表若沿用
@@ -373,19 +389,24 @@ class CtripCrawler(BaseCrawler):
         矛盾，实测 0 包/0 行——这不是"PC 没数据"，是拿错身份。这里只
         在 PC 路径内切桌面，返回后恢复，H5 路径与验证窗口仍按上报的
         mobile 标记复用同一身份。
+
+        `dim`（r1063 T8）只用于链路闸门的作用域：国内补采传
+        `domestic`、国际传 `intl`，于是 `渠道/维度/PC` 的停用/限速覆盖
+        只落在被点名的那一档上。
         """
         bak = self.use_mobile
         self.use_mobile = False
         try:
             return self._fetch_intl_list_pc(from_city, to_city, fc, tc,
                                             dates, url_tpl=url_tpl,
-                                            label=label)
+                                            label=label, dim=dim)
         finally:
             self.use_mobile = bak
 
     def _fetch_intl_list_pc(self, from_city: str, to_city: str,
                             fc: str, tc: str, dates: List[str],
-                            url_tpl: str = "", label: str = "国际") -> List[FlightPrice]:
+                            url_tpl: str = "", label: str = "国际",
+                            dim: str = "intl") -> List[FlightPrice]:
         """PC 国际列表：batchSearch/pull 捕获 → 行程行解析。
 
         profile 未登录时 data.needUserLogin=true 且无行程——置
@@ -393,6 +414,11 @@ class CtripCrawler(BaseCrawler):
         补量，行结构与 batchSearch 同构，解析器同源。
         """
         results: List[FlightPrice] = []
+        # 链路闸门（r1063 T8）：PC 列表被策略停用/冷却时**只跳过这条通路**
+        # ——返回空，调用方把缺日交给日历（国际）或就此收尾（国内补采），
+        # 不 return 整个查询、也不启浏览器白撞一次风控。
+        if not self.path_gate("PC", dim):
+            return results
         with self.browser() as ctx:
             warm = self.new_page(ctx)
             try:
@@ -686,6 +712,10 @@ class CtripCrawler(BaseCrawler):
         """
         from core.multicity import MultiCityError, normalize_segments
         from .ctrip_multicity import build_multi_url, parse_multi_text
+        # 链路闸门（r1063 T8）：多程这条通路被策略停用时如实返回空
+        # （它的入口在轮尾，停它就是这轮不采多程，不牵连单程/往返）。
+        if not self.path_gate("多程", "multi_city"):
+            return []
         try:
             segs = normalize_segments(segments)
         except MultiCityError as e:
@@ -742,6 +772,10 @@ class CtripCrawler(BaseCrawler):
                   airport_city_code(to_city.upper()))
         intl = is_intl_route(from_city, to_city)
         results: List[FlightPrice] = []
+        # 链路闸门（r1063 T8）：往返这条通路被策略停用时如实返回空
+        # （不启浏览器、不拿单程价冒充往返）。
+        if not self.path_gate("往返", "round_trip"):
+            return results
         bak = self.use_mobile
         self.use_mobile = False
         try:
@@ -1138,6 +1172,10 @@ class CtripCrawler(BaseCrawler):
         （宁缺勿错）。日历无时刻语义：depTime/arrTime 结构化占位
         空串（飞猪/同程日历行律），intl=1 直接落键（无 tz 可戳）。"""
         results: List[FlightPrice] = []
+        # 链路闸门（r1063 T8）：日历这条通路被策略停用时如实返回空
+        # ——它是国际的最后一条价源，停它就是本轮这一天没价，不伪造。
+        if not self.path_gate("日历", "intl"):
+            return results
         with self.browser() as ctx:
             page = self.new_page(ctx)
             try:

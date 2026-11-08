@@ -7,6 +7,7 @@ Qunar/Tongcheng 尚无已验证的自定义航线日历，返回 not_connected�
 """
 import hashlib
 import re
+import threading
 import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
@@ -15,6 +16,8 @@ from core.citydata import CITY, CODE_NAME
 from core.intl import (INTL_CITY_HOT, INTL_CITY_NAME, INTL_CITY_SHORT,
                        airport_city_code)
 from core.models import PRICE_MAX
+# 「链路被策略停用」的唯一词面（与闸门同一个常量，别在这里抄一句中文）
+from core.pacing import PATH_DISABLED
 from core.specials import (
     SPECIAL_CAPABILITY,
     SpecialDeal,
@@ -24,6 +27,10 @@ from core.specials import (
     deals_from_fliggy_board,
     deals_from_tuniu,
 )
+# 闸门等待封顶（铁律 I6）：与采集器同一个常量，不在雷达里另抄一份数字。
+# `crawlers.base` 早被 `crawlers.special` 拉进来（`profile_headers`），
+# 这里没有新增依赖。
+from crawlers.base import PATH_GATE_SLEEP_CAP_S
 from crawlers.special import (
     fetch_ctrip_board,
     fetch_ctrip_calendar,
@@ -63,6 +70,226 @@ _FLIGGY_TIMEOUT_RATIO = 0.9
 # 价格口径词面（来源可核实才标含税/裸价，其余一律未知）
 _BASIS_LABEL = {"tax_included": "含税总价", "bare": "裸价不含税",
                 "unknown": "口径未标注"}
+
+# ── 链路闸门 + 每源预算（r1063 T11）───────────────────────────────────
+#
+# 四个浏览器发现源（携程/飞猪/途牛/同程）在**真外发之前**先问一次链路闸门
+# （`core.pacing.Pacing.gate_path`），各源另有一个秒级预算。雷达不是法外
+# 之地：它打的是同一批上游（m.ctrip.com / r.fliggy.com / wx.17u.cn /
+# flight-api.tuniu.com），操作员在策略里停用某家的低价日历，要的就是
+# 「这家别再打了」；雷达绕过去，等于闸门只在采集器那一侧成立。
+#
+# 链路 id 用 `core/channels.PATH_CN` 里的**真实通路名**：这四家源就是该家
+# 的**低价日历**通路，所以 `dim` 恒为 `low_fare`、`path` 用 `日历`。于是
+# `crawler.strategy_overrides` 里的 `tongcheng/low_fare/日历` 这一条同时管住
+# 采集器的日历和雷达的发现源——同一件事只有一个开关，不为雷达另造一条
+# 能力矩阵里不存在的通路 id。
+_RADAR_DIM = "low_fare"
+_RADAR_PATH = "日历"
+# 预算 pid：`core/strategy_contract.py` 里登记的名字是 `budget.fetch_s`
+# （cfg `android.fetch_budget_s`，默认 540 秒，0 = 不限）。T11 的 brief 把它
+# 写作 `budget.value`——那是改名前的叫法，仓里**没有**这个 pid，直接
+# `resolve("budget.value")` 会当场 KeyError。这里读契约里的真名；契约默认值
+# 只在本文件兜底一份，参数层读不到就按它算，绝不让雷达因参数层异常而停采。
+_BUDGET_PID = "budget.fetch_s"
+_BUDGET_DEFAULT_S = 540.0
+# 闸门上下文：懒建一次、进程内复用（建不出来就是 None，闸门按放行处理）。
+# 加锁做双检（复核第一轮）：雷达在 webui 的多线程请求里跑，无锁懒建会让
+# 并发首调各造一个 `Pacing`，链路桶的账立刻分家——「刚发过」只记在其中
+# 一份里，限速于是失效。
+_RADAR_PACING = None
+_RADAR_PACING_LOCK = threading.Lock()
+
+
+def _pacing_ctx():
+    """雷达共享的链路闸门上下文（懒建一次，之后复用）。
+
+    与采集器各持一份 `Pacing` 不同，雷达手上没有 crawler 实例、也没有配置
+    文件（`build_radar` 的签名不接 cfg），所以按 `Pacing({})` 的出厂值建：
+    真正生效的速率与停用值来自**参数层**（`Pacing._param` →
+    `strategy_params.resolve`，每次判定现读），本实例 cfg 只在参数层查不到
+    时兜底。
+
+    闸门是外发的必经路径：建不出来只能放行（并让调用方留痕），在这里抛
+    异常等于把整个特价雷达停掉。
+    """
+    global _RADAR_PACING
+    pac = _RADAR_PACING            # 快路径：只读一次属性，不加锁
+    if pac is not None:
+        return pac or None
+    with _RADAR_PACING_LOCK:
+        if _RADAR_PACING is None:
+            try:
+                from core.pacing import Pacing
+                _RADAR_PACING = Pacing({})
+            except Exception:
+                _RADAR_PACING = False    # 失败只试一次，别每次调用都重建
+        return _RADAR_PACING or None
+
+
+def _gate_path(plat, logger=None, *, grab=True):
+    """这条发现源**能不能发**：能 → `""`；不能 → 停用/冷却的完整原因。
+
+    口径与采集器的 `path_gate()` 一致（`crawlers/base.py`），只做三件事：
+    **等要给闸门、等待封顶、只记链路桶**。
+
+    * 被拒只跳**这一条源**，调用方不许用它 `return` 整个查询、也不许记
+      `error`（那是「对方拒绝」）。拿到的原因交给 `_paced_reject` 拼成
+      「我方按策略克制」的 `unsupported`。
+    * 等待封顶 `PATH_GATE_SLEEP_CAP_S`（铁律 I6），且不在锁内睡。
+    * 记账**只写 `渠道|链路` 桶**（`channel=False`）：渠道桶由调度按轮记，
+      这里再记一次就是重复计数（`per_minute` 半减、`min_gap` 翻倍）。
+
+    `grab=False` 是**只问不动账**（复核第一轮）：缓存命中那一轮没有任何
+    外发，既不该写链路桶，也不该为一个发不出去的请求去等一趟限速。
+
+    调用点位置：有缓存的源（飞猪/途牛/同程/去哪儿）在**缓存命中之后**才
+    `grab`；携程没有缓存，闸门就在函数最前面。
+    """
+    pac = _pacing_ctx()
+    if pac is None:
+        return ""
+    try:
+        allow, wait_s, why = pac.gate_path(plat, _RADAR_DIM, _RADAR_PATH)
+    except Exception as e:
+        if logger is not None:
+            logger.warning("[特价雷达·%s] 链路闸门判定失败（%s）：按放行处理",
+                           plat, e)
+        return ""
+    if not allow:
+        return str(why or PATH_DISABLED)
+    if not grab:
+        return ""
+    try:
+        wait = float(wait_s or 0)
+    except (TypeError, ValueError):
+        wait = 0.0
+    if wait > 0:
+        time.sleep(min(wait, PATH_GATE_SLEEP_CAP_S))
+    try:
+        pac.record(plat, path=_RADAR_PATH, channel=False)
+    except TypeError:      # 旧签名不认 channel= ：宁可少记一次，也别重复计数
+        pass
+    except Exception:
+        pass
+    return ""
+
+
+def _paced_reject(plat, note, dim="", path=""):
+    """被链路闸门挡下时的统一返回：`unsupported` + 「我方按策略克制」。
+
+    `paced` 的语义是「**我方**按策略克制、没发请求」，与 `error`（对方拒绝）
+    和 `empty`（确实没有低价）是三件不同的事，处置方向也完全不同。所以：
+
+    * **不许**写成 0 行/`empty`（那是「这家没低价」，本仓库定义的最严重
+      静默缺陷），也**不许**写 `error`（那是对方拒绝）；
+    * 状态字沿用面板已有的 `unsupported`（`SRX_RADAR_ST` → 「不支持」），
+      `paced=True` 单独标出来；
+    * 理由句里必须带**渠道与链路**（`scope`），否则面板只报一句「被停用」，
+      操作员定位不到是哪条路（复核第一轮）。
+    """
+    scope = "/".join([x for x in (str(plat or ""), str(dim or ""),
+                                  str(path or "")) if x])
+    detail = str(note or "").strip() or PATH_DISABLED
+    return [], _status(
+        "unsupported",
+        "我方按策略克制：%s 没有发请求（%s）；不是对方拒绝，也不是无票"
+        % (scope or "该链路", detail),
+        paced=True, plat=plat, dim=dim, path=path)
+
+
+def _cache_with_gate(hit, plat, logger=None):
+    """缓存命中时只**问**一次闸门（不动账、不睡）：把「这条链路现在被停用」
+    写进 `reason`。
+
+    为什么要标（复核第一轮）：`_cache_get` 会把 180 秒内的成功结果连同当时
+    的状态一起复用，面板于是看到一份**旧数据**却仍显示「可用」。链路刚被
+    停用时，读者会以为停用没生效。这里补一句「已被停用 + 缓存复用」，并置
+    `stopped_now=True`，让「旧数据」与「还在跑」在面板上区分得开。
+    """
+    rows, st = hit
+    why = _gate_path(plat, logger, grab=False)
+    if not why:
+        return rows, st
+    st = dict(st)
+    base = str(st.get("reason") or "").strip()
+    st["reason"] = ((base + "；") if base else "") + (
+        "该链路现已被策略停用（%s），本条为缓存复用，不是本轮新采" % why)
+    st["stopped_now"] = True
+    return rows, st
+
+
+def _on(pid: str, plat: str = "") -> bool:
+    """读一条策略的 `enabled` 开关（r1063 T12c），**缺省 True＝今天的行为**。
+
+    雷达这一侧管两条：`budget`（单源预算还生效不生效）与 `proxy_route`
+    （这家渠道还走不走配置的出口）。读不懂按开启处理：一个拼错的 `flase`
+    静默把预算关掉，就是「配了不生效」最难查的那一类。
+    """
+    try:
+        from core import strategy_params as sp
+        got = sp.resolve(str(pid), plat=str(plat or "")).value
+    except Exception:               # 参数层不可用：按开启处理（缺省即旧行为）
+        return True
+    if isinstance(got, bool):
+        return got
+    if isinstance(got, (int, float)):
+        return bool(got)
+    text = str(got).strip().lower()
+    if not text:
+        return True
+    if text in ("1", "true", "yes", "on", "y", "是", "开"):
+        return True
+    if text in ("0", "false", "no", "off", "n", "否", "关"):
+        return False
+    return True
+
+
+def _budget_s(plat) -> float:
+    """该渠道发现源的**单源**秒级预算；`0` = 不限（与 Android 采集同口径）。
+
+    `budget.enabled` 关掉 → 一律按 `0`（不限时）返回：预算这条策略不生效 =
+    这一趟扫描不设截止时刻（不是"用默认值"——默认值也会截止，那是另一回事）。
+    """
+    if not _on("budget.enabled", plat):
+        return 0.0
+    try:
+        from core import strategy_params as sp
+        v = float(sp.resolve(_BUDGET_PID, plat=str(plat or "")).value)
+    except Exception:
+        return float(_BUDGET_DEFAULT_S)
+    return max(0.0, v)
+
+
+def _budget_deadline(budget_s) -> float:
+    """预算截止时刻；`0` = 不限（所有判定都要先看这个 0 值）。"""
+    try:
+        b = float(budget_s or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return (time.time() + b) if b > 0 else 0.0
+
+
+def _budget_hit(deadline) -> bool:
+    """预算是否已用完。`0`（不限）**恒为 False**——别让「没配预算」变成
+    「立刻收工」，那会把没配的东西读成全部停采。"""
+    return bool(deadline) and time.time() >= float(deadline)
+
+
+def _budget_reject(plat, rows, budget_s, extra=""):
+    """预算耗尽时的统一返回：`timeout` + 「预算耗尽」，已采到的行照常返回。
+
+    丢掉刚拿到的行是另一种静默损失；状态单独成 `timeout`，理由里写清这
+    是**我方**的上限——不是对方拒绝，更不能据此说「没有票」。
+    """
+    out = list(rows or [])
+    why = ("预算耗尽：%s 单源预算 %ds 用完，提前收工（已采 %d 行）；"
+           "这是我方的预算上限，不是对方拒绝，也不能据此判断有没有票"
+           % (plat, int(budget_s or 0), len(out)))
+    if extra:
+        why += "；" + str(extra)
+    return out, _status("timeout", why, len(out), partial=bool(out),
+                        budget_s=int(budget_s or 0))
 
 
 
@@ -261,15 +488,32 @@ def _cache_get(cache: dict, key, ttl: float = _RADAR_CACHE_TTL):
 
 
 def _ctrip_deals(q: RadarQuery, logger, proxy) -> tuple:
+    """携程发现源：全国模式走特价榜，单航线走低价日历。
+
+    入口先问链路闸门（r1063 T11）：`ctrip/low_fare/日历` 被策略停用时整源
+    报 `unsupported`+「被策略停用」，不伪装成 0 行。预算（`budget.fetch_s`）
+    在**每次外发前**判：全国榜要连打多个 30 天窗，超预算就带着已采到的行
+    提前收工并报 `timeout`+「预算耗尽」。
+    """
+    why = _gate_path("ctrip", logger)
+    if why:
+        return _paced_reject("ctrip", why, _RADAR_DIM, _RADAR_PATH)
+    budget_s = _budget_s("ctrip")
+    deadline = _budget_deadline(budget_s)
     if q.nationwide:
         rows = []
         w = q.start
         while w <= q.end:
+            if _budget_hit(deadline):
+                return _budget_reject("ctrip", rows, budget_s)
             e = min(q.end, w + timedelta(days=30))
             payload = fetch_ctrip_board(q.from_code, q.from_name,
                                         w.isoformat(), e.isoformat(),
                                         logger, proxy=proxy)
             if payload is None:
+                if _budget_hit(deadline):
+                    return _budget_reject("ctrip", rows, budget_s,
+                                          "本节外发结束时预算已用完")
                 return [], _status("error", "全国榜请求失败")
             rows.extend(deals_from_ctrip_board(
                 payload, _watch(q, _RADAR_MAX_DAYS), date.today()))
@@ -278,6 +522,9 @@ def _ctrip_deals(q: RadarQuery, logger, proxy) -> tuple:
     payload = fetch_ctrip_calendar(q.from_code, q.to_code,
                                    q.start.isoformat(), logger, proxy=proxy)
     if payload is None:
+        if _budget_hit(deadline):
+            return _budget_reject("ctrip", [], budget_s,
+                                  "本次外发结束时预算已用完")
         return [], _status("error", "低价日历请求失败")
     days = (q.end - date.today()).days + 2
     rows = ctrip_calendar_deals(payload, q.from_code, q.to_code, q.to_name,
@@ -313,15 +560,26 @@ def _fliggy_deals(q: RadarQuery, logger, proxy) -> tuple:
     """飞猪单航线 cheapestCalendar（国内/国际同源，含税价）：一次返回
     leaveDate 起 7 天，按 7 天窗口滚动；最多 5 次（35 天）避免对源
     短窗连打。任一窗口不可用不伪造；超窗如实标注 requested/covered
-    天数；软拒回退榜单须标 partial/fallback 并进入冷却。"""
+    天数；软拒回退榜单须标 partial/fallback 并进入冷却。
+
+    r1063 T11：缓存/冷却之后、第一次外发之前问链路闸门（命中缓存的这一轮
+    不碰上游：只问不动账、不等限速，被停用时在 reason 里注明「缓存复用」）；
+    每轮 7 天窗**和回退榜单的每一窗**前都判预算，超预算就带着已采行收工并
+    报 `timeout`+「预算耗尽」，不再继续打源。
+    """
     global _FLIGGY_COOLDOWN_UNTIL
     key = _cache_key(q)
     profile_hash = _profile_hash(q)
     hit = _cache_get(_FLIGGY_CACHE, key)
     if hit:
-        return hit
+        return _cache_with_gate(hit, "fliggy", logger)
     if time.time() < _FLIGGY_COOLDOWN_UNTIL:
         return [], _status("error", "飞猪限流冷却中（60 秒），稍后重试")
+    why = _gate_path("fliggy", logger)
+    if why:
+        return _paced_reject("fliggy", why, _RADAR_DIM, _RADAR_PATH)
+    budget_s = _budget_s("fliggy")
+    deadline = _budget_deadline(budget_s)
     rows = []
     seen = set()
     w = q.start
@@ -330,7 +588,11 @@ def _fliggy_deals(q: RadarQuery, logger, proxy) -> tuple:
     fail_kinds = set()
     failed = 0
     calls = 0
+    budget_cut = False
     while w <= q.end and calls < 5:
+        if _budget_hit(deadline):
+            budget_cut = True
+            break
         if calls:
             time.sleep(1.0)   # 源短窗连打会软拒（65B success:false）
         calls += 1
@@ -395,11 +657,24 @@ def _fliggy_deals(q: RadarQuery, logger, proxy) -> tuple:
         partials.append("飞猪日历仅覆盖 %d/%d 天（单次最多 5 个 7 天窗）"
                         % (covered_days, requested_days))
     partial = "；".join(partials)
+    if budget_cut:
+        # 预算用完就**连回退榜单那一次外发也不做**（回退同样是打源）。
+        # 覆盖天数的实话照样带上，别让读者以为跑满了 5 个窗。
+        return _budget_reject("fliggy", rows, budget_s, partial)
     if not rows and failed:
-        # 国内出发榜与日历不同端点：日历不可用时回退榜单（仍按航线过滤）
+        # 国内出发榜与日历不同端点：日历不可用时回退榜单（仍按航线过滤）。
+        # **回退循环同样要判预算**（复核第一轮 Important）：日历 5 个 7 天窗
+        # 已经把预算吃光时，原来这里还会接着打 4 次榜（实测 t=83/98/113/128），
+        # 最后把「我方预算用完」报成 `error`（「网络超时…稍后重试」）——既继续
+        # 烧请求，又把我们的上限说成对方的失败。
         board_rows = []
         w = q.start
         while w <= q.end:
+            if _budget_hit(deadline):
+                return _budget_reject(
+                    "fliggy", board_rows, budget_s,
+                    ((partial + "；") if partial else "")
+                    + "回退国内出发榜中途预算用完，剩余窗口未采")
             e = min(q.end, w + timedelta(days=6))
             payload = fetch_fliggy_board(q.from_code, w.isoformat(),
                                          e.isoformat(), logger, proxy=proxy)
@@ -417,6 +692,13 @@ def _fliggy_deals(q: RadarQuery, logger, proxy) -> tuple:
                 window_limit=5)
             _cache_put(_FLIGGY_CACHE, key, board_rows, st, profile_hash)
             return board_rows, st
+        if _budget_hit(deadline):
+            # 榜单跑完但没数、且预算已耗尽：仍然是我们到点收工，不是对方
+            # 拒绝——也别顺手把 60 秒冷却挂上（那不是源的行为）。
+            return _budget_reject(
+                "fliggy", board_rows, budget_s,
+                ((partial + "；") if partial else "")
+                + "回退国内出发榜未出数且预算已用完")
         _FLIGGY_COOLDOWN_UNTIL = time.time() + _FLIGGY_COOLDOWN_S
         return [], _status("error",
                            (partial or "飞猪日历不可用") + "，稍后重试",
@@ -433,7 +715,12 @@ def _fliggy_deals(q: RadarQuery, logger, proxy) -> tuple:
 
 def _tuniu_deals(q: RadarQuery, logger, proxy) -> tuple:
     """途牛国内走官方单航线日历（裸价，不含税）；国际无官方日历，不用
-    国内出发榜冒充。国内日历失败才回退榜单，且回退原因必须随行。"""
+    国内出发榜冒充。国内日历失败才回退榜单，且回退原因必须随行。
+
+    r1063 T11：国际档先回「渠道不供国际日历」这个**能力事实**（本来就不
+    外发，不必过闸门），国内档在缓存之后问闸门；回退榜单是**第二次外发**，
+    动手前先判预算，超预算就报 `timeout`+「预算耗尽」而不是继续打。
+    """
     from core.intl import is_intl_route
     if is_intl_route(q.from_code, q.to_code):
         return [], _status(
@@ -443,7 +730,12 @@ def _tuniu_deals(q: RadarQuery, logger, proxy) -> tuple:
     profile_hash = _profile_hash(q)
     hit = _cache_get(_TUNIU_CACHE, key)
     if hit:
-        return hit
+        return _cache_with_gate(hit, "tuniu", logger)
+    why = _gate_path("tuniu", logger)
+    if why:
+        return _paced_reject("tuniu", why, _RADAR_DIM, _RADAR_PATH)
+    budget_s = _budget_s("tuniu")
+    deadline = _budget_deadline(budget_s)
     days = fetch_tuniu_calendar(q.from_code, q.to_code,
                                 q.start.isoformat(), logger, proxy=proxy)
     if days is not None:
@@ -473,8 +765,15 @@ def _tuniu_deals(q: RadarQuery, logger, proxy) -> tuple:
         if rows:
             _cache_put(_TUNIU_CACHE, key, rows, st, profile_hash)
         return rows, st
+    # 回退榜单是**第二次外发**：预算用完就停手，别再打第二个端点。
+    if _budget_hit(deadline):
+        return _budget_reject("tuniu", [], budget_s,
+                              "国内日历未出数，回退榜单那一次没有再发")
     payload = fetch_tuniu_board(logger, proxy=proxy)
     if payload is None:
+        if _budget_hit(deadline):
+            return _budget_reject("tuniu", [], budget_s,
+                                  "回退榜单未出数且预算已用完")
         return [], _status(
             "error", "途牛国内日历请求失败，回退榜单亦失败")
     rows = deals_from_tuniu(payload, _watch(q, _RADAR_MAX_DAYS), date.today())
@@ -504,7 +803,12 @@ def _tongcheng_deals(q: RadarQuery, logger, proxy) -> tuple:
     """同程 H5 低价日历：一次同步返回 90/180 天窗口（无登录/签名）。
     anchor 不可为今天（渠道 code=5）；区间按查询范围过滤。渠道
     code=5（非法航线/超窗）由 crawler 映射为空表，此处标 unsupported
-    并写明边界，不写成 empty。同条件成功结果短 TTL 缓存。"""
+    并写明边界，不写成 empty。同条件成功结果短 TTL 缓存。
+
+    r1063 T11：缓存之后问闸门；这个源**只有一个外发点**，所以预算只能
+    在事后判——外发结束时预算已用完，就把「不知道对方有没有」如实报成
+    `timeout`+「预算耗尽」，而不是拿 `error` 冒充对方拒绝。
+    """
     anchor = q.start
     if anchor <= date.today():
         anchor = date.today() + timedelta(days=1)
@@ -514,12 +818,20 @@ def _tongcheng_deals(q: RadarQuery, logger, proxy) -> tuple:
     profile_hash = _profile_hash(q)
     hit = _cache_get(_TONGCHENG_CACHE, key)
     if hit:
-        return hit
+        return _cache_with_gate(hit, "tongcheng", logger)
+    why = _gate_path("tongcheng", logger)
+    if why:
+        return _paced_reject("tongcheng", why, _RADAR_DIM, _RADAR_PATH)
+    budget_s = _budget_s("tongcheng")
+    deadline = _budget_deadline(budget_s)
     days = fetch_tongcheng_calendar(
         q.from_code, q.from_name or CODE_NAME.get(q.from_code, q.from_code),
         q.to_code, q.to_name or CODE_NAME.get(q.to_code, q.to_code),
         anchor.isoformat(), logger, proxy=proxy)
     if days is None:
+        if _budget_hit(deadline):
+            return _budget_reject("tongcheng", [], budget_s,
+                                  "本次外发结束时预算已用完")
         return [], _status("error", "同程低价日历请求失败")
     rows = []
     for d in days:
@@ -555,7 +867,12 @@ _QUNAR_COOLDOWN_UNTIL = 0.0
 def _qunar_deals(q: RadarQuery, logger, proxy,
                  user_data_dir: str = "user_data") -> tuple:
     """去哪儿官方 H5 低价日历：加载官方特价页，由页面 JS 生成签名，
-    只读取真实 getFlightCalendar 响应。"""
+    只读取真实 getFlightCalendar 响应。
+
+    r1063 T11（复核第一轮补）：这是雷达**第五个真外发的浏览器源**——它要
+    开一次页面会话才拿得到签名，比纯 httpx 的四个源更贵，所以同样要过闸门
+    与预算；停掉 `qunar/low_fare/日历` 后雷达不许再打它。
+    """
     global _QUNAR_COOLDOWN_UNTIL
     from urllib.parse import quote
     from crawlers.qunar import QunarCrawler
@@ -563,16 +880,26 @@ def _qunar_deals(q: RadarQuery, logger, proxy,
     profile_hash = _profile_hash(q, user_data_dir)
     hit = _cache_get(_QUNAR_CACHE, key)
     if hit:
-        return hit
+        return _cache_with_gate(hit, "qunar", logger)
     if time.time() < _QUNAR_COOLDOWN_UNTIL:
         return [], _status(
             "error", "去哪儿低价页风控冷却中（10 分钟），稍后重试")
+    why = _gate_path("qunar", logger)
+    if why:
+        return _paced_reject("qunar", why, _RADAR_DIM, _RADAR_PATH)
+    budget_s = _budget_s("qunar")
+    deadline = _budget_deadline(budget_s)
     dep = q.from_name or CODE_NAME.get(q.from_code, q.from_code)
     arr = q.to_name or CODE_NAME.get(q.to_code, q.to_code)
     obj = QunarCrawler.fetch_low_price_calendar(
         dep, arr, q.start.isoformat(), q.end.isoformat(),
         logger, timeout=22.0, proxy=proxy, profile_root=user_data_dir)
     if obj is None:
+        # 单外发点：预算已用完就报 `timeout`+「预算耗尽」，别拿 `error`
+        # 冒充对方拒绝（还会顺手把 10 分钟风控冷却挂上，双重误导）。
+        if _budget_hit(deadline):
+            return _budget_reject("qunar", [], budget_s,
+                                  "本次外发结束时预算已用完")
         _QUNAR_COOLDOWN_UNTIL = time.time() + 600
         return [], _status(
             "error", "去哪儿低价页未返回数据（页面签名风控或加载超时）")
@@ -604,6 +931,21 @@ def _qunar_deals(q: RadarQuery, logger, proxy,
     if rows:
         _cache_put(_QUNAR_CACHE, key, rows, st, profile_hash)
     return rows, st
+
+
+def _app_paced_reject(plat, note, path="low-fare"):
+    """App 源被 T9 的链路闸门挡下（账本记 `paced`）→ 单独成一档。
+
+    薄壳：口径与浏览器源的 `_paced_reject` 完全一致（复核第一轮要求两个
+    helper 合成一个），这里只固定 App 侧的维度/通路（`low_fare` / `low-fare`）。
+
+    `paced` 的语义是「**我方**按策略克制、没发请求」，与 `error`（对方
+    拒绝）和 `empty`（确实没有低价）是三件不同的事，处置方向也完全不同：
+    T9 落地后账本里第一条非 ok 的记录一律被读成「有 note 就是失败」，于是
+    停用 App 低价在特价面板显示「失败」，把人引去查风控（`_app_zhixing_deals`
+    更糟：显示成「无日期价」）。
+    """
+    return _paced_reject(plat, note, _RADAR_DIM, path)
 
 
 def _app_qunar_deals(q: RadarQuery, logger) -> tuple:
@@ -668,6 +1010,9 @@ def _app_qunar_deals(q: RadarQuery, logger) -> tuple:
             note = str(pth.get("detail") or pth.get("status") or "")
             pstatus = str(pth.get("status") or "")
             break
+    if not out and pstatus == "paced":
+        # 我方按策略克制（T9 闸门跳过），不是失败、也不是没票。
+        return _app_paced_reject("app_qunar", note)
     if not out and pstatus == "unsupported":
         # 通路本身接不上（结果页变 WebView / 产品下线）：既不是网络错误，
         # 也不是「当天没低价」。记 not_connected，前端按未接通展示原因。
@@ -721,11 +1066,17 @@ def _app_ctrip_deals(q: RadarQuery, logger) -> tuple:
             price_basis_label="口径未标注"))
     note, pstatus = "", ""
     for pth in getattr(crawler, "paths", []) or []:
-        if pth.get("path") in ("app-calendar", "android-ocr", "app-login") \
+        # `low-fare` 也在这里看：本源调的是 `crawler.low_fare()`，它被 T9 的
+        # 闸门跳过时账本记的是 `low-fare/paced`，不看就等于把「我方克制」
+        # 显示成「无日期价」。
+        if pth.get("path") in ("app-calendar", "android-ocr", "app-login",
+                               "low-fare") \
                 and pth.get("status") != "ok":
             note = str(pth.get("detail") or pth.get("status") or "")
             pstatus = str(pth.get("status") or "")
             break
+    if not out and pstatus == "paced":
+        return _app_paced_reject("app_ctrip", note)   # 我方克制，不是失败
     if not out and pstatus in ("unsupported",):
         return out, _status("not_connected", note)
     if not out and pstatus == "login":
@@ -739,6 +1090,63 @@ def _app_ctrip_deals(q: RadarQuery, logger) -> tuple:
             _tail = ("本次可见日历到 %s；请求区间 %s..%s 未完全覆盖"
                      % (last, q.start.isoformat(), q.end.isoformat()))
             note = (note + "；" if note else "") + _tail
+    return out, _status("ok" if out else ("error" if note else "empty"),
+                        note, len(out))
+
+
+def _app_fliggy_deals(q: RadarQuery, logger) -> tuple:
+    """飞猪 App 价格日历：该航线逐天一条最低价（OCR 读屏）。
+
+    2026-11-06 真机：日历页每格是「日号 + 其下方最低价」（纵向差约 70px，
+    无价写「查看」），`low_fare()` 直接 OCR 整月逐日价。
+    SHA→PEK 45 天返回 **35 行**、连续 20 天无缺口、最低 ¥338（11-10）。
+    页面未标含税/优惠口径 → 行标 `tax_included=None` + 「口径未标注」。
+    """
+    from datetime import date as _d, timedelta as _td
+    from crawlers.app_fliggy import AppFliggyCrawler
+    today = _d.today()
+    max_end = today + _td(days=62)
+    if q.end < today:
+        return [], _status("empty", "请求区间已过去；App 日历从今天起算")
+    if q.start > max_end:
+        return [], _status(
+            "empty", "App 日历只覆盖今天起 62 天（到 %s），请求区间 %s..%s 超出"
+            % (max_end.isoformat(), q.start.isoformat(), q.end.isoformat()))
+    days = max(1, (min(q.end, max_end) - today).days + 1)
+    crawler = AppFliggyCrawler(
+        {"user_data_dir": "user_data",
+         "android": {"enabled": True}}, logger)
+    rows_d = crawler.low_fare(q.from_code, q.to_code, days=days) or []
+    out = []
+    for r in rows_d:
+        date_s = str(r.get("date") or "")
+        if not _in_range(date_s, q):
+            continue
+        try:
+            price = float(r.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        out.append(SpecialDeal(
+            "app_fliggy", q.from_code, q.to_code, date_s, price,
+            link="", to_name=q.to_name, tax_included=None,
+            price_basis="unknown",
+            price_basis_label="口径未标注"))
+    note, pstatus = "", ""
+    for pth in getattr(crawler, "paths", []) or []:
+        if pth.get("path") in ("app-calendar", "android-ocr", "app-login",
+                               "app-block") \
+                and pth.get("status") != "ok":
+            note = str(pth.get("detail") or pth.get("status") or "")
+            pstatus = str(pth.get("status") or "")
+            break
+    if not out and pstatus == "blocked":
+        return out, _status("blocked", note or "飞猪 App 被安全页拦截")
+    if not out and pstatus in ("unsupported",):
+        return out, _status("not_connected", note)
+    if not out and pstatus == "login":
+        return out, _status("error", note or "飞猪 App 需要登录")
     return out, _status("ok" if out else ("error" if note else "empty"),
                         note, len(out))
 
@@ -784,11 +1192,14 @@ def _app_tongcheng_deals(q: RadarQuery, logger) -> tuple:
             price_basis_label="口径未标注"))
     note, pstatus = "", ""
     for pth in getattr(crawler, "paths", []) or []:
-        if pth.get("path") in ("app-calendar", "app-login") \
+        # `low-fare` 同 `_app_ctrip_deals`：本源走的就是 `crawler.low_fare()`。
+        if pth.get("path") in ("app-calendar", "app-login", "low-fare") \
                 and pth.get("status") != "ok":
             note = str(pth.get("detail") or pth.get("status") or "")
             pstatus = str(pth.get("status") or "")
             break
+    if not out and pstatus == "paced":
+        return _app_paced_reject("app_tongcheng", note)   # 我方克制，不是失败
     if not out and pstatus == "unsupported":
         return out, _status("not_connected", note)
     if not out and pstatus == "login":
@@ -836,11 +1247,16 @@ def _app_zhixing_deals(q: RadarQuery, logger) -> tuple:
             link="", to_name=q.to_name, tax_included=None,
             price_basis="unknown",
             price_basis_label="口径未标注"))
-    note = ""
+    note, pstatus = "", ""
     for pth in getattr(crawler, "paths", []) or []:
         if pth.get("path") == "low-fare" and pth.get("status") != "ok":
             note = str(pth.get("detail") or pth.get("status") or "")
+            pstatus = str(pth.get("status") or "")
             break
+    # `paced` 必须单独成档：旧写法把它当成「没出数但有原因」→ `empty`，
+    # 面板于是显示「无日期价」，读起来像「智行这段时间没有低价」。
+    if not out and pstatus == "paced":
+        return _app_paced_reject("app_zhixing", note)
     # 没出数也要带原因：页面停在别的航线/日期带是「没按请求取」，
     # 不是抓取失败；旧写法把有 note 的情况记成 error，读者会去查风控。
     st = _status("ok" if out else "empty", note, len(out))
@@ -913,17 +1329,21 @@ def build_radar(payload: dict, logger, proxy: str = "",
             status[ch] = _status("unsupported", "全国模式仅携程支持")
             per[ch] = []
             continue
+        # 出口/代理策略关掉 = 这家渠道走**直连**（`proxy_route.enabled`，
+        # scope 声明了渠道级，所以按渠道问）。缺省开启＝沿用调用方给的出口，
+        # 行为逐位不变。
+        _px = proxy if _on("proxy_route.enabled", ch) else ""
         try:
             if ch == "ctrip":
-                rows, st = _ctrip_deals(q, logger, proxy)
+                rows, st = _ctrip_deals(q, logger, _px)
             elif ch == "fliggy":
-                rows, st = _fliggy_deals(q, logger, proxy)
+                rows, st = _fliggy_deals(q, logger, _px)
             elif ch == "tuniu":
-                rows, st = _tuniu_deals(q, logger, proxy)
+                rows, st = _tuniu_deals(q, logger, _px)
             elif ch == "tongcheng":
-                rows, st = _tongcheng_deals(q, logger, proxy)
+                rows, st = _tongcheng_deals(q, logger, _px)
             elif ch == "qunar":
-                rows, st = _qunar_deals(q, logger, proxy, user_data_dir)
+                rows, st = _qunar_deals(q, logger, _px, user_data_dir)
             elif ch == "app_qunar":
                 rows, st = _app_qunar_deals(q, logger)
             elif ch == "app_zhixing":
@@ -932,6 +1352,8 @@ def build_radar(payload: dict, logger, proxy: str = "",
                 rows, st = _app_tongcheng_deals(q, logger)
             elif ch == "app_ctrip":
                 rows, st = _app_ctrip_deals(q, logger)
+            elif ch == "app_fliggy":
+                rows, st = _app_fliggy_deals(q, logger)
             else:
                 rows, st = [], _status(
                     "not_connected", "自定义航线低价日历尚未验证接入；可用明细探针")

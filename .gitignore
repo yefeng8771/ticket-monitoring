@@ -289,3 +289,18 @@ docs/INTL_CALIBRATION.md
 
 # 并行会话跑 uitest 的分片中间产物（每片刻一份 .next，完成后由主进程合并）
 docs/uitest_result.txt.*.next
+
+# 本地工具链与设备备份（体积大/二进制，不入库）
+_tools/
+_backup_mumu/
+_magisk_stage/
+_magisk_dl/
+
+# 构建产物（native 模块的 .so 与 zip）
+build/
+
+
+# 下载的模块包与 APK（体积大、可从官方源重新获取）
+packages/*.zip
+packages/apks/*.apk
+

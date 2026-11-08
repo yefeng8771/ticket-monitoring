@@ -19,7 +19,12 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-ALL = ["qunar", "fliggy", "ctrip", "tongcheng", "tuniu", "app_zhixing"]
+# **从单一事实源取清单**（2026-11-06）：原来这里手抄了 6 家，加到 10 家
+# （5 浏览器 + 5 App）后，控制台渲染 10 行而测试仍按 6 断言，直接失败。
+# 抄一份清单就一定会漂，所以直接读注册表那两张常量。
+from core.channels import APP_CHANNELS, BROWSER_CHANNELS  # noqa: E402
+
+ALL = list(BROWSER_CHANNELS) + list(APP_CHANNELS)
 PACING = {
     "ok": True, "quiet": {}, "last_round": {"sent": 12, "paced": 5},
     "channels": {p: {"state": "ok",
@@ -101,9 +106,10 @@ def test_every_visible_channel_has_a_probe_button():
         srv.shutdown()
         srv.server_close()
 
-    # 六家都应出现节流行（后端把 channels 全给了）
+    # 注册的每一家都应出现节流行（后端把 channels 全给了）
     assert got["rows"] == len(ALL), (
-        "节流行数量 %d ≠ 渠道数 %d" % (got["rows"], len(ALL)))
+        "节流行数量 %d ≠ 渠道数 %d（%s）"
+        % (got["rows"], len(ALL), ALL))
     # 行上出现的每一家，都必须有对应自检按钮
     missing = [p for p in ALL if p not in got["probes"]]
     assert not missing, (

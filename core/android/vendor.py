@@ -45,6 +45,26 @@ _WRITABLE = (
     "resolution_width", "resolution_height", "resolution_dpi",
     "resolution_mode",
     "system_disk_readonly",
+
+    # ── 方向（2026-11-05 新增）──
+    #
+    # `window_auto_rotate=true` 是「飞猪隔几轮又横屏」的宿主机侧根因：它会把
+    # 设备里的 `accelerometer_rotation` 重新置 1，App 随后转横屏，而 App
+    # 渠道的坐标全按 900×1600 竖屏写死 —— 整轮点不动，账本只记「设城市
+    # 失败」。设 false 后还要配合设备侧 `force-orientation-apps.json` 的
+    # portrait 清单（MuMu 原生层按包名强制），两层缺一层就会回弹。
+    "window_auto_rotate",
+
+    # ── GPU 型号（2026-11-04 新增）──
+    #
+    # 为什么重要：模拟器的 GL_RENDERER 是**硬信号**，props 改不掉，但 SDK
+    # 一读 `GLES: Qualcomm, Adreno (TM) 640` 就知道 GPU 型号。
+    # 而 Adreno 640 = 骁龙 855（2019），与我们声明的「小米 14 / 骁龙 8 Gen 3
+    # （Adreno 750）」**对不上** —— 这种"GPU 与 SoC 矛盾"是指纹 SDK 的经典判据。
+    #
+    # 好消息：MuMu 官方就提供 `gpu_model.custom`，可以任意写。
+    # 用它把 GL_RENDERER 调成与身份机型匹配的值，矛盾就消掉了。
+    "gpu_mode", "gpu_model.custom", "renderer_mode",
 )
 
 
@@ -279,9 +299,15 @@ def set_app_abi(dev, apps=None, abi: str = "arm64-v8a", *,
                      % (apps[pkg], abi, pkg.split(".")[-1]))
     payload = "\n".join(block) + "\n"
     # 用 printf 追加（避免 heredoc 在不同 shell 上的差异）
-    out = _text(_call(dev, "shell", "sh", "-c",
-                      "printf %s >> %s && echo TM_OK"
-                      % (_shq(payload), ABI_SELECT)))
+    # **整条脚本必须作为单个 argv**（`sh_script`）。原来写成
+    # `_call(dev,"shell","sh","-c", ...)`：adb 拼 argv 后由设备 shell 重解析，
+    # 内层只剩 `sh -c printf`，payload 被当位置参数丢掉 →
+    # 实测报 `printf: Needs 1 argument`、**表里一个字节都没写进去**；
+    # 也就是说 per-app ABI 伪装（arm64）这条能力曾经是坏的，
+    # 只靠读回校验把失败暴露出来（不会假报成功）。
+    from .fingerprint import sh_script
+    out = _text(sh_script(dev, "printf %s >> %s && echo TM_OK"
+                        % (_shq(payload), ABI_SELECT)))
     if "TM_OK" not in out:
         rep["error"] = "追加失败：%s" % (out.strip()[:120] or "无输出")
         return rep
@@ -303,8 +329,11 @@ def revert_app_abi(dev, *, logger=None) -> dict:
         rep["error"] = "没有备份可还原"
         return rep
     _call(dev, "shell", "mount", "-o", "rw,remount", "/")
-    out = _text(_call(dev, "shell", "sh", "-c",
-                      "cp -f %s %s && echo TM_OK" % (bak, ABI_SELECT)))
+    # 同 5)：三段 argv 会让内层只剩 `sh -c cp`（参数被当位置参数丢掉），
+    # 于是还原永远报失败。整条脚本走单个 argv。
+    from .fingerprint import sh_script
+    out = _text(sh_script(dev, "cp -f %s %s && echo TM_OK"
+                        % (bak, ABI_SELECT)))
     rep["ok"] = "TM_OK" in out
     if logger and rep["ok"]:
         logger.info("[android] abi-select 已还原（重启实例生效）")

@@ -52,7 +52,7 @@ def test_flat_layer_is_last_and_covers_former_white_surfaces():
     ):
         assert new in STYLE, new
     assert 'id="spMonSum"' in SRC
-    assert "覆盖 '+_nCh+'/'+_qCh+' 渠道" in SRC
+    assert "覆盖 '+_nCh+'/'+_qCh+' 特价源" in SRC
 
 
 def test_channel_links_lose_their_card_frame():

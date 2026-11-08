@@ -78,6 +78,10 @@ class AppZhixingCrawler(AppCrawler):
 
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        # 日期超出 App 视野就直接交浏览器（能力边界，记 unsupported）：
+        # App 日历只支持近未来，远期日期每条白耗 100–150 秒设备时间。
+        if self.reject_far_dates(dates):
+            return []
         rt = self.runtime()
         ok, why = rt.ensure_ready()
         if not ok:
@@ -92,6 +96,20 @@ class AppZhixingCrawler(AppCrawler):
         if dev is None:
             self.path_note("android-device", "unsupported",
                            detail="device unavailable")
+            return []
+
+        # 链路闸门（r1063 T9）：**必须在拿设备锁之前**按阶段问——闸门要等
+        # 时不能占着设备睡（App 渠道的设备是串行独占的）。一次 fetch 走
+        # 「登录 → 列表」两段（往返查询走「登录 → 往返」）；被停用的阶段
+        # 只记 `paced` 并交空结果，**不记失败**（记失败会拉开整家渠道熔断）。
+        # 智行没有独立的 `calendar()` 入口（日历价走明细页弹层），所以它
+        # 只闸四个阶段：登录 / 列表 / 往返 / 低价。
+        if not self.path_gate("app-login", "detail"):
+            return []
+        if ret_date:
+            if not self.path_gate("往返", "round_trip"):
+                return []
+        elif not self.path_gate("app-list", "detail"):
             return []
 
         # 「登录一次永久复用」+ 清权限框 + 清 ANR：统一前置（与其它 App
@@ -1069,6 +1087,10 @@ class AppZhixingCrawler(AppCrawler):
         import datetime as _dt
         from .app_zhixing_lowfare import (parse_low_fare_rows, to_ymd,
                                           is_low_fare_page, find_entry)
+        # 链路闸门（r1063 T9）：低价机票是发现源里的独立一档，在拿设备锁
+        # 之前问（闸门要等时不能占着设备睡）。
+        if not self.path_gate("low-fare", "low_fare"):
+            return []
         rt = self.runtime()
         ok, why = rt.ensure_ready()
         if not ok:

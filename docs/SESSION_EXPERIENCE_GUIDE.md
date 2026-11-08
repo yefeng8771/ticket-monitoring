@@ -210,14 +210,14 @@
 | r803 | 概览「展开→选日期→收起」链路 | 合规 | 261→279→0→279 |
 | r804 | 筛选面板「卡底空白」 | **已撤销**（判据错） | r836 抓红；r806 定案 |
 | r805 | 孤立大空档 / 渠道入口 / 说明 / 展开来源四项普查 | 0 / 合规 / 合规 / 有则测 | 正控注入 88px |
-| r806 | 卡底留白判据（无可见边界不算缺陷）+ 筛选面板对齐 + 去线 | 已修 / 定案 | `test_r806_surfaced_cards_only.py`、`test_r806_filter_panel_alignment.py` |
+| r806 | 卡底留白判据（无可见边界不算缺陷）+ 筛选面板对齐 + 去线 | 已修 / 定案 | `test_r1130_wave2_health_contract.py`、`test_r1130_wave1_search_contract.py` |
 | r807 | 窄档「渠道登录」竖排 / 与轴重叠 | 已修 | `test_r807_bandlogin_not_squeezed.py` |
-| r808 | 诚信标记被硬切；裸 `header{}` 全站泄漏 | 已修 | `test_r808_honesty_badges_not_clipped.py`、`test_r808_header_selector_scope.py` |
+| r808 | 诚信标记被硬切；裸 `header{}` 全站泄漏 | 已修 | `test_r808_honesty_badges_not_clipped.py`、`test_r1130_wave3_pages_contract.py` |
 | r809 | 节流表渠道名压进状态列 | 已修 | `test_r809_pace_name_not_covering_status.py` |
 | r810 | 五源卡副标题跨档溢出语法不一致 | 已修 | `test_r810_srcsub_uniform_ellipsis.py` |
 | r811 | 配置页 900px 断点两边同时命中 | 已修 | `test_r811_cfg_900_breakpoint_exclusive.py` |
 | r812 | 双线 / 按钮分档 / 雷达 / 来源接入四项普查 | 合规 | 截图 + 像素 + 帧计时 |
-| r812b | 全站折叠「常驻夹层」普查 | 0 处 | `test_r812_fold_no_resident_between.py` |
+| r812b | 全站折叠「常驻夹层」普查 | 0 处 | `test_r1130_wave1_search_contract.py` |
 
 ### 3.2 逐项详情（症状 → 根因 → 修法 → 证据 → 门禁 / 教训）
 
@@ -308,7 +308,7 @@
 - **症状**：页面上 8 个 `<header>` 全吃到 `background + border-bottom + sticky + shadow + 负 margin`，每张小卡顶着一片白色通栏横带。
 - **修法**：把裸规则与 6 处响应式 `header` / `header h1` 全部收进 `#hdcard`。
 - **证据**：`.srf-card>header` 变成 0 内衬 / 透明底 / 21px；页面页头仍 sticky 58px、标题仍在 91.5。
-- **门禁**：`test_r808_header_selector_scope.py`（负控把 `#hdcard{` 改回 `header{` 即红）。
+- **门禁**：`test_r1130_wave3_pages_contract.py`（负控把 `#hdcard{` 改回 `header{` 即红）。
 
 #### r809（节流表名字压状态列）
 - **症状**：「去哪儿 App」文字右缘 205.3 越过状态列左缘 195.5，压进 9.8px；截图里「App」被徽标盖掉，读作「去哪儿」（PC 渠道），与 App 渠道事实不符。
@@ -347,7 +347,7 @@
   1. 用「点击后新出现的最大块」反推展开体不可靠（1024 档把结果网格当展开体，量出 561px 大缝；明细行甚至抓到 1 万像素外）。有 `aria-controls` 只认它；行展开认 `nextElementSibling`。
   2. 溯源点击整行重渲：拿旧节点量，rect 归零读出「行上移 525px」；按 `data-pk` 找回新按钮后位移 0。坐标必须对同一角色节点。
   3. **探针卡在 2026-11-01 被并行会话改成单行控制条**：卡收起时整块 `display:none`，卡内「收起探针」不可见，唯一入口是工具行 `#srxProbeTool`。从关闭态起测必须点外部入口，量 `tool → #srxProbe`；点隐藏按钮会读出「展开体在触发器上方 gap=-27~-54px」的假红。
-- **门禁**：`tests/test_r812_fold_no_resident_between.py`（7 passed @ `d861e146…`）。先断言 7 类都量到了（防空断言恒真），再断言可见 / 紧贴 / 两态同坐标 / 无夹层；负控往区间里塞一块尺寸正好落在区间内的可见常驻块，必须报红。
+- **门禁**：`tests/test_r1130_wave1_search_contract.py`（7 passed @ `d861e146…`）。先断言 7 类都量到了（防空断言恒真），再断言可见 / 紧贴 / 两态同坐标 / 无夹层；负控往区间里塞一块尺寸正好落在区间内的可见常驻块，必须报红。
 - **教训**：先确认入口可达，再谈几何；折叠的「展开体」必须按声明的控制关系解析，不能靠猜。
 
 ### 3.3 本次会话中「实测合规、不要重开」的清单
@@ -389,8 +389,8 @@
 | 2026-11-01 18:04 | `docs/uitest.py` | **670/670 通过，JS 错误 0** | 当时哈希 | 有效（结果文件 mtime 18:04） |
 | 2026-11-01 | 折叠相关 7 个文件合跑 | 33 passed / 1 skipped | 654b→d9460 漂移 | **作废**（哈希变了） |
 | 2026-11-01 | r812 + r832 复跑 | 14 passed | `d9460f3d…`（前后一致） | 有效 |
-| 2026-11-01 20:28 | `test_r812_fold_no_resident_between.py` | **7 passed** | `d861e146…`（前后一致） | 有效 |
-| 2026-11-01 21:04 | `test_r812_fold_no_resident_between.py` | **7 passed** | `3bbed0cd…`（前后一致） | 有效（最新复验） |
+| 2026-11-01 20:28 | `test_r1130_wave1_search_contract.py` | **7 passed** | `d861e146…`（前后一致） | 有效 |
+| 2026-11-01 21:04 | `test_r1130_wave1_search_contract.py` | **7 passed** | `3bbed0cd…`（前后一致） | 有效（最新复验） |
 
 > **纪律**：只有「跑前跑后同一哈希」的那一行才能当结论。上表里 33 passed 那行就是反例——它跑的时候哈希从 `654b…` 变成了 `d9460…`，按项目纪律整轮作废。
 
@@ -573,7 +573,7 @@ tests/test_rNNN_<主题>.py
 2. `git log --oneline -1`、`git status --porcelain | wc -l`，确认工作树状态。
 3. `main.py` 的 `__version__` 与最近提交是否一致。
 4. 起 demo：`python webui.py --demo --port <free>`，轮询 `/api/state` 确认起来（端口被占会静默退出）。
-5. 跑一次 `python -m pytest tests/test_r812_fold_no_resident_between.py -q`，确认折叠门禁在当前树上仍绿；再 pin 一次哈希。
+5. 跑一次 `python -m pytest tests/test_r1130_wave1_search_contract.py -q`，确认折叠门禁在当前树上仍绿；再 pin 一次哈希。
 6. 读 `docs/EXECUTION_SPEC_LATEST.md` 最近的 20 条条目，确认没有并行会话刚做的相关改动。
 7. 若 8765 生产服在跑，查进程启动时间与 `webui.py` mtime，确认它跑的是不是最新代码。
 
@@ -598,12 +598,12 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 export PYTHONIOENCODING=utf-8
 
 # 单条门禁
-python -m pytest tests/test_r812_fold_no_resident_between.py -q
+python -m pytest tests/test_r1130_wave1_search_contract.py -q
 
 # 折叠相关组合（串行口径）
-python -m pytest tests/test_r812_fold_no_resident_between.py \
+python -m pytest tests/test_r1130_wave1_search_contract.py \
   tests/test_r832_trigger_not_flanked.py \
-  tests/test_r869_more_conditions_trigger_stays.py \
+  tests/test_r1130_filter_continuity.py \
   tests/test_r699_overview_collapse_really_collapses.py \
   tests/test_r563_watch_expand_button_no_shift.py \
   tests/test_r556_collapsed_filter_no_residue.py \
@@ -680,15 +680,15 @@ python webui.py --demo --port 8899
 | 文件 | 覆盖 | 最近结果 |
 |---|---|---|
 | `tests/test_r801_chip_touch_target.py` | 触控 chip 命中 ≥32px + 负控 | 4 passed（修复轮） |
-| `tests/test_r806_surfaced_cards_only.py` | 只约束有可见边界的卡底余量 | 3 passed |
-| `tests/test_r806_filter_panel_alignment.py` | 筛选面板左右缘 / 卡中卡 | 已入套件 |
+| `tests/test_r1130_wave2_health_contract.py` | 只约束有可见边界的卡底余量 | 3 passed |
+| `tests/test_r1130_wave1_search_contract.py` | 筛选面板左右缘 / 卡中卡 | 已入套件 |
 | `tests/test_r807_bandlogin_not_squeezed.py` | 五窄档渠道登录不截断/不重叠 | 11 passed |
 | `tests/test_r808_honesty_badges_not_clipped.py` | 诚信标记不得裁 | 11 passed |
-| `tests/test_r808_header_selector_scope.py` | 裸 `header{}` 不得回潮 | 已入套件 |
+| `tests/test_r1130_wave3_pages_contract.py` | 裸 `header{}` 不得回潮 | 已入套件 |
 | `tests/test_r809_pace_name_not_covering_status.py` | 名字不压状态列 + 真省略号 | 13 passed |
 | `tests/test_r810_srcsub_uniform_ellipsis.py` | 四档统一省略号 | 5 passed |
 | `tests/test_r811_cfg_900_breakpoint_exclusive.py` | 900 断点互斥 | 4 passed |
-| `tests/test_r812_fold_no_resident_between.py` | 7 类折叠 × 3 档无常驻夹层 + 正控 | **7 passed @ d861e** |
+| `tests/test_r1130_wave1_search_contract.py` | 7 类折叠 × 3 档无常驻夹层 + 正控 | **7 passed @ d861e** |
 
 ### 9.2 文档 / 记忆
 
@@ -718,7 +718,7 @@ python webui.py --demo --port 8899
 cd /d/idea_project/ticket-monitoring
 md5sum webui.py                      # 记录
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONIOENCODING=utf-8 \
-  python -m pytest tests/test_r812_fold_no_resident_between.py -q
+  python -m pytest tests/test_r1130_wave1_search_contract.py -q
 md5sum webui.py                      # 必须与第一次相同
 ```
 

@@ -101,6 +101,31 @@ def _allow_test_webhook(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_user_data(tmp_path, monkeypatch):
+    """账本根目录重定向（r972，与 PUSH_HISTORY_FILE / TM_RENDER_DIR 同律）。
+
+    **同类第三次**才做集中隔离，前两次都是逐用例打补丁：
+      * r963 `user_data_dir=""` → user_data/app_demo/slider_ledger.json
+        （报表里"试 63 / 过 63 命中 100%"）；
+      * `tests/test_intl_rt.py` 的假渠道 `name="probe"` →
+        user_data/probe/yield_stats.json（76 样本 / 0 成功）；
+      * `tests/test_app_crawler_base.py` 的 `name="app_dummy"` →
+        user_data/app_dummy/yield_stats.json（178 样本）。
+
+    脏文件只是表面：`scripts/yield_report.py` 会把它们当**真渠道**渲染，
+    显示 0% 成功率并给"建议间隔 75 分钟"——**污染的是爬取率那张决策表**。
+
+    生产代码走 `core.yield_stats.user_data_root()`：
+    config 显式值 > `TM_USER_DATA_DIR` > "user_data"。
+    生产 `main.py` 总是显式传绝对 session_root，所以这里对环境变量
+    的设置在运行时无影响；显式传 tmp 的既有用例也不受改写（config 优先）。
+    """
+    d = tmp_path / "user_data"
+    d.mkdir()
+    monkeypatch.setenv("TM_USER_DATA_DIR", str(d))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_webui_probe_auth(monkeypatch):
     """webui 的进程级「本轮探针证据」缓存逐用例归零（r481 并发假红根因）。
 

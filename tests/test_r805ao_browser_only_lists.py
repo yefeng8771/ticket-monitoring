@@ -93,7 +93,16 @@ def test_known_copies_really_handle_app_channels():
                   encoding="utf-8").read()
     i = src.index("def snapshot(self, now=None):", src.index("class ChannelBreaker"))
     seg = src[i:i + 2000]
-    assert "for p in self._st:" in seg, (
+    # 断言的是**行为**：`snapshot()` 遍历的是 `self._st`（所有已记账的渠道，
+    # 含 App），不是只有 `PLATFORMS`。r1063 T7（`3601295`）为了让
+    # `渠道|链路` 复合键折叠回渠道，把 `for p in self._st:` 换成了
+    # `for key, st in self._st.items():`——键空间仍是同一个 `self._st`，
+    # 折叠由 `_book_base(key)` 完成，App 渠道照旧一个不漏。
+    # 所以这里钉的是「遍历 self._st」这个形状特征，而不是某一行字面量：
+    # 换一种解包写法（哪怕只是改名）不该红，**但** `self._st` 一旦被换成
+    # `PLATFORMS`，App 渠道熔断了面板就看不见——那才是要拦的回归。
+    assert re.search(r"for \w+(?:\s*,\s*\w+)?\s+in\s+self\._st"
+                     r"(?:\.items\(\))?\s*:", seg), (
         "ChannelBreaker.snapshot 只遍历 PLATFORMS，App 渠道熔断了也看不见")
     # channel_links 必须能从 core.channels 取到 App 的中文名（入口卡文案）
     src = io.open(os.path.join(ROOT, "core", "channel_links.py"),

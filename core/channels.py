@@ -181,11 +181,19 @@ CHANNEL_DIMENSIONS = {
                       "low_fare": "y"},
     # 飞猪 App（2026-11-02 真机）：Flutter 画布 + Windows OCR；
     # 固定竖屏后首页→机票→表单→城市/日期→结果页全链路连续两次跑通
-    # （BJS→SHA 11-16 / SHA→PEK 11-17，各 3 行）。只做国内单程；
-    # 日历只用于选日、不单独落价；国际/往返/多程/低价源未接。
-    "app_fliggy": {"domestic": "y", "intl": "", "calendar": "",
-                   "detail": "y", "round_trip": "", "multi_city": "",
-                   "low_fare": ""},
+    # （BJS→SHA 11-16 / SHA→PEK 11-17，各 3 行）。
+    # **calendar / low_fare 已接入并真机验证（2026-11-06）**：
+    # 飞猪日历页每格就是「日号 + 其下方最低价」（纵向差约 70px，无价写
+    # 「查看」），所以 `calendar()` 直接 OCR 整月逐日价，`low_fare()`
+    # 转调它（与携程/同程同款约定，调度真正调用的是 low_fare）。
+    # 实测 SHA→PEK 45 天窗口返回 **35 行**、连续 20 天无缺口、
+    # 最低 ¥338（11-10）——修复前只有 19 行且缺 11-08..11-21。
+    # 关键实现细节写在 docs/APP_CHANNELS.md：「列网格必须实测标定」
+    # 「价格反推日号必须过星期列校验」。
+    # 仍未接：国际、往返（零件齐、待真机验证后开启）、多程。
+    "app_fliggy": {"domestic": "y", "intl": "", "calendar": "y",
+                   "detail": "y", "round_trip": "y", "multi_city": "",
+                   "low_fare": "y"},
 }
 
 # App 渠道与哪个浏览器渠道**同源**（产地/账号体系）。这只是「谁和谁是
@@ -519,12 +527,20 @@ DIMENSION_NOTES = {
                             "不写 y",
     ("app_fliggy", "calendar"): "日期弹层有逐日价，但采集端只用它选日，"
                                 "未单独落日历价",
-    ("app_fliggy", "round_trip"): "表单有单程/往返/多程；采集端只做单程，"
-                                  "未接往返总价，不拿单程价冒充",
+    ("app_fliggy", "round_trip"): "仅国内，且**只验证当月**（日历只认到"
+                                  "当月，更远交浏览器）。已接（2026-11-06 "
+                                  "真机 SHA→PEK 11-16/11-19 往返总价 ¥747、"
+                                  "去程起价 ¥682）。日历上点去程+返程后"
+                                  "**用底栏校验**两个日期，再读结果页底部"
+                                  "「往返总价」；返程列是**加价**不是绝对价，"
+                                  "不拿去做总价",
     ("app_fliggy", "multi_city"): "App 有多程入口；采集端未实现，矩阵记未验证，"
                                   "不是渠道没有",
-    ("app_fliggy", "low_fare"): "App 有低价/特价入口；采集端未接逐日低价源，"
-                                "不写 y",
+    ("app_fliggy", "low_fare"): "价格日历即逐日最低价源（每格「日号 + 下方"
+                                "最低价」，OCR 整月读出）；已接特价雷达，"
+                                "2026-11-06 真机 SHA→PEK 45 天 35 行、"
+                                "最低 ¥338。页面未标口径，雷达行标「口径"
+                                "未标注」，不假设含税",
     ("fliggy", "round_trip"): "只有国际能出往返总价（cheapestCalendar 带 "
                               "backDate）；国内列表页是单程结构，已加闸门"
                               "拒绝而不是拿单程价冒充",
@@ -547,6 +563,9 @@ DIMENSION_SCOPE = {
     ("qunar", "round_trip"): "仅国内",
     ("app_qunar", "round_trip"): "仅国内",
     ("app_tongcheng", "round_trip"): "仅国际",
+    # 飞猪 App 往返 2026-11-06 接通，但只覆盖**当月**（日历只验证到当月），
+    # 所以范围必须写清，别让读者以为国内全日期都能往返。
+    ("app_fliggy", "round_trip"): "仅国内",
     ("tuniu", "calendar"): "仅国内",
 }
 
@@ -620,6 +639,7 @@ PATH_CN = {
     "app-route": "App 设航线",
     "app-list": "App 航班列表",
     "app-blocker": "App 拦路弹窗",
+    "app-ad": "App 广告关闭",
     "app-dump": "App 界面快照",
     "app-error": "App 解析",
     # 点「搜索」这一步单独记一段（r691/r694：点下去没反应时，健康卡要
@@ -647,6 +667,12 @@ PATH_CN = {
     "app-date": "App 选日期",
     "app-calendar": "App 价格日历",
     "app-block": "App 风控拦截",
+    # 「既没出数、又一条通路都没记」的单列一类（2026-11-05）：
+    # 以前这种轮次在账本里落成 `unknown`，看着像"渠道不行"，
+    # 其实连卡在哪一步都不知道 —— 归因缺口必须自己显形。
+    "app-silent": "App 静默无记录",
+    # 浏览器渠道同一类归因缺口（2026-11-05 与 app-silent 对称补齐）
+    "web-silent": "网页静默无记录",
 }
 
 

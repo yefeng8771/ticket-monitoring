@@ -26,15 +26,28 @@ import main  # noqa: E402
 
 # ---- 1. open-folder 白名单解析单源 ----
 
-def test_target_under_repo_root():
-    """回归钉：三键解析结果必须落仓库根内（双 dirname 曾逸出上级）。"""
+def test_target_under_repo_root(monkeypatch):
+    """回归钉：三键解析结果必须落仓库根内（双 dirname 曾逸出上级）。
+
+    `TM_USER_DATA_DIR` 在 `user_data_root()` 里的优先于默认值是**刻意设计**
+    （config > env > default，单源口径，env 覆盖是写明要支持的部署特性），
+    所以本钉显式清掉它，只验「相对路径锚在仓库根」这件事。
+    """
+    monkeypatch.delenv("TM_USER_DATA_DIR", raising=False)
     for w in ("db", "log", "ud"):
         t = webui._open_folder_target(w, {})
         assert t and os.path.isabs(t), (w, t)
         assert t.startswith(webui._ROOT), (w, t)
 
 
-def test_target_default_values():
+def test_target_default_values(monkeypatch):
+    """`db`/`ud` 的出厂解析值。
+
+    优先级 config > `TM_USER_DATA_DIR` > 默认值是**刻意设计**（唯一口径，
+    与 `main._session_user_data()` 同一条规则），别反过来「修」生产代码；
+    本钉要测的是「谁都没配」的出厂值，故先把 env 层显式摘掉。
+    """
+    monkeypatch.delenv("TM_USER_DATA_DIR", raising=False)
     assert webui._open_folder_target("db", {}) == os.path.join(
         webui._ROOT, "data")
     # 目录在=原样返回，不在=父目录兜底（CI 全新 checkout 无 user_data）

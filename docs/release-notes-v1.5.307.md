@@ -1,5 +1,6 @@
 # ticket-monitoring 初版 · 持续更新
 
+> **时效边界**：本文件是 v1.5.307 发布时的历史快照，只记录当次变更；渠道数、能力与版本号均可能已被后续滚动发布改写，现状以 README 与演示站为准。
 > **注**：本文件是 v1.5.307 的历史变更记录，不再直接作为 GitHub Release 正文。
 > 下一次发版的正文以 `docs/RELEASE_BODY.md` 为准（10 渠道 canonical 模板，
 > 由 `tests/test_release_body_source.py` 守渠道数/范围/多程口径/占位符）。

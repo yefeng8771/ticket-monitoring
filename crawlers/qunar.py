@@ -33,7 +33,8 @@ from core.models import PRICE_MAX, PRICE_MIN, FlightPrice, price_band_ok
 from core.citydata import CODE_NAME as _CODE_NAME
 from core.intl import (airport_city_code, city_name_of, city_short_of,
                        is_intl_route)
-from .base import BaseCrawler, MOBILE_UA, iata2, iata3, profile_headers
+from .base import (BaseCrawler, MOBILE_UA, iata2, iata3,
+                   profile_headers, scoped_id)
 from .challenge import ChallengeSignal, blocked_signal, classify_text, login_signal
 
 _LOG = logging.getLogger(__name__)
@@ -176,6 +177,43 @@ def _pos_num_s(v):
         return float(v) > 0
     except (TypeError, ValueError):
         return False
+
+
+# ── 渠道内限速档位的参数层读点（r1063 T31）───────────────────────────
+# 放在**类之前**：这些是模块级函数，不能被塞进类体中间（那会把类切断——
+# 上一次就是这么把 `QunarCrawler` 拆成两半的，靠门禁报 `AttributeError` 才发现）。
+_DEFAULT_MIN_GAP_S = 8.0
+_DEFAULT_WAIT_BUDGET_S = 300
+
+
+def _min_gap_s(plat: str = "qunar") -> float:
+    """相邻查询礼貌间隔（秒）：参数层优先，类属性兜底。
+
+    `channel_rate.enabled=false` 表示**忽略定制、回到内置兜底**
+    （不是"取消限速"——那是另一种危险动作）。
+    """
+    try:
+        from core.strategy_params import switch_on
+        if not switch_on("channel_rate.enabled", plat=plat):
+            return float(_DEFAULT_MIN_GAP_S)
+        from core import strategy_params as _sp
+        return max(1.0, float(_sp.resolve("channel_rate.qunar_min_gap_s",
+                                          plat=plat).value))
+    except Exception:
+        return float(_DEFAULT_MIN_GAP_S)
+
+
+def _round_wait_budget_s(plat: str = "qunar") -> int:
+    """单轮等待预算（秒）：参数层优先。预算用尽即让位，不再白等。"""
+    try:
+        from core.strategy_params import switch_on
+        if not switch_on("channel_rate.enabled", plat=plat):
+            return int(_DEFAULT_WAIT_BUDGET_S)
+        from core import strategy_params as _sp
+        return max(0, int(float(_sp.resolve(
+            "channel_rate.qunar_wait_budget_s", plat=plat).value)))
+    except Exception:
+        return int(_DEFAULT_WAIT_BUDGET_S)
 
 
 class QunarCrawler(BaseCrawler):
@@ -340,6 +378,33 @@ class QunarCrawler(BaseCrawler):
     # _q 是 qmark SDK 读取的 uname（登录后才有），用作采集态回写判据。
     AUTH_COOKIES = ("_q",)
 
+    def _open_wait_backoff(self, kind: str = "intl") -> int:
+        """预算用尽后**开启/拉长**退避窗口，返回窗口秒数（r1063 T59）。
+
+        只做"本轮不再等"不够：`_cooldown_until` 跨轮存在，下一轮又会算出同样的
+        wait、再烧满一次预算（实测每轮白等 5 分钟、0 行）。r949 先落固定
+        20 分钟窗口；r952 改成按**连续次数** 1x→2x→3x 封顶（默认 20/40/60
+        分钟）——真实限流持续整个下午时，固定窗口仍会每轮重烧一次。
+        拿到明细由 `_reset_wait_backoff()` 归零。
+        """
+        cls = type(self)
+        dom = str(kind or "intl") == "dom"
+        attr_s = "_WAIT_BACKOFF_STREAK_DOM" if dom else "_WAIT_BACKOFF_STREAK"
+        attr_u = "_WAIT_BACKOFF_UNTIL_DOM" if dom else "_WAIT_BACKOFF_UNTIL"
+        streak = int(getattr(cls, attr_s, 0) or 0) + 1
+        setattr(cls, attr_s, streak)
+        win = min(cls.WAIT_BACKOFF_S * streak, cls.WAIT_BACKOFF_MAX_S)
+        setattr(cls, attr_u, time.time() + win)
+        return int(win)
+
+    def _reset_wait_backoff(self) -> None:
+        """恢复正常：清掉退避窗口与连续计数（否则会越退越久）。"""
+        cls = type(self)
+        cls._WAIT_BACKOFF_UNTIL = 0.0
+        cls._WAIT_BACKOFF_STREAK = 0
+        cls._WAIT_BACKOFF_UNTIL_DOM = 0.0
+        cls._WAIT_BACKOFF_STREAK_DOM = 0
+
     def login_url(self) -> str:
         return self.LOGIN_URL
 
@@ -349,6 +414,13 @@ class QunarCrawler(BaseCrawler):
     # 冷却期类级共享（多查询间生效），拿到数据即重置
     _MIN_GAP_S = 8                 # 相邻查询礼貌间隔（登录态实测零限流，20→12→8；失败有阶梯退避兜底）
     _BACKOFF_S = (90, 180, 300)    # 疑似限流的阶梯退避
+    # 门拒冷却（r1072）：1999/限流窗口实测约 5 分钟/次；90s 的软空退避
+    # 太短，会在同轮/下一轮反复撞门。门拒走独立冷却并直接让位。
+    GATE_COOLDOWN_S = 300
+    # 退避窗口（r949/r952）：固定 20 分钟起步，连续预算用尽 1x→2x→3x
+    # 封顶 60 分钟；出明细立即归零。
+    WAIT_BACKOFF_S = 1200
+    WAIT_BACKOFF_MAX_S = 3600
     # 单轮"错峰等待"累计预算（秒）。实测 12:00 后累计 **2891s = 48.6 分钟**，
     # 全是纯空等，却把整条采集线卡住（app_qunar 一整轮没轮到）。
     # 取 300s：够走完一次 90/180 的阶梯，又不至于把一轮拖没。
@@ -356,6 +428,13 @@ class QunarCrawler(BaseCrawler):
     # 类级累计：本轮已空等多少秒 + 本窗口起点。`fetch()` 每条航线调一次，
     # 预算得跨调用累计，否则"每条约 90s"永远撞不到上限（实测累计 48.6 分钟）。
     _WAIT_BUDGET = {"used_s": 0.0, "since": 0.0}
+    # 退避窗口（r1063 T59）：预算用尽后**开启/拉长**，窗口内不再空等。
+    # 之前这三样（含下面两个类属性）都没定义，走到那条分支就 AttributeError。
+    _WAIT_BACKOFF_UNTIL = 0.0        # 国际线（r956 起）
+    _WAIT_BACKOFF_STREAK = 0
+    # 国内线单独一套（r1063 T66）：不加它，国内每轮都要把等待预算烧满
+    _WAIT_BACKOFF_UNTIL_DOM = 0.0
+    _WAIT_BACKOFF_STREAK_DOM = 0
 
     def _reset_wait_budget_if_stale(self, window_s: float = 2100.0):
         """窗口（默认 35 分钟 ≈ 一轮）过去就把累计清零。"""
@@ -575,9 +654,6 @@ class QunarCrawler(BaseCrawler):
                     detail="国际查询让位：%s"
                            % (self._intl_quiet_reason or "渠道限流保护"))
                 return []
-            # 放行这次：记下"这条轮到过了"，下次让位窗口优先放过别的航线
-            self._intl_route_seen[_rk_key] = _t.time()
-            self._save_intl_rotation()
         # 往返（r815j）：国内 touch 往返页去程卡直接给产品「往返总价」，
         # 只采这个价（返程卡的「补 ¥N」是增量，不当总价）。国际往返
         # 仍走 interlist 单程面，未验证组合总价，显式拒绝。
@@ -592,8 +668,25 @@ class QunarCrawler(BaseCrawler):
                 return []
             return self._fetch_rt(from_city, to_city, dates, ret_date)
         for attempt in range(len(self._BACKOFF_S) + 1):
+            # r1063 T66：国际/国内各看各的窗口（以前国内没有窗口 → 每轮烧满预算）
+            _bo_until = (QunarCrawler._WAIT_BACKOFF_UNTIL if _is_intl
+                         else QunarCrawler._WAIT_BACKOFF_UNTIL_DOM)
+            _bo_left = _bo_until - _t.time()
+            if _bo_left > 0:
+                # 国际线在限流退避窗口内：主动让位（paced），零等待、不算失败。
+                # 国内列表另有配额，不受国际窗口影响（r956）。
+                self.logger.info(
+                    "[qunar] 仍在限流退避窗口内（还剩 %.0fs），本轮不再空等",
+                    _bo_left)
+                for _d in (dates or []):
+                    self.path_note(
+                        "QUERY", "paced", date=_d,
+                        detail="限流退避窗口内主动让位（剩 %.0fs）" % _bo_left)
+                return []
+            # 国际轮转记账：只有真的发起查询才算“查过”。上面的让位与退避
+            # 窗口两支都在此之前 return []，纯路过的航线不会被记一笔。
             wait = max(QunarCrawler._cooldown_until - _t.time(),
-                       self._MIN_GAP_S - (_t.time() - QunarCrawler._last_done_ts))
+                       _min_gap_s(self.name) - (_t.time() - QunarCrawler._last_done_ts))
             if wait > 0:
                 # **单轮等待预算**（2026-11-04）：实测 12:00 之后 qunar 的
                 # "错峰等待"累计 **2891 秒 = 48.6 分钟**，全部是纯空等——
@@ -603,21 +696,41 @@ class QunarCrawler(BaseCrawler):
                 # 退避本身没错（守配额），但**不能无限等**：一轮里累计超过
                 # 预算就放弃本轮，把时间让给别的渠道——它们不冲突，不需要
                 # 陪 qunar 一起等。
-                if QunarCrawler._WAIT_BUDGET["used_s"] + wait > self.ROUND_WAIT_BUDGET_S:
+                if (QunarCrawler._WAIT_BUDGET["used_s"] + wait
+                        > _round_wait_budget_s(self.name)):
                     self.logger.warning(
                         "[qunar] 本轮等待已达预算（已 %.0fs + 需 %.0fs > %ds），"
                         "放弃本轮 %s→%s，把时间让给其它渠道",
                         QunarCrawler._WAIT_BUDGET["used_s"], wait,
                         int(self.ROUND_WAIT_BUDGET_S), from_city, to_city)
+                    _line = "国际" if _is_intl else "国内"
                     for _d in (dates or []):
                         self.path_note(
                             "QUERY", "paced", date=_d,
-                            detail="本轮等待预算用尽（已 %.0fs），主动让位"
-                                   % QunarCrawler._WAIT_BUDGET["used_s"])
+                            detail="本轮等待预算用尽（%s线，已 %.0fs），主动让位"
+                                   % (_line,
+                                      QunarCrawler._WAIT_BUDGET["used_s"]))
+                    # **开启/拉长退避窗口**：否则下一轮又会算出同样的 wait、
+                    # 再烧满一次预算（实测因此 qunar 每轮 0 行还吃掉 5 分钟）。
+                    _w = self._open_wait_backoff(
+                        "intl" if _is_intl else "dom")
+                    self.logger.info(
+                        "[qunar] 进入限流退避窗口 %ds（第 %d 次，到 %s），"
+                        "期间不再空等",
+                        _w, QunarCrawler._WAIT_BACKOFF_STREAK,
+                        _t.strftime("%H:%M",
+                                    _t.localtime(
+                                        QunarCrawler._WAIT_BACKOFF_UNTIL)))
                     return []
                 self.logger.info("[qunar] 错峰等待 %ds", int(wait))
                 _t.sleep(wait)
                 QunarCrawler._WAIT_BUDGET["used_s"] += wait
+                self.note_wait(wait)   # 同步进「本渠道在等」（r1063 T30）
+            # 到这里才真的会发起查询：记“这条线查过”。上面的退避窗口
+            # （_WAIT_BACKOFF_UNTIL）与预算让位都已 return []，路过不记。
+            if _is_intl:
+                self._intl_route_seen["%s-%s" % (from_city, to_city)] = _t.time()
+                self._save_intl_rotation()
             fail_status = ""
             try:
                 res = self._fetch_inner(from_city, to_city, dates)
@@ -654,6 +767,10 @@ class QunarCrawler(BaseCrawler):
                 if _is_intl and _has_detail:
                     self._intl_quiet_until = _t.time() + self.INTL_QUIET_S
                     self._intl_quiet_reason = "上一条国际明细已成功"
+                if _has_detail and QunarCrawler._WAIT_BACKOFF_STREAK:
+                    # 出明细=平台真放行：清计数并关窗，别让一次误判惩罚一整天。
+                    QunarCrawler._WAIT_BACKOFF_STREAK = 0
+                    QunarCrawler._WAIT_BACKOFF_UNTIL = 0.0
                 return res
             _ch = (getattr(self, "_query_challenge", None)
                    or getattr(self, "_last_challenge", None))
@@ -711,10 +828,16 @@ class QunarCrawler(BaseCrawler):
             # 那会让界面显示「会话失效，建议重登」，把用户推去重登一个
             # 完好的会话——与 r397 要分的"该重登 / 该重试"同一类错误。
             _gate = dict(getattr(self, "last_soft_reject", None) or {})
-            if _gate.get("kind") == "blanket_gate":
+            if _gate.get("kind") in ("blanket_gate", "token_gate"):
+                # 整体门拒与 1999 限流同属通道级拒绝：置冷却、同轮不再重试，
+                # 也不判会话失效（别把用户推去重登一个完好的会话）。
+                QunarCrawler._cooldown_until = (
+                    _t.time() + QunarCrawler.GATE_COOLDOWN_S)
                 self.logger.warning(
-                    "[qunar] 整体门拒在案（%s），跳过退避重试；"
-                    "不判会话失效", str(_gate.get("note"))[:40])
+                    "[qunar] 门拒在案（%s：%s），同轮不再重试；"
+                    "冷却 %ds，不判会话失效",
+                    _gate.get("kind"), str(_gate.get("note"))[:40],
+                    QunarCrawler.GATE_COOLDOWN_S)
                 return []
             _state = self._read_session_state()
             _has_auth = self._state_has_auth(_state)
@@ -827,6 +950,10 @@ class QunarCrawler(BaseCrawler):
         from_name = urllib.parse.quote(self.CITY_NAME.get(fc, from_city))
         to_name = urllib.parse.quote(self.CITY_NAME.get(tc, to_city))
         results: List[FlightPrice] = []
+        # 链路闸门（r1063 T8）：往返这条通路被策略停用时如实返回空，
+        # 不启浏览器（启一次就是一次真实风控暴露）。
+        if not self.path_gate("往返", "round_trip"):
+            return results
         with self.browser() as ctx:
             page = self.new_page(ctx)
             try:
@@ -997,7 +1124,12 @@ class QunarCrawler(BaseCrawler):
         # 门拒证据同样逐日期/逐路径复位（r400）：不重置会像 r398 的
         # no_result 一样把上一条路径的判定漏到这条头上。
         self.last_soft_reject = {}
-        got = self._fetch_via_browser(from_city, to_city, date)
+        # 链路闸门（r1063 T8）：H5 浏览器这条通路。被策略停用/冷却时只跳过
+        # **这条通路**（不打浏览器、也不记第二条失败证据），下面的 PC 探测
+        # 与 httpx token 直连照常接手——否则停一条路等于停一家渠道。
+        _h5_ok = self.path_gate("H5", "domestic", date=date)
+        got = (self._fetch_via_browser(from_city, to_city, date)
+               if _h5_ok else None)
         _sig = getattr(self, "_last_challenge", None)
         # 账本记的是"这条路径打了哪个地址"（r396）：H5 与 API 用的不是
         # 同一个 URL，出问题时必须能直接点开/复现，不靠截图猜。
@@ -1025,16 +1157,19 @@ class QunarCrawler(BaseCrawler):
                         ("soft_reject" if _soft_h5 else
                          ("login" if QunarCrawler.login_suspect
                           and not _noev else "error")))))
-        self.path_note(
-            "H5", _h5_status,
-            rows=len(got[1]) if got else 0, date=date, url=_h5_url,
-            detail=(_sig.detail if _sig else
-                    (_soft_h5.get("note") if _soft_h5 else
-                     ("原站返回无符合条件的航班（可能受指纹 SDK/风控环境影响）"
-                      if _nores else
-                      ("H5 未拿到任何证据（无响应/空正文/无风控信号），"
-                       "按错误记录，不代表无票" if _noev
-                       else "touch.qunar.com H5 列表")))))
+        if _h5_ok:
+            # 只有 H5 真的发过请求才记这条账：被闸门跳过时再记一条
+            # 「error/empty」是凭空造失败证据，会把整家渠道的熔断拉开。
+            self.path_note(
+                "H5", _h5_status,
+                rows=len(got[1]) if got else 0, date=date, url=_h5_url,
+                detail=(_sig.detail if _sig else
+                        (_soft_h5.get("note") if _soft_h5 else
+                         ("原站返回无符合条件的航班（可能受指纹 SDK/风控环境影响）"
+                          if _nores else
+                          ("H5 未拿到任何证据（无响应/空正文/无风控信号），"
+                           "按错误记录，不代表无票" if _noev
+                           else "touch.qunar.com H5 列表")))))
         if got is not None:
             self.logger.info("[qunar] H5 浏览器命中（完整明细）")
             return got
@@ -1047,14 +1182,18 @@ class QunarCrawler(BaseCrawler):
             # token 有效时不能因为 H5 登录页丢掉真实明细。
             self._query_challenge = _sig
         if self.PC_PROBE_ON_MISS:
-            self.logger.info("[qunar] H5 未命中，探测 PC 是否复活")
-            got = self._fetch_via_pc(from_city, to_city, date)
-            self.path_note("PC", "ok" if got else "empty",
-                           rows=len(got[1]) if got else 0, date=date,
-                           detail="PC 复活探测（默认停服）")
-            if got is not None:
-                return got
-            self.logger.info("[qunar] PC 未命中，回退 httpx")
+            # 链路闸门（r1063 T8）：PC 探测这条通路被停用时直接回退 httpx。
+            if self.path_gate("PC", "domestic", date=date):
+                self.logger.info("[qunar] H5 未命中，探测 PC 是否复活")
+                got = self._fetch_via_pc(from_city, to_city, date)
+                self.path_note("PC", "ok" if got else "empty",
+                               rows=len(got[1]) if got else 0, date=date,
+                               detail="PC 复活探测（默认停服）")
+                if got is not None:
+                    return got
+                self.logger.info("[qunar] PC 未命中，回退 httpx")
+            else:
+                self.logger.info("[qunar] PC 通路被链路闸门跳过，直接回退 httpx")
         else:
             self.logger.info("[qunar] H5 未命中，跳过已停服的 PC，回退 httpx")
         self._last_challenge = None
@@ -1063,6 +1202,10 @@ class QunarCrawler(BaseCrawler):
         # 「原站返回无符合条件的航班」——那是 H5 的判定漏到了 API 头上。
         self._last_no_result = False
         self.last_soft_reject = {}
+        # 链路闸门（r1063 T8）：API 直连是最后一条价源；被停用时如实返回
+        # 空（本次查询这条日期拿不到价），不伪造行、不记失败。
+        if not self.path_gate("API", "domestic", date=date):
+            return None
         got = self._fetch_via_httpx(from_city, to_city, date)
         _sig = getattr(self, "_last_challenge", None)
         _nores = bool(getattr(self, "_last_no_result", False))
@@ -1970,7 +2113,9 @@ class QunarCrawler(BaseCrawler):
                                    separators=(",", ":")).encode("utf-8"),
                 cookies=cookies,
                 timeout=25,
-                impersonate=self.config.get("tls_impersonate", "chrome"),
+                impersonate=scoped_id("identity_headers.tls", "qunar",
+                                      self.config.get(
+                                          "tls_impersonate", "chrome")),
             )
         except Exception as e:
             self.logger.warning("[qunar] httpx 请求异常: %s", e)
@@ -2929,6 +3074,10 @@ class QunarCrawler(BaseCrawler):
         时序丢体风险，q4 实证）。频率纪律沿用 fetch() 外壳错峰/退避。"""
         results: List[FlightPrice] = []
         fc, tc = from_city.upper(), to_city.upper()
+        # 链路闸门（r1063 T8）：国际只有这一条浏览器通路，被策略停用时
+        # 如实返回空（这条日期本轮不采），不 return 整个查询、不记失败。
+        if not self.path_gate("H5", "intl"):
+            return results
         for date in dates:
             url = self.INTL_URL_TPL.format(
                 from_name=urllib.parse.quote(self._intl_city_name(fc)),
@@ -3245,8 +3394,23 @@ class QunarCrawler(BaseCrawler):
                     "[qunar][intl] %s 未解析到价格（响应 %d 份%s）",
                     date, len(bodies), f"，风控态 {risk}" if risk else "")
                 # 有响应但解析不出价（r403）：不断言无票，记 error 供排查。
+                # r1063 T66：**留现场**——只有一句"没解析出"等于让人重新猜。
+                _scene = self.save_parse_scene(
+                    bodies, tag="intl_%s" % str(date)[-5:],
+                    anchors=("transCity", "flight", "price", "class="))
                 self.path_note("H5", "error", date=date,
-                               detail="国际列表有响应但未解析出价格")
+                               detail="国际列表有响应但未解析出价格｜"
+                                      + self.scene_sig(_scene))
+                # 连续两次解析失败 → 记"疑似改版"（健康页降级那行会说）
+                if not _scene.get("anchors", {}).get("class="):
+                    try:
+                        from core import degraded as _dg
+                        _dg.note("parse_drift", self.name,
+                                 "连续解析 0 行，现场已留：%s"
+                                 % os.path.basename(
+                                     str(_scene.get("path") or "")))
+                    except Exception:
+                        pass
             self._sleep()
         return results
 

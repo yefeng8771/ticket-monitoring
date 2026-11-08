@@ -39,7 +39,8 @@ from core import net as _net
 from core.flightnorm import cabin_clean, fmt_dur
 from core.intl import airport_city_code, is_intl_route
 from core.models import PRICE_MAX, PRICE_MIN, FlightPrice, price_band_ok
-from .base import BaseCrawler, iata2, iata3, profile_headers
+from .base import (BaseCrawler, iata2, iata3, profile_headers,
+                   scoped_id)
 from .challenge import blocked_signal, login_signal
 
 _RE_HHMM = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
@@ -190,8 +191,28 @@ class TuniuCrawler(BaseCrawler):
     # 国际通道独立，不受该标记影响
     login_suspect = False
 
-    RATE_MAX = 3
-    RATE_WINDOW = 600.0
+    RATE_MAX = 3            # 兜底（r1063 T31 起走 `channel_rate.tuniu_rate_max`）
+    RATE_WINDOW = 600.0     # 兜底（r1063 T31 起走 `channel_rate.tuniu_window_s`）
+
+    def _rate_limits(self) -> tuple:
+        """(窗口内成功上限, 窗口秒数)：参数层优先、类属性兜底。
+
+        途牛 PC 对远期日期更容易触发软风控，它的"3 次/10 分钟"是实测档位；
+        写死意味着用户想调快/调慢只能改代码——而它正是"速度 vs 风控"的旋钮。
+        """
+        mx, win = int(self.RATE_MAX), float(self.RATE_WINDOW)
+        try:
+            from core.strategy_params import switch_on
+            if not switch_on("channel_rate.enabled", plat=self.name):
+                return max(1, mx), max(1.0, win)   # 关掉定制 → 内置兜底
+            from core import strategy_params as _sp
+            mx = int(float(_sp.resolve("channel_rate.tuniu_rate_max",
+                                       plat=self.name).value))
+            win = float(_sp.resolve("channel_rate.tuniu_window_s",
+                                    plat=self.name).value)
+        except Exception:
+            pass
+        return max(1, mx), max(1.0, win)
 
     PC_URL_TPL = ("https://flight.tuniu.com/domestic/list/"
                   "{fc}_{tc}_ST_1_0_0/?start={date}")
@@ -272,10 +293,12 @@ class TuniuCrawler(BaseCrawler):
         while True:
             with self._rate_lock:
                 now = time.time()
-                self._success_times[:] = [t for t in self._success_times if now - t < self.RATE_WINDOW]
-                if len(self._success_times) < self.RATE_MAX:
+                _mx, _win = self._rate_limits()
+                self._success_times[:] = [t for t in self._success_times
+                                          if now - t < _win]
+                if len(self._success_times) < _mx:
                     return
-                wait = self.RATE_WINDOW - (now - self._success_times[0]) + 0.5
+                wait = _win - (now - self._success_times[0]) + 0.5
             time.sleep(min(wait, 30))
 
     def _rate_record(self):
@@ -626,7 +649,9 @@ class TuniuCrawler(BaseCrawler):
     def _one_attempt(self, depart_code, arrive_code, depart_date, polls=None,
                      back_date=""):
         page_token = self._saved_page_token(depart_code, arrive_code, depart_date)
-        client = _net.new_client(self.config.get("tls_impersonate", "chrome"),
+        client = _net.new_client(
+            scoped_id("identity_headers.tls", "tuniu",
+                      self.config.get("tls_impersonate", "chrome")),
             headers=profile_headers(self.fingerprint(), {
                 "Origin": "https://m.tuniu.com",
                 "Referer": "https://m.tuniu.com/",
@@ -823,7 +848,9 @@ class TuniuCrawler(BaseCrawler):
         productList 为空——只有这种干净响应才允许调用方落 empty）；
         ok=False 时 data 为带类型的 IntlFailure（timeout/error/
         parse_error），blocked 仅保留给外层退避加倍。"""
-        client = _net.new_client(self.config.get("tls_impersonate", "chrome"),
+        client = _net.new_client(
+            scoped_id("identity_headers.tls", "tuniu",
+                      self.config.get("tls_impersonate", "chrome")),
             headers=profile_headers(self.fingerprint(), {}),
             timeout=25,
             follow_redirects=True,
@@ -1136,6 +1163,10 @@ class TuniuCrawler(BaseCrawler):
         # （fliggy:341/ctrip:196/tongcheng:151）；落库保持配置原码。
         fc = airport_city_code(from_city.upper())
         tc = airport_city_code(to_city.upper())
+        # 链路闸门（r1063 T8）：国际只有这条 H5/API 接口通路，被策略停用
+        # 时如实返回空（本轮这一天不采），不伪造行、不记失败。
+        if not self.path_gate("H5/API", "intl"):
+            return results
         for date in dates:
             t_h5 = time.time()
             self._last_challenge_intl = None
@@ -1305,8 +1336,13 @@ class TuniuCrawler(BaseCrawler):
         fc0, tc0 = (airport_city_code(from_city.upper()),
                     airport_city_code(to_city.upper()))
         results: List[FlightPrice] = []
+        # 链路闸门（r1063 T8）：国际往返这条通路被策略停用时如实返回空
+        # （一条请求都不发，也不拿单段价冒充往返总价）。
+        if not self.path_gate("往返", "intl"):
+            return results
         client = _net.new_client(
-            self.config.get("tls_impersonate", "chrome"),
+            scoped_id("identity_headers.tls", "tuniu",
+                      self.config.get("tls_impersonate", "chrome")),
             headers=profile_headers(self.fingerprint(), {}),
             timeout=25, follow_redirects=True)
         try:
@@ -1445,9 +1481,13 @@ class TuniuCrawler(BaseCrawler):
                     "PC", "unsupported", date=_far_pc[0],
                     detail="距今天 >%d 天的 PC 不查（风控），远日期走 H5/API"
                            % self.PC_MAX_AHEAD_DAYS)
+            # 链路闸门（r1063 T8）：PC 列表被策略停用/冷却时**只跳过它**
+            # ——pc_map 保持空，全部日期照常走下面的 H5/API，不中断查询
+            # （PC 可见窗口重试同属 PC 这条通路，一并跳过）。
+            _pc_ok = self.path_gate("PC", "domestic")
             try:
                 pc_map = (self._fetch_pc_dom(fc, tc, _pc_dates)
-                          if _pc_dates else {})
+                          if (_pc_dates and _pc_ok) else {})
             except Exception as e:
                 self.logger.warning("[tuniu] PC 列表异常，回退 H5/API: %s", e)
                 pc_map = {}
@@ -1455,7 +1495,10 @@ class TuniuCrawler(BaseCrawler):
             # 再取一次（仍被挑战则如实落 blocked）。
             missing = [d for d in dates if not (pc_map.get(d) or [])]
             # 可见窗口只在用户主动探针时兜底；定时监控不弹窗。
-            _pc_missing = [d for d in missing if d in set(_pc_dates)]
+            # 闸门跳过的 PC 通路同样不做可见窗口重试：停一条路不该靠弹窗
+            # 绕回来（_pc_ok=False 时 _pc_missing 直接为空，判据形状不变）。
+            _pc_missing = ([d for d in missing if d in set(_pc_dates)]
+                           if _pc_ok else [])
             if _pc_missing and getattr(self, "probe_mode", False):
                 try:
                     self.logger.info("[tuniu] PC 无明细，复用已保存会话可见窗口重试 %d 日", len(_pc_missing))
@@ -1481,24 +1524,40 @@ class TuniuCrawler(BaseCrawler):
                 h5_token = self._saved_page_token(fc, tc, dates[0])
             except Exception:
                 h5_token = ""
+        # PC 行**先发布**（复核 2026-11-06 Critical）：这段与 H5/API 的
+        # 闸门无关——PC 的账已经记过 `PC/ok`（见上面 `_fetch_pc_dom`），
+        # 闸门停的是另一条路，不许把它的行一起扔掉。原先闸门加在下面那个
+        # 循环头上，而那个循环同时是 pc_map 唯一的发布点，于是
+        # `_h5_ok=False` 时循环一次都不跑：账本说 PC 出数了、`fetch()`
+        # 却返回 `[]`（最难查的一类）。
         for date in dates:
             pc_rows = pc_map.get(date) or []
-            if pc_rows:
-                best = min(pc_rows, key=lambda f: f["price"])
-                results.append(FlightPrice(
-                    platform=self.name,
-                    from_city=from_city, to_city=to_city,
-                    depart_date=date, price=float(best["price"]),
-                    airline=best.get("name", "")[:20],
-                    flight_no=best.get("code", ""),
-                    depart_time=best.get("depTime", ""),
-                    arrive_time=best.get("arrTime", ""),
-                    extra=json.dumps(pc_rows, ensure_ascii=False)))
-                self.last_path = "PC列表"
-                self.logger.info(
-                    "[tuniu] %s PC 明细 %d 条 · 最低 ￥%.0f",
-                    date, len(pc_rows), float(best["price"]))
+            if not pc_rows:
                 continue
+            best = min(pc_rows, key=lambda f: f["price"])
+            results.append(FlightPrice(
+                platform=self.name,
+                from_city=from_city, to_city=to_city,
+                depart_date=date, price=float(best["price"]),
+                airline=best.get("name", "")[:20],
+                flight_no=best.get("code", ""),
+                depart_time=best.get("depTime", ""),
+                arrive_time=best.get("arrTime", ""),
+                extra=json.dumps(pc_rows, ensure_ascii=False)))
+            self.last_path = "PC列表"
+            self.logger.info(
+                "[tuniu] %s PC 明细 %d 条 · 最低 ￥%.0f",
+                date, len(pc_rows), float(best["price"]))
+        h5_dates = [d for d in dates if not (pc_map.get(d) or [])]
+        if not h5_dates:
+            return results
+        # 链路闸门（r1063 T8）：H5/API 通路被策略停用/冷却时只交出**上面
+        # 已发布的 PC 行**，不把整条查询判死。往返档的作用域是
+        # `round_trip`，于是「停单程 H5」不会顺手把往返也停掉。
+        if not self.path_gate("H5/API",
+                              "round_trip" if ret_date else "domestic"):
+            return results
+        for date in h5_dates:
             t_h5 = time.time()
             self._last_challenge = None
             raw = self._hoop(fc, tc, date, back_date=ret_date)
@@ -1577,6 +1636,10 @@ class TuniuCrawler(BaseCrawler):
                            detail="国际无官方低价日历（不拿榜单冒充）")
             return []
         anchor = str(departure_date or _dtm.date.today().isoformat())[:10]
+        # 链路闸门（r1063 T8）：日历这条通路被策略停用时如实返回空
+        # ——日历价是独立发现源，停它不影响明细采集。
+        if not self.path_gate("日历", "calendar"):
+            return []
         from crawlers.special import fetch_tuniu_calendar
         rows = fetch_tuniu_calendar(from_city, to_city, anchor, self.logger)
         if rows is None:

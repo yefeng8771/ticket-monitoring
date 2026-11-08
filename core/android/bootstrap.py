@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 from .config import normalize, resolve_install_dir
@@ -42,6 +43,101 @@ STEPS = (
     ("apk", _apk_step_label()),
     ("verify", "验证可采集"),
 )
+
+
+# 伪装检查项：与 scripts/device_hardening.py 的体检同源（那边是权威实现，
+# 这里只做**读回**的轻量子集，供 UI/CLI 引导用；真正的落地与全量体检在脚本里）。
+HARDENING_HINT = "python scripts/setup_device.py --apply --reboot"
+
+
+# 一次往返取全部伪装信息（单条 shell 脚本，避免多次 adb round-trip）
+PROBE_SCRIPT = r"""
+echo "enforce=$(getenforce 2>/dev/null)"
+echo "cpu=$(head -2 /proc/cpuinfo 2>/dev/null | tr '\n' ' ')"
+ZP=$(pidof zygote64 2>/dev/null | cut -d' ' -f1)
+echo "zpid=$ZP"
+echo "zyg=$( [ -n "$ZP" ] && grep -c zygisk /proc/$ZP/maps 2>/dev/null )"
+echo "cloak=$(ls /data/adb/modules/mumu_cloak/zygisk 2>/dev/null | head -1)"
+echo "cloak_off=$(ls /data/adb/modules/mumu_cloak/disable 2>/dev/null)"
+"""
+
+
+def parse_probe(text: str) -> dict:
+    """把 PROBE_SCRIPT 的输出解析成检查结果。纯函数，便于单测。
+
+    返回 {ok, checks, missing, next}；拿不到关键行时 ok=None（未知）。
+    """
+    vals = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        m = re.match(r"^([a-z_]+)=(.*)$", line)
+        if m:
+            vals[m.group(1)] = m.group(2).strip()
+
+    if "enforce" not in vals:
+        return {"ok": None, "checks": [], "missing": [],
+                "next": "读不到设备状态（adb 未就绪），伪装无法确认"}
+
+    checks, missing = [], []
+
+    enf = vals.get("enforce", "")
+    ok = (enf == "Enforcing")
+    checks.append(("SELinux 视图", ok, enf or "(空)"))
+    if not ok:
+        missing.append("SELinux 视图=%s" % (enf or "空"))
+
+    cpu = vals.get("cpu", "")
+    ok = ("CPU implementer" in cpu) or ("BogoMIPS" in cpu)
+    checks.append(("/proc/cpuinfo ARM 视图", ok,
+                   "已伪装" if ok else "仍是宿主 CPU"))
+    if not ok:
+        missing.append("cpuinfo 未伪装")
+
+    zyg = vals.get("zyg", "")
+    ok = bool(zyg) and zyg.isdigit() and int(zyg) > 0
+    checks.append(("Zygisk 注入", ok,
+                   "zygote=%s 命中=%s" % (vals.get("zpid") or "?", zyg or "0")))
+    if not ok:
+        missing.append("Zygisk 未注入")
+
+    cloak_ok = bool(vals.get("cloak")) and not vals.get("cloak_off")
+    checks.append(("mumu_cloak", cloak_ok,
+                   "启用" if cloak_ok else "未安装或已停用"))
+    if not cloak_ok:
+        missing.append("mumu_cloak 未启用")
+
+    if missing:
+        return {"ok": False, "checks": checks, "missing": missing,
+                "next": "设备伪装未就位：%s；执行 %s"
+                        % ("、".join(missing), HARDENING_HINT)}
+    return {"ok": True, "checks": checks, "missing": [], "next": ""}
+
+
+def probe_hardening(dev) -> dict:
+    """读回设备伪装状态（只读、绝不抛异常）。"""
+    try:
+        out = dev.run_script(PROBE_SCRIPT)
+    except Exception:
+        return {"ok": None, "checks": [], "missing": [],
+                "next": "伪装检查异常，未能确认"}
+    if not out:
+        return {"ok": None, "checks": [], "missing": [],
+                "next": "设备无响应，伪装无法确认"}
+    return parse_probe(out)
+
+
+def _with_hint(st: dict) -> dict:
+    """把"伪装缺项"的修复提示并到 `next` **最前面**（原有原因保留在后面）。
+
+    为什么要统一在这里合并：`next` 会在 `status()` 后半段被"缺 App / 待验证"
+    等分支重新赋值，先前写进去的伪装提示就被覆盖了——那正是"设备起来了但
+    伪装没做，用户却看不到任何提示"的成因。
+    """
+    hd = st.get("hardening") or {}
+    if hd.get("ok") is False and hd.get("next"):
+        base = st.get("next") or ""
+        st["next"] = hd["next"] + (("\n" + base) if base else "")
+    return st
 
 
 def status(cfg: dict, evidence=None) -> dict:
@@ -108,6 +204,7 @@ def status(cfg: dict, evidence=None) -> dict:
         plats = []
         plat_cn = lambda p: p  # noqa: E731
     missing, installed = [], False
+    dev = None
     try:
         from .device import AdbDevice
         dev = AdbDevice(mgr.adb_path, mgr.adb_serial(),
@@ -120,6 +217,19 @@ def status(cfg: dict, evidence=None) -> dict:
     except Exception:
         missing = []
         installed = False
+    # 伪装探针（只读，失败不阻断）。dev 拿不到就明确"未确认"，不猜——
+    # 之前这里直接 probe_hardening(dev)，dev 未定义时抛 NameError 被
+    # 吞成 ok=None，UI 上表现为"伪装那栏不显示"（静默失效）。
+    if dev is None:
+        state["hardening"] = {"ok": None, "checks": [], "missing": [],
+                              "next": "设备句柄不可用，伪装无法确认"}
+    else:
+        try:
+            state["hardening"] = probe_hardening(dev)
+        except Exception:
+            state["hardening"] = {"ok": None, "checks": [], "missing": [],
+                                  "next": "伪装检查异常，未能确认"}
+
     done = {"check", "install", "boot"}
     if installed:
         done.add("apk")
@@ -135,7 +245,7 @@ def status(cfg: dict, evidence=None) -> dict:
             state["next"] = "实例已就绪，但读不到 App 安装状态（adb 查询失败）"
         else:
             state["next"] = "实例已就绪，但没有注册任何 App 渠道"
-        return state
+        return _with_hint(state)
     # 「验证可采集」只认**真的采到过数**：光装着 App 不等于能采
     # （登录墙、风控都会让采集失败）。evidence 回调由调用方注入，
     # 不注入就保持未勾选——不猜。
@@ -154,7 +264,7 @@ def status(cfg: dict, evidence=None) -> dict:
                   if plats else "App 渠道")
         state["next"] = ("已就绪：在 配置 · 渠道登录 里登录 %s；"
                          "登录后跑一轮采集即会点亮「验证可采集」" % _names)
-    return state
+    return _with_hint(state)
 
 
 def ensure_android_runtime(platforms, cfg, logger=None) -> str:
@@ -177,6 +287,11 @@ def ensure_android_runtime(platforms, cfg, logger=None) -> str:
         msg = f"未检测到 MuMu：{st['next']}"
     elif state == "ready":
         msg = st["detail"]
+        # 实例起来了但**伪装没就位**时，必须把修复命令带到启动日志里：
+        # 否则用户看到"已就绪"就以为万事大吉，采集却一直失败。
+        _hd = st.get("hardening") or {}
+        if _hd.get("ok") is False:
+            msg = (msg + "；但" + (_hd.get("next") or "")).strip("；")
     else:
         msg = f"{st['detail']}：{st.get('next', '')}".strip("：")
 

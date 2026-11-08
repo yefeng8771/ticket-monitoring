@@ -673,7 +673,7 @@ spMonRestore()        每次 hover / 越界 / hideTip 调用
 - **症状**：点「展开说明」，说明出现在整页底部、与触发器之间压着整条卡头。
 - **判据**：说明盒是否**整块落在触发器所在的卡内**；说明顶 − 触发器底 ≤ 12px；`elementFromPoint` 命中说明本身；触发器两态坐标差 ≤1px。
 - **修法**：把说明移进 `#srccap`，与触发器同卡；收起后卡高回到初始。
-- **门禁**：`tests/test_r873_scnote_inside_source_card.py`（含负控用例「把说明挪回 `#healthDiag` 直接子级必须判红」）。
+- **门禁**：`tests/test_r1130_wave2_health_contract.py`（含负控用例「把说明挪回 `#healthDiag` 直接子级必须判红」）。
 - **对本次的启示**：这条门禁上线后，三条老断言（`.healthDiag>#scNote` 的存在性）同时失效——**契约变更会让一整批旧断言过期**，这不是并发假红，要按 §2.4 纪律三处理。
 
 ### 6.16 两态坐标不同（「展开时按钮自己跑了」）
@@ -681,7 +681,7 @@ spMonRestore()        每次 hover / 越界 / hideTip 调用
 - **症状**：点「展开更多条件」，被点的那颗按钮自己移位；收回后也不回位。
 - **根因**：展开时面板刚插入、几何未稳，旧实现按当时的 `top-110` 滚动。
 - **修法**：下一帧按**控件区顶**对齐滚动；并断言展开/收回两态触发器坐标差 ≤1px。
-- **门禁**：`tests/test_r869_more_conditions_trigger_stays.py`（负控=恢复旧的 30ms/`top-110`，实测 377.9→81.9 低于页头地板即红）。
+- **门禁**：`tests/test_r1130_filter_continuity.py`（负控=恢复旧的 30ms/`top-110`，实测 377.9→81.9 低于页头地板即红）。
 
 ---
 
@@ -784,7 +784,7 @@ demo 服量不出真实库的形状（日桶跨度、千行数据）。**探针�
 写本文时，我自己的文档被门禁连挂两次。记下来，因为它们对所有 Markdown 文档都成立：
 
 1. **表格里的 `||` 会被当成列分隔符**。我在一个三列表的某个单元格里写了 `host.scrollLeft||0`，两个竖线让该行变成 4 列，`.test_spec_markdown_tables_are_well_formed` 判红。**修法**：表格内不要写含 `|` 的代码（`||`、`|x|`、位运算），改写成文字描述。
-2. **把门禁的「文件名」写成「函数名」**。我先写了 `test_r873_scnote_inside_source_card`（没有 `.py`），而该文件里的实际函数叫 `test_note_sits_inside_source_card` 等——读者会去搜一个不存在的函数。**修法**：门禁要么写完整路径 `` `tests/test_x.py` ``，要么写真实函数名并先 grep 确认。
+2. **把门禁的「文件名」写成「函数名」**。我先写了 `test_r1130_wave2_health_contract`（没有 `.py`），而该文件里的实际函数叫 `test_note_sits_inside_source_card` 等——读者会去搜一个不存在的函数。**修法**：门禁要么写完整路径 `` `tests/test_x.py` ``，要么写真实函数名并先 grep 确认。
 
 **通用的自查脚本**（写任何技术文档后跑一遍）：
 
@@ -1009,7 +1009,7 @@ r374b 系列十二轮的界面统一改动**已全部提交**，不是待提交�
 | `test_docs_code_contract.py` 的 `test_spec_markdown_tables_are_well_formed` | **中途态** | 该次运行期间本会话正在改本文档；单独复跑 **通过** |
 
 **判定「过期断言」而非「缺陷」的硬证据**：新契约有独立门禁
-`tests/test_r873_scnote_inside_source_card.py`，实测 **16 passed**——说明必须在触发器所在卡内、
+`tests/test_r1130_wave2_health_contract.py`，实测 **16 passed**——说明必须在触发器所在卡内、
 与触发器间无夹层、两态坐标不变，这条新契约是被守护的。旧的 3 条是同一件事的**旧形态断言**。
 
 **UI 侧的自证**：并行会话的分片 2 曾因与会话争抢端口在 `.srx-hero-act button:has-text("五平台校准册")`
@@ -1045,7 +1045,7 @@ git status --porcelain
 md5sum webui.py
 PYTHONIOENCODING=utf-8 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest tests/test_r366_source_strip.py tests/test_r536b_note_sits_under_trigger.py \
-                   tests/test_v1555_webui.py tests/test_r873_scnote_inside_source_card.py -q
+                   tests/test_v1555_webui.py tests/test_r1130_wave2_health_contract.py -q
 
 # 3) 若上面 4 项仍红且 r873 仍绿 → 按 §13.5 处理
 ```

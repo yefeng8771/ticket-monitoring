@@ -87,11 +87,29 @@ def test_backend_clamps_match_ui():
 
 
 def test_disabled_by_default_in_example_config():
-    """示例配置必须 enabled: false——新用户不该被默认拉起 7GB 模拟器。"""
+    """示例配置必须 enabled: false——新用户不该被默认拉起 7GB 模拟器。
+
+    **不要用固定字窗**（2026-11-05 踩过）：旧写法只取 `android:` 之后
+    400 个字符，后来给这段补了 Magisk/build_id 的说明注释（有用且该留），
+    把 `enabled: false` 挤出了窗口 —— 测试红了，但**配置一直是对的**。
+    现在改为"在 android 段内按 2 空格缩进找总开关"，
+    注释爱写多长写多长，判据只认结构不认字数。
+    """
     p = os.path.join(ROOT, "config.example.yaml")
     text = io.open(p, encoding="utf-8", newline="").read()
     m = re.search(r"^android:\s*$", text, re.M)
     assert m, "config.example.yaml 缺少 android: 段"
-    block = text[m.end():m.end() + 400]
-    assert re.search(r"^\s+enabled:\s*false", block, re.M), \
-        "android.enabled 在示例配置里必须是 false"
+    # 段内逐行看：`android:` 的**直接子键**是 2 空格缩进；
+    # 只认这一层的 enabled（子段里的 magisk.enabled 等不算）。
+    lines = text[m.end():].splitlines()
+    got = None
+    for ln in lines:
+        if ln and not ln.startswith((" ", "\t")):
+            break                      # 段结束（遇到顶格键）
+        hit = re.match(r"^  enabled:\s*(true|false)\b", ln)
+        if hit:
+            got = hit.group(1)
+            break
+    assert got is not None, "android 段里找不到总开关 enabled"
+    assert got == "false", \
+        "android.enabled 在示例配置里必须是 false（当前 %s）" % got

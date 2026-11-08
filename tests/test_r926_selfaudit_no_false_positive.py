@@ -39,8 +39,16 @@ _LOG = logging.getLogger("test_r926")
 class FakeDev:
     """按命令返回：``test -e`` 走 exists 集合，``getprop`` 走 props。"""
 
-    def __init__(self, exists=(), props=None, listing=None):
+    def __init__(self, exists=(), props=None, listing=None,
+                 dirs=None, modes=None):
         self.exists = set(exists)
+        # 父目录（app_can_see 要查它们的权限位）
+        self.dirs = set(dirs or ("/data", "/data/local", "/data/local/tmp",
+                                 "/mnt", "/system", "/system/bin",
+                                 "/system/xbin", "/sbin"))
+        # 默认 others 有 r-x（= App 能 traverse），让旧测试语义不变；
+        # 要钉"0700 看不见"就把对应目录传成 drwx------
+        self.modes = dict(modes or {})
         # 至少要有一个 prop：`detect()` 拿不到任何 props 会提前返回
         # （"device offline"），后面的文件探测根本不会执行。
         self.props = dict(props if props is not None
@@ -51,8 +59,22 @@ class FakeDev:
     def _sh(self, *a, timeout=None):
         cmd = " ".join(str(x) for x in a)
         self.calls.append(cmd)
+        toks = cmd.split()
+        # **新契约**：`ls -d <单条路径>` 判存在、`ls -ld <父链...>` 判权限位。
+        # 两者都把路径当**独立 argv**，所以不经过任何 shell 解析。
+        if toks[:3] == ["shell", "ls", "-ld"]:
+            out = []
+            for p in toks[3:]:
+                if p in self.exists or p in self.dirs:
+                    mode = self.modes.get(p, "drwxr-xr-x")
+                    out.append("%s 2 root root 4096 2026-11-04 12:00 %s"
+                               % (mode, p))
+            return "\n".join(out)
+        if toks[:3] == ["shell", "ls", "-d"]:
+            p = toks[3] if len(toks) > 3 else ""
+            return p if (p in self.exists or p in self.dirs) else ""
         if "test -e" in cmd:
-            # 形如: sh -c "test -e '/system/bin/su' && echo TM_YES || echo TM_NO"
+            # 旧契约（保留：钉"不许再用 sh -c 探测"——它会被 adb 拆参数恒假）
             import re as _re
             m = _re.search(r"test -e '([^']+)'", cmd)
             path = m.group(1) if m else ""
@@ -86,13 +108,27 @@ def test_audit_reports_real_su_only():
     assert fs_leaks == ["/system/xbin/su"], fs_leaks
 
 
-def test_audit_uses_test_e_not_ls(monkeypatch):
-    dev = FakeDev(exists=())
-    fp.audit(dev)
+def test_audit_probe_avoids_shell_metacharacters(monkeypatch):
+    """探测必须把路径当**独立 argv**，不许包 `sh -c`。
+
+    这条测试曾经反向钉住了一个错误实现（`sh -c "test -e X && echo A || echo B"`），
+    而那个实现是**恒假**的：adb 把命令行按空格拆开送进设备 shell，设备执行的是
+    `sh -c test`（内层拿不到参数 → 恒假）+ 外层 `|| echo TM_NO`
+    → 任何路径都判"不存在"，`root 痕迹: []` 于是从来没有意义。
+    用 `/system/bin/sh`（必然存在）一测就露馅。
+
+    但**原始意图仍然要保住**：不能退回去用不带 `-d` 的 `ls <路径>`，
+    那会把目录内容列出来 → 17 条幽灵残留、自检被打到 0 分。
+    所以钉的是：用 `ls -d`/`ls -ld`，且不出现 shell 元字符。
+    """
+    dev = FakeDev(exists={"/system/bin/sh"})
+    assert fp._exact_path_exists(dev, "/system/bin/sh") is True, \
+        "探针又恒假了：存在的文件判不出存在"
     joined = "\n".join(dev.calls)
-    assert "test -e" in joined
-    # 不该再用 ls 去探那几个路径
-    assert "ls /system/bin/su" not in joined
+    assert "test -e" not in joined, "还在用 sh -c 探测（会被拆参数 → 恒假）"
+    assert '"sh", "-c"' not in joined, "探测命令被包进 sh -c"
+    # 反幽灵：不许出现"不带 -d/-ld 的 ls <单个路径>"
+    assert "ls /system/bin/su" not in joined, "退回了会展开目录的 ls"
 
 
 # ---------------------------------------------------------------------------

@@ -24,8 +24,13 @@ dump` 找控件。两个现场条件会直接让整轮归零，而它们都与�
 * **不改**：分辨率与 DPI（这里不管）。要改屏幕用 ``display.spoof()``，
   并且**必须**同时 ``dev.set_design()`` 开坐标换算，否则 App 渠道按现有
   竖屏写死的坐标会按比例偏（这条是本模块与 ``display`` 的分工边界）。
-* **不改**：自动旋转（`device.lock_portrait()` 已经负责）、CPU/内存分配
-  （要重启实例，且属于宿主机资源决策，交给操作员）。
+* 改：**自动旋转也在这里固化**（`accelerometer_rotation=0` +
+  `user_rotation=0`）。原先把这件事只交给 `device.lock_portrait()`，
+  但它是按需调用、且实例重启后 MuMu（`window_auto_rotate`）会把
+  `accelerometer_rotation` 重新置 1 —— 现场表现就是飞猪/携程 App 隔几轮
+  又变回横屏，硬编码坐标整片失效。放进调优层后每 boot 至少校一次，
+  与动画开关同一张标记文件、同一次 adb 往返，成本为零。
+* **不改**：CPU/内存分配（要重启实例，且属于宿主机资源决策，交给操作员）。
 
 失败一律 fail-soft：读不到就跳过，绝不阻断采集。
 """
@@ -45,13 +50,20 @@ _SETTINGS = (
     ("system", "screen_off_timeout", "2147483647"),
     ("secure", "screensaver_enabled", "0"),
     ("secure", "immersive_mode_confirmations", "confirmed"),
+    # 竖屏锁：MuMu 的 window_auto_rotate=true 会在实例重启后把这两项置回
+    # （accelerometer_rotation=1），App 随后转成横屏、写死坐标全偏。放在
+    # 调优层是为了"每 boot 至少校一次"，而不是等某个调用方记得去锁。
+    ("system", "accelerometer_rotation", "0"),
+    ("system", "user_rotation", "0"),
 )
 
-# 期望值（验收用）：只核对三档动画与常亮
+# 期望值（验收用）：只核对三档动画、常亮与竖屏锁
 _EXPECT = {
     "window_animation_scale": "0",
     "transition_animation_scale": "0",
     "animator_duration_scale": "0",
+    "accelerometer_rotation": "0",
+    "user_rotation": "0",
 }
 
 
@@ -101,8 +113,9 @@ def apply(dev, config: dict = None, logger=None, *, vm: int = 0,
     rep["actions"].append("svc power stayon true")
 
     rep["verify"] = verify(dev)
-    _call(dev, "shell", "sh", "-c",
-          "echo %s > %s" % (_quote(boot or "1"), _mark_path(vm)))
+    # 统一走 write_remote：`sh -c "echo X > path"` 在 Windows 上静默失败
+    from .fingerprint import write_remote
+    write_remote(dev, _mark_path(vm), boot or "1")
     rep["ok"] = bool(rep["verify"].get("ok"))
     if logger:
         v = rep["verify"].get("values") or {}

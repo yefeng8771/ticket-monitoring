@@ -11,21 +11,28 @@
 * **强人机**：极验 v4 智能验证、腾讯天御、阿里 baxia/无痕、reCAPTCHA/hCaptcha、
   点选文字/图片、行为序列模型。它们的判定输入是**你的行为分布本身**
   （加速度、抖动频谱、停顿分布、设备传感器相关性）。这类不是"算不出来"，
-  而是"越算越像机器"——花成本还把自己打成高风控分。
+  而是行为分布与环境指纹，硬解拿不到稳定收益。
 
 所以本模块的第一件事是**分级**（`classify`），第二件事才是**尝试**，且：
 
 ========================  ==================================================
 约束                      理由
 ========================  ==================================================
-默认关闭（`off`）          仓库既有立场是「识别 → 记账 → 停手 → 人来过」，
-                          自动尝试必须是操作员显式打开的能力
+出厂配置即开启           `config.example.yaml` 里 `slider.auto: auto`，
+                          生成配置后默认就尝试；代码对**没有该项**的旧配置
+                          保持"不尝试"（升级不改变既有行为）。
+                          边界靠 `classify` 的分级守，不靠"默认关"守；
+                          `crawler.slider.auto=false` 可随时关掉
 只对 `simple` 尝试         `strong`/`unknown` 一律不动手——判错一次就是
                           一条「自动化行为」样本，代价远大于收益
 每次最多 `max_attempts`    失败一次就记账，不重试风暴
 每日上限 + 连续失败拉黑    `slider_ledger.json`：某渠道连续 2 次失败 →
-                          7 天内不再尝试（风控是动态的，硬试只会更糟）
-不接第三方打码服务         不开这个口子：它是把账号交给陌生人
+                          7 天内不再尝试（连续失败说明这条路当前走不通，等风控回落后自动解禁）；
+                          上限默认 20 次/渠道/天，覆盖正常采集轮次
+第三方识别库**可选增强**   `ddddocr`/easyocr 等开源识别库装进 `_vendor/`
+                          就自动用（不进 requirements）；没装退回系统 OCR，
+                          功能不中断。这类库只对**本地图片**做字符识别，
+                          不把会话交出去——与"把账号丢给打码平台"是两件事
 ========================  ==================================================
 
 对外接口
@@ -58,8 +65,8 @@ _STRONG_MARKS = (
     "tcaptcha", "天御", "tencent captcha", "baxia", "whaleguard", "无痕",
     # 国际
     "recaptcha", "hcaptcha", "turnstile", "cf-challenge", "arkose",
-    # 语义/点选类：不是几何题
-    "点选", "请按顺序点击", "按顺序点击", "选出", "依次点击",
+    # 注：点选类（"按顺序点击/选出/依次点击"）**不在这里**——它是图像定位题，
+    # 由 `crawlers/captcha.py::classify_kind` 判成 click 并单独处置（r1063 T21）。
     # 活体/人脸
     "人脸", "活体", "眨眼", "摇头",
 )
@@ -68,7 +75,16 @@ _STRONG_MARKS = (
 _SIMPLE_MARKS = (
     "拖动滑块", "拖动下方滑块", "滑动验证", "按住滑块", "向右拖动",
     "拖动左侧滑块", "slide to verify", "slide-verify", "slider",
+    # **携程登录的拼图滑块**（2026-11-04 实测）：
+    # 它的文案只有「请完成拼图验证」，不含"滑块/拖动"字样，于是被判
+    # `unknown`（不可解）——而它其实就是**标准拼图滑块**：
+    # 实测缺口能稳定算到 304（独立两种方法交叉一致）。
+    # 判 `unknown` 的代价是**一次都不试**，白丢一个可解的题。
+    "请完成拼图验证", "拼图验证", "完成拼图", "拖动滑块完成拼图",
 )
+
+# 图像定位题标记（点选/按顺序点击）：题型是"找目标并点它"，归 captcha 处置
+_IMAGE_MARKS = ("点选", "请按顺序点击", "按顺序点击", "选出", "依次点击")
 
 # 简单滑块的 DOM 特征（存在这些类名/结构说明是经典拼图）
 _SIMPLE_DOM = ("slide-verify", "slider-verify", "sliderContainer", "nc_1_n1",
@@ -89,7 +105,11 @@ class Tier:
 
     @property
     def solvable(self) -> bool:
-        """只有 simple 才算"可尝试"。strong/unknown 一律交给人工。"""
+        """只有 simple 才算"可尝试"。
+
+        强人机(`strong`)与未知(`unknown`)不做几何拖动：前者的判据是行为
+        分布而不是图，后者连题型都没认出来——这两类交给操作员或在界面上
+        用开关处置，不在这里假装可解。"""
         return self.name == "simple"
 
     def as_dict(self) -> dict:
@@ -114,6 +134,14 @@ def classify(html: str = "", text: str = "") -> Tier:
     if strong:
         return Tier("strong", 0.95,
                     ["命中强人机标记：%s" % "、".join(strong[:3])])
+
+    # 点选题（r1063 T21）：几何拖动解不了它（要的是坐标，不是位移），但也不是
+    # "认不出"——单独给出归属，避免它落进 unknown 被当成没识别到题型。
+    click = [m for m in _IMAGE_MARKS if m.lower() in blob]
+    if click:
+        return Tier("strong", 0.85,
+                    ["图像定位题：%s（由 captcha 模块处置，不是几何滑块）"
+                     % click[0]])
 
     simple = [m for m in _SIMPLE_MARKS if m.lower() in blob]
     dom = [m for m in _SIMPLE_DOM if m.lower() in blob]
@@ -159,8 +187,8 @@ def _open_gray(png: bytes):
         return None
 
 
-def find_gap(png: bytes, bbox=None, *, gap_min: int = 24, gap_max: int = 140,
-             top: int = 3, min_offset: int = 12) -> tuple:
+def _find_gap_edges(png: bytes, bbox=None, *, gap_min: int = 24, gap_max: int = 140,
+                    top: int = 3, min_offset: int = 12) -> tuple:
     """在滑块条区域里找缺口中心的 x 偏移。
 
     算法（刻意简单、可解释）：
@@ -227,19 +255,103 @@ def find_gap(png: bytes, bbox=None, *, gap_min: int = 24, gap_max: int = 140,
             best.append((int((a + b) // 2), round(score, 3)))
     if not best:
         return 0, []
-    ranked = sorted(best, key=lambda kv: -kv[1])
-    return ranked[0][0], ranked[:top]
-    if not best:
-        return 0, []
-    # 同一位置被多个宽度覆盖 → 按位置聚合取最高分
+    # 同一位置被多个宽度覆盖 → 按位置聚合取最高分（宽度扫描会重复命中）
     agg = {}
     for off, sc in best:
         key = int(round(off / 8.0)) * 8
         agg[key] = max(agg.get(key, 0.0), sc)
     ranked = sorted(((k, v) for k, v in agg.items()), key=lambda kv: -kv[1])
-    # 去掉贴边的候选（那里通常是"起点方块"自己）
-    ranked = [kv for kv in ranked if kv[0] >= lo] or ranked
+
+    # **排除拼图块自身**（2026-11-04 实测）：
+    # 拼图块固定贴在最左侧，它自己的左右两条边会配出全图最高分
+    # （携程实测：x=57..101 得分 1.369，而真正的缺口 266..342 是 1.316）。
+    # 若不排除，永远返回"起点方块"的位置，等于拖动距离≈0。
+    #
+    # 判据：块所在区域的宽度通常 < 屏宽的 22%（实测 822 宽里块占 ~57px=7%），
+    # 所以把"中心落在最左侧 `w*0.22` 以内"的候选降权，而不是直接丢掉
+    #（小图/方块偏右时仍能保留）。
+    _left_zone = max(int(w * 0.22), lo + 8)
+    def _rank_key(kv):
+        off, sc = kv
+        # 落在最左侧的候选：分数打对折（够低但不会被完全排除）
+        return -sc * (1.0 if off >= _left_zone else 0.5)
+    ranked = sorted(ranked, key=_rank_key)
     return ranked[0][0], ranked[:top]
+
+
+# ---------------------------------------------------------------------------
+# 两法合并：边缘能量（主）+ ddddocr 滑轨模型（可选增强）
+# ---------------------------------------------------------------------------
+#: 两法结果相差多少像素以内视为"互证一致"（滑块验证一般留 5–10px 容差）
+GAP_AGREE_PX = 12
+
+
+def _ddddocr_gap(png: bytes, bbox=None):
+    """按 bbox 裁 ROI 后交给 ddddocr 求缺口中心 x；不可用返回 None。
+
+    为什么必须裁：`slide_match` 要"看得见缺口"的图，整屏截图里 UI 元素太多，
+    模型容易被按钮/图标带偏。而 `_find_gap_edges` 内部本来也按同一个 bbox
+    裁过数组，两边看的是**同一块 ROI**，结论才可比。
+    """
+    try:
+        from . import captcha as _cap
+    except Exception:
+        return None
+    raw = png
+    if bbox:
+        try:
+            import io as _io
+
+            from PIL import Image
+            im = Image.open(_io.BytesIO(png))
+            x0, y0, x1, y1 = [int(v) for v in bbox]
+            x0, y0 = max(0, x0), max(0, y0)
+            im = im.crop((x0, y0, max(x0 + 1, x1), max(y0 + 1, y1)))
+            buf = _io.BytesIO()
+            im.convert("RGB").save(buf, format="PNG")
+            raw = buf.getvalue()
+        except Exception:
+            return None
+    try:
+        return _cap.slide_match(raw)
+    except Exception:
+        return None
+
+
+def _merge_gap(best, cands, d4, *, top: int = 3, min_offset: int = 12) -> tuple:
+    """把 ddddocr 的结果并进边缘法结果（纯函数，便于离线测）。"""
+    if d4 is None or d4 < min_offset:
+        return best, cands                      # 不可用/不可信 → 原样返回
+    d4 = int(d4)
+    if not cands:
+        # 边缘法完全没找到：这一次本来会返回 (0, []) 直接放弃
+        return d4, [(d4, 1.0)]
+    if abs(d4 - int(best)) <= GAP_AGREE_PX:
+        return best, cands                      # 两法互证：顺序不变
+    merged = list(cands)
+    if all(abs(d4 - int(off)) > GAP_AGREE_PX for off, _sc in merged):
+        # 分歧：作为额外候选追加，分数压到比现有最低分略低（不篡位，
+        # 但仍在 top 名单里，会被"顺次试前 3 个候选"试到）
+        low = min((sc for _o, sc in merged), default=0.0)
+        merged.append((d4, round(low * 0.99, 3)))
+    return best, merged[:max(top, len(merged) if len(merged) <= top else top)]
+
+
+def find_gap(png: bytes, bbox=None, *, gap_min: int = 24, gap_max: int = 140,
+             top: int = 3, min_offset: int = 12) -> tuple:
+    """滑块缺口 x：边缘能量法为主，ddddocr 滑轨模型做互补（可选增强）。
+
+    两法各有盲区：边缘法对"两条强边"最稳，ddddocr 对"缺口与背景同色系/
+    有噪点"更稳（见 `captcha.slide_match` 的注释）。合并规则见 `_merge_gap`。
+
+    返回 ``(best_offset, [(offset, score), ...])``；失败返回 ``(0, [])``
+    —— 与旧行为一致，因此**没装 ddddocr 时本函数与旧实现逐字节等价**。
+    """
+    best, cands = _find_gap_edges(png, bbox, gap_min=gap_min,
+                                  gap_max=gap_max, top=top,
+                                  min_offset=min_offset)
+    d4 = _ddddocr_gap(png, bbox)
+    return _merge_gap(best, cands, d4, top=top, min_offset=min_offset)
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +467,25 @@ def _cfg(config: dict = None) -> dict:
     return sec if isinstance(sec, dict) else {}
 
 
+def _pval(pid: str, plat: str, default=None):
+    """读策略参数（r1063 T42）：**参数层有意见才采用**，否则用调用方的值。
+
+    优先级：渠道/维度/全局覆盖（`source != "default"`）> 调用方给的 cfg >
+    契约默认（由 `default` 兜底）。
+
+    为什么不能"只要 provider 能算就用"：离线单测与部分调用点传的是裸 cfg 且
+    没有 `set_config`，那时 provider 只会吐出**契约默认值**，把调用方的开关顶掉
+    ——配置看着"没生效"，其实是读点优先级错了。
+    """
+    try:
+        from core import strategy_params as _sp
+        got = _sp.resolve(pid, plat=str(plat or ""))
+        if str(getattr(got, "source", "") or "default") != "default":
+            return got.value
+    except Exception:
+        pass
+    return default
+
 def _flag(v, default=False) -> bool:
     if v is None:
         return default
@@ -368,12 +499,32 @@ def _flag(v, default=False) -> bool:
 def should_attempt(plat: str, config: dict = None, *,
                    user_data_dir="user_data", profile="",
                    now: float = None) -> tuple:
-    """``(是否允许尝试, 原因)``。默认关闭——必须先显式打开。"""
+    """``(是否允许尝试, 原因)``。
+
+    取舍：**图像型题（滑块/拼图/OCR/算数/点选）可自动尝试并可重试，
+    行为型挑战不纳入自动尝试**（范围决定），边界靠 ``classify()`` 的分级守。
+
+    代码对**没有该项配置**的旧配置返回 ``False``（升级不改既有行为）；
+    出厂 ``config.example.yaml`` 里写着 ``slider.auto: auto``，所以新装即开启。
+
+    预算仍然保留（它防的是"尝试风暴"，不是"尝试"本身）：
+    每渠道每日上限 + 连续失败拉黑，见下方 ``note_result``。
+    """
     ts = float(now if now is not None else time.time())
     sec = _cfg(config)
-    mode = sec.get("auto")
-    if not _flag(mode, False):
-        return False, "未开启（crawler.slider.auto=false）"
+    # 族开关（r1063 T56）：`slider_attempt.enabled` 原先**没有读点**——
+    # 界面上关了也不生效。放在 `auto` 之前：族关掉就不该再问 auto。
+    try:
+        from core.strategy_params import switch_on as _sw
+        if not _sw("slider_attempt.enabled", plat=str(plat or "")):
+            return False, "滑块自动尝试已关闭（策略族开关）"
+    except Exception:
+        pass
+    # r944：默认允许尝试简易题（边界交给 classify() 分级；显式 false/off 仍关）
+    mode = _pval("slider_attempt.auto", plat, sec.get("auto"))
+    if not _flag(mode, True):
+        # 开关可能来自全局，也可能来自某渠道/维度的覆盖——文案别写死键名
+        return False, "滑块自动尝试已关闭（slider.auto 求值为关；可能来自全局或渠道覆盖）"
 
     path = _ledger_path(user_data_dir, profile or str(plat))
     data = _load(path)
@@ -384,7 +535,8 @@ def should_attempt(plat: str, config: dict = None, *,
 
     day = time.strftime("%Y%m%d", time.localtime(ts))
     used = int(rec.get("day_used") or 0) if rec.get("day") == day else 0
-    cap = int(sec.get("daily_cap") or 3)
+    cap = int(_pval("slider_guard.daily_cap", plat,
+                    sec.get("daily_cap") or 3) or 3)
     if used >= cap:
         return False, "今日已达上限（%d/%d）" % (used, cap)
     return True, "ok"
@@ -417,7 +569,9 @@ def note_result(plat: str, ok: bool, config: dict = None, *,
     else:
         rec["fails"] = int(rec.get("fails") or 0) + 1
         rec["last_fail"] = ts
-        if rec["fails"] >= int(_cfg(config).get("max_fails") or 2):
+        if rec["fails"] >= int(_pval("slider_guard.max_fails", plat,
+                                     _cfg(config).get("max_fails")
+                                     or 2) or 2):
             rec["blocked_until"] = ts + BLACKLIST_S
     # 分项记账（只做观测，不影响预算）
     k = str(kind or "unknown")
@@ -441,7 +595,7 @@ def note_result(plat: str, ok: bool, config: dict = None, *,
 # ---------------------------------------------------------------------------
 # 执行（浏览器 / 设备）
 # ---------------------------------------------------------------------------
-# 常见滑块控件选择器（按命中概率排；找不到就放弃，不去猜 DOM 结构）
+# 常见滑块控件选择器（按命中概率排；找不到就跳过本题，不去猜 DOM 结构）
 _BTN_SELECTORS = (
     ".geetest_slider_button",
     "[class*=slide-verify] [class*=btn]",
@@ -565,7 +719,9 @@ def attempt_page(page, plat: str, config: dict = None, *, tier=None,
             return False
         r = rng or random.Random()
         # 顺着候选逐个试（精度不足时靠容差）
-        tries = [best] if sec.get("single_shot") else [c[0] for c in cands]
+        tries = ([best] if _pval("slider_attempt.single_shot", plat,
+                                sec.get("single_shot"))
+                 else [c[0] for c in cands])
         for offset in tries:
             distance = max(30, int(offset - (bx - (tb[0] if tb else 0))))
             try:
@@ -594,7 +750,8 @@ def attempt_page(page, plat: str, config: dict = None, *, tier=None,
         note_result(plat, False, config, user_data_dir=user_data_dir,
                     profile=profile, kind="slider")
         if logger:
-            logger.warning("[%s] 简单滑块尝试未通过，交给人工", plat)
+            logger.warning("[%s] 简单滑块尝试未通过（已记账，按预算决定下次）",
+                           plat)
         return False
     except Exception as e:
         if logger:
@@ -614,6 +771,47 @@ def _safe_text(page) -> str:
         return page.inner_text("body")[:2000]
     except Exception:
         return ""
+
+
+def _device_gap_candidates(dev, sec: dict = None) -> list:
+    """截图 → 找缺口 → 折算成"要拖多远"。返回 ``[(距离, 缺口x), ...]``。
+
+    坐标系怎么对上（以携程实测为例，整屏 900×1600）：
+
+        ``find_gap`` 在**整张截图**上算，返回的是屏幕绝对 x（缺口中心 ≈ 343）。
+        拼图块的左边缘在 96 附近（块宽约 44，中心 ≈ 118）。
+        所以拖动距离 = 缺口中心 − 块中心 ≈ 343 − 118 = **225**。
+
+    块的起点用 ``piece_offset`` 估计（默认 118，携程实测）；
+    换站点时按实际调，算不准就退回配置里的 ``device_distance``。
+    """
+    sec = sec if isinstance(sec, dict) else {}
+    try:
+        png = dev.screencap() or b""
+    except Exception:
+        return []
+    if not png:
+        return []
+    try:
+        best, cands = find_gap(png)
+    except Exception:
+        return []
+    if not best:
+        return []
+    # 块中心：优先用配置，其次用"缺口左侧 1/4 处"的粗估
+    try:
+        piece = int(sec.get("piece_offset") or 118)
+    except (TypeError, ValueError):
+        piece = 118
+    out = []
+    for off, _score in ([cands[0]] if not cands else cands)[:4]:
+        try:
+            d = int(off) - piece
+        except (TypeError, ValueError):
+            continue
+        if d >= 20:
+            out.append((d, int(off)))
+    return out
 
 
 def attempt_device(dev, plat: str, config: dict = None, *, tier=None,
@@ -636,18 +834,56 @@ def attempt_device(dev, plat: str, config: dict = None, *, tier=None,
         x1, y1, x2, y2 = (int(m.group(2)), int(m.group(3)),
                           int(m.group(4)), int(m.group(5)))
         sx, sy = x1 + max(8, (x2 - x1) // 10), (y1 + y2) // 2
-        dist = int(sec.get("device_distance") or 260)
+
+        # **拖动距离必须由截图算出来，不能用固定值**（2026-11-04 修）。
+        #
+        # 原来这里是 `dist = sec["device_distance"] (260)` —— 等于**盲拖固定距离**，
+        # "自动解码"是假的。实测携程真实距离 ≈ 225–247，260 只是碰巧接近；
+        # 换个站点/换张图就必错。
+        #
+        # 现在：截图 → `find_gap` 找缺口 → 距离 = 缺口边 − 拼图块起点。
+        # 算不出来才退回配置值（并记一次，便于发现"这家一直靠兜底"）。
+        _cands = _device_gap_candidates(dev, sec)
+        _fallback = int(sec.get("device_distance") or 260)
+        _dists = [d for d, _x in _cands if d >= 20][:3] or [_fallback]
+        if _cands and len(_dists) < len(_cands):
+            _dists = [d for d, _x in _cands if d >= 20][:3] or [_fallback]
+
         r = rng or random.Random()
-        cur = {"x": float(sx), "y": float(sy)}
 
-        def _move(dx, dy):
-            nx, ny = cur["x"] + dx, cur["y"] + dy
-            # 单段滑动用 24–40ms：太快会被判脚本，太慢会被判卡住
-            dev.swipe(int(cur["x"]), int(cur["y"]), int(nx), int(ny), 32)
-            cur["x"], cur["y"] = nx, ny
+        def _drag(dist):
+            cur = {"x": float(sx), "y": float(sy)}
 
-        apply_trajectory(_move, sx, sy, dist, rng=r)
-        time.sleep(0.6)
+            def _move(dx, dy):
+                nx, ny = cur["x"] + dx, cur["y"] + dy
+                # 单段滑动用 24–40ms：太快会被判脚本，太慢会被判卡住
+                dev.swipe(int(cur["x"]), int(cur["y"]), int(nx), int(ny), 32)
+                cur["x"], cur["y"] = nx, ny
+
+            apply_trajectory(_move, sx, sy, dist, rng=r)
+
+        # 顺次试候选（`single_shot: true` 时只试首选）
+        _tries = (_dists[:1]
+              if _pval("slider_attempt.single_shot", plat,
+                       sec.get("single_shot")) else _dists)
+        for _i, dist in enumerate(_tries):
+            _drag(dist)
+            time.sleep(0.6)
+            _after = dev.dump() or ""
+            _still = any(k in _after for k in _SIMPLE_MARKS) or \
+                any(k in _after for k in _SIMPLE_DOM)
+            if not _still:
+                if logger:
+                    logger.info("[%s] App 简单滑块已通过（距离 %dpx，缺口 %s）",
+                                plat, dist,
+                                _cands[_i][1] if _i < len(_cands) else "?")
+                note_result(plat, True, config, user_data_dir=user_data_dir,
+                            profile=profile, kind="slider")
+                return True
+            if logger:
+                logger.info("[%s] App 滑块第 %d 次未过（距离 %dpx）",
+                            plat, _i + 1, dist)
+        time.sleep(0.2)
         # App 侧同理：看**界面里还有没有滑块控件/文案**，不要拿 classify 复判
         after_xml = dev.dump() or ""
         still = any(m in after_xml for m in _SIMPLE_MARKS) or \

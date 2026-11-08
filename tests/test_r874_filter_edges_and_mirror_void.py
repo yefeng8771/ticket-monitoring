@@ -106,6 +106,7 @@ SRF = r"""() => {
   const fm = document.getElementById('srxFmore');
   const common = fm.querySelector('.srf-common');
   const time = fm.querySelector('.srf-time');
+  const history = fm.querySelector('.srf-history');
   const firstRow = c => {
     const hd = c.querySelector(':scope > header');
     const kids = [...c.children].filter(k => k !== hd && getComputedStyle(k).display !== 'none');
@@ -113,8 +114,10 @@ SRF = r"""() => {
   };
   const tl = [...(time ? time.querySelectorAll('.srf-tline') : [])].map(e => +R(e).t.toFixed(1));
   const out = {commonTop: common ? R(common).t : null, timeTop: time ? R(time).t : null,
+               historyTop: history ? R(history).t : null,
                commonFirst: common ? firstRow(common) : null,
                timeFirst: time ? firstRow(time) : null,
+               historyFirst: history ? firstRow(history) : null,
                tlines: tl};
   // 右栏内部行距 vs 左栏「出发机场/到达机场」行的间距
   if (common) {
@@ -292,18 +295,23 @@ def test_folded_mirror_trigger_does_not_move(ui, w):
 
 
 @pytest.mark.parametrize("w", [1512, 1280])
-def test_side_by_side_filter_cards_share_first_row(ui, w):
-    """左右两张筛选卡的首行必须在同一基线上。
+def test_filter_sections_stack_with_one_shared_row(ui, w):
+    """筛选分区：共同筛选独占整行；起降时段/加工历史同排对齐。
 
-    r876 前：`.srf-time{justify-content:space-between}` 把余量摊进组间，
-    右栏首行被推到 292，左栏是 278.4——差 13.6px，读作「两栏没对齐」。
+    r977 起不再让「共同筛选」与「起降时段」并排：前者内容最多，并排时
+    左卡 482px、右卡被拉成同高，右卡内部余量摊出大洞。现在共同筛选
+    横跨整行（航司/机场三组并排），下一行两张卡同顶、首行同基线。
     """
     d = ui[w]["srf"]
-    assert abs(d["commonTop"] - d["timeTop"]) <= 0.6, (
-        "%d 档两卡顶边不同：%s vs %s" % (w, d["commonTop"], d["timeTop"]))
-    assert abs(d["commonFirst"] - d["timeFirst"]) <= 1.0, (
+    assert d["commonTop"] < d["timeTop"], (
+        "%d 档共同筛选应独占一行、位于时段卡上方：%s vs %s"
+        % (w, d["commonTop"], d["timeTop"]))
+    assert abs(d["timeTop"] - d["historyTop"]) <= 0.6, (
+        "%d 档起降时段/加工历史不同排：%s vs %s"
+        % (w, d["timeTop"], d["historyTop"]))
+    assert abs(d["timeFirst"] - d["historyFirst"]) <= 1.0, (
         "%d 档两卡首行不在同一基线（左 %s / 右 %s）"
-        % (w, d["commonFirst"], d["timeFirst"]))
+        % (w, d["timeFirst"], d["historyFirst"]))
     # 右栏两组时段之间的行距不得因余量摊分而拉大（≤ 一倍行高 + 20px）
     tl = d["tlines"]
     if len(tl) >= 2:

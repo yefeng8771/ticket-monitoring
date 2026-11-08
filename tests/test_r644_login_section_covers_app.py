@@ -192,6 +192,9 @@ def test_login_copy_and_nav_count_match_the_real_cards():
                   return {nav:t('#navN-login'),
                           cards:cards.length,
                           channels:cards.map(c=>c.dataset.channel||''),
+                          names:cards.map(c=>{
+                            const n=c.querySelector('.lgnm');
+                            return n?n.textContent.trim():'';}),
                           sec:t('#sec-login .secnote'),
                           foot:t('#sec-login .muted')};}""")
             finally:
@@ -220,11 +223,15 @@ def test_login_copy_and_nav_count_match_the_real_cards():
     assert got["nav"].strip().startswith(str(n)), (
         "导航计数 %r 与真实卡片数 %d 不一致（写死的数字会漂）"
         % (got["nav"], n))
-    for name, txt in (("卡头", got["sec"]), ("底部说明", got["foot"])):
-        assert "五个渠道" not in txt, (
-            "%s 仍写「五个渠道」，而实际有 %d 张卡：%r" % (name, n, txt[:80]))
-        # 每个 App 渠道都要在文案里被点名（统一登录要求要落到文案）
-        for p in APP_CHANNELS:
-            assert CHANNEL_CN[p] in txt, (
-                "%s 没提到 %s（统一登录要求未落地到文案）：%r"
-                % (name, CHANNEL_CN[p], txt[:80]))
+    # r996：政策句只在卡头出现一次；App 名称由卡片行自己展示，
+    # 底部说明不再整段重复（用户点名「冗余」「信息按钮放三行」）。
+    assert "都必须登录" in got["sec"], "卡头没有统一登录政策句"
+    assert "五个渠道" not in got["sec"], (
+        "卡头仍写「五个渠道」，而实际有 %d 张卡：%r" % (n, got["sec"][:80]))
+    assert "都必须登录" not in got["foot"], (
+        "底部说明又重复了一遍登录政策：%r" % got["foot"][:80])
+    rows = " ".join(got["names"])
+    for p in APP_CHANNELS:
+        assert CHANNEL_CN[p] in rows, (
+            "登录卡片行没有显示 %s（统一登录要求未落地到可见卡名）：%r"
+            % (CHANNEL_CN[p], rows[:120]))

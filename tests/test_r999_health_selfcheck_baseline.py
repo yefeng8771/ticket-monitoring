@@ -106,6 +106,10 @@ def probe():
                 pg.wait_for_timeout(800)
                 pg.evaluate("showMonTab('health')")
                 pg.wait_for_timeout(2000)
+                # r1130：诊断卡默认收在「展开说明」浮层里，先展开再量卡内对齐。
+                pg.evaluate("()=>{const b=document.getElementById('healthDiagBody');"
+                            "if(b)b.classList.add('diag-open')}")
+                pg.wait_for_timeout(300)
                 out[w] = pg.evaluate(JS)
                 if w in (1512, 768):
                     pg.add_style_tag(content=REVERT)

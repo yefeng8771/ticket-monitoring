@@ -36,6 +36,26 @@ CAL_COL0_X = 66.0
 CAL_COL_STEP = 133.3
 CAL_ROW_STEP = 100.0
 CAL_FIRST_ROW_DY = 51.0
+# 上面四个常量是**按 900px 宽**标定的（2026-11-02 真机 900×1600）。
+#
+# 设备换成 vivo X200 Pro（1260×2800）后照常量算会落进相邻日期 ——
+# 现场表现是"设日期后日期未变"，账本只记 `app-date timeout`。
+# 所以补一套**实测标定**（2026-11-05，从 1260×2800 截图逐像素量出）：
+#
+#   列起点 = 90      （第 1 列日号中心）
+#   列距   = 180     （正好 1260/7，7 等分整宽）
+#   行距   = 165     （相邻两周的日号中心距，量了 4 段全部 165）
+#   月标题→首行 = 139（月标题 cy 到**第一行**日号 cy）
+#
+# 这条 139 是踩了一次坑才定下来的：像素扫描在第 1 列只捞到 4 个波段
+# （989/1154/1319/1484），我先把 989 当成首行 → 算出的点整体低一行，
+# 实测点 (270,1318) 选中的是 **11月23日**而不是 16 日。
+# 反推：第 1 列是 1/8/15/22/29 五天，4 个波段其实是 8/15/22/29
+# （"1" 这根竖线在窄采样窗口里暗像素不足 3，被阈值滤掉了），
+# 所以首行在 989-165=824，DY = 824-685 = 139。
+# **验证方式**：点下去之后读表单日期文案，必须是目标日。
+CAL_CALIB_WIDTH = 1260.0
+CAL_CALIB = (90.0, 180.0, 165.0, 139.0)   # col0, col_step, row_step, first_dy
 
 
 def _root(xml: str):
@@ -91,8 +111,25 @@ def parse_form(xml: str):
     return {"dep": dep, "arr": arr, "date": date}
 
 
+# 表单页的结构标记（content-desc）。**空表单也有这些节点**——
+# 这正是 2026-11-05 那个坑：冷启动后城市框是空的，`parse_form` 因为
+# "dep/arr/date 全空"返回 None，于是 `is_form` 判 False，爬虫以为
+# "没到表单页"，点完首页入口后干等 20 秒超时，整轮 0 条。
+# 「是不是表单页」和「表单填没填」是两件事，必须分开判。
+_FORM_DESCS = ("depart city", "arrival city", "depart date",
+               "search flight", "flight search", "choose date")
+
+
+def is_form_page(xml: str) -> bool:
+    """结构上是不是机票表单页（**不要求航线已填**）。"""
+    try:
+        return any(n["desc"] in _FORM_DESCS for n in nodes(xml))
+    except Exception:
+        return False
+
+
 def is_form(xml: str) -> bool:
-    return parse_form(xml) is not None
+    return parse_form(xml) is not None or is_form_page(xml)
 
 
 def is_calendar(xml: str) -> bool:
@@ -137,19 +174,34 @@ def parse_months(xml: str):
     return out
 
 
-def calendar_xy(header_cy: int, year: int, month: int, day: int):
-    """目标日期在日历里的点击坐标；日期非法返回 None。"""
+def calendar_xy(header_cy: int, year: int, month: int, day: int,
+                width=None):
+    """目标日期在日历里的点击坐标；日期非法返回 None。
+
+    ``width`` 非空时按**实测标定集**（``CAL_CALIB``，1260×2800 逐像素量出）
+    等比缩放后再算；不传时沿用 900 基准的老常量（行为与旧版逐字一致，
+    既有测试与旧调用方不受影响）。
+    """
     try:
         _dt.date(year, month, day)
         first = _dt.date(year, month, 1)
     except ValueError:
         return None
+    if width:
+        try:
+            k = float(width) / CAL_CALIB_WIDTH
+        except (TypeError, ValueError):
+            k = 1.0
+        col0, col_step, row_step, first_dy = (v * k for v in CAL_CALIB)
+    else:
+        col0, col_step, row_step, first_dy = (CAL_COL0_X, CAL_COL_STEP,
+                                              CAL_ROW_STEP, CAL_FIRST_ROW_DY)
     # 周日=第 0 列；Python weekday() 周一=0 → 周日=(weekday+1)%7
     first_col = (first.weekday() + 1) % 7
     idx = first_col + day - 1
     row, col = divmod(idx, 7)
-    x = CAL_COL0_X + col * CAL_COL_STEP
-    y = float(header_cy) + CAL_FIRST_ROW_DY + row * CAL_ROW_STEP
+    x = col0 + col * col_step
+    y = float(header_cy) + first_dy + row * row_step
     return int(round(x)), int(round(y))
 
 

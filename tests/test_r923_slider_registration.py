@@ -11,9 +11,9 @@
 不用改 main / webui（那两个文件改动风险高、且正被并发编辑）。
 
 钉住四件事：
-  1. ``slider.auto`` 为假/未配 → **不注册**（保持"识别→记账→停手"）；
-  2. 为真 → 注册 ``SliderHandler``；
-  3. 重复创建 crawler → 幂等，不重复覆盖；
+  1. **未配也算开**（r944 起默认开启简易题）；显式 false/"off" → 不注册；
+  2. 为真 → 注册处理器（超集优先：滑块 + 算数 + 文字）；
+  3. 重复创建 crawler → 幂等，不重复覆盖；**也不许覆盖别人显式注册的**；
   4. 注册后接缝真的会走处理器（不是只换了个对象）。
 
 运行：
@@ -50,9 +50,16 @@ def _crawler(tmp_path, **cfg):
 # ---------------------------------------------------------------------------
 # 1. 开关语义
 # ---------------------------------------------------------------------------
-def test_no_config_means_no_handler(tmp_path):
+def test_no_config_registers_handler(tmp_path):
+    """r944：未配 `slider.auto` 现在是**开**。
+
+    改这一条的理由：默认关的时候，这套能力实际上从没生效过（配了不注册、
+    注册了默认还是关的）。边界改为由 `classify()` 的分级守——
+    `strong`/`unknown` 一律不碰，这是真正该守的地方。
+    """
     _crawler(tmp_path)
-    assert challenge.current_handler() is None
+    assert getattr(challenge.current_handler(), "name", "") in (
+        "solver-handler", "slider-handler")
 
 
 def test_auto_off_means_no_handler(tmp_path):
@@ -96,9 +103,11 @@ def test_registration_is_idempotent(tmp_path):
     assert challenge.current_handler() is first      # 没被反复替换
 
 
-def test_ensure_returns_current_without_config(tmp_path):
-    assert challenge.ensure_slider_handler(
-        {}, user_data_dir=str(tmp_path), profile="x") is None
+def test_ensure_returns_handler_without_config(tmp_path):
+    """未配也是开：`ensure_slider_handler` 应直接返回挂好的处理器。"""
+    h = challenge.ensure_slider_handler(
+        {}, user_data_dir=str(tmp_path), profile="x")
+    assert getattr(h, "name", "") in ("solver-handler", "slider-handler")
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +168,26 @@ def test_seam_routes_to_handler_but_strong_is_untouched(tmp_path):
 # 4. 失败一律静默（不许拖垮采集器创建）
 # ---------------------------------------------------------------------------
 def test_broken_config_does_not_raise(tmp_path):
+    """`slider` 段不是字典也要能活：当空段处理（= 默认开），且不抛。"""
     _crawler(tmp_path, slider="不是字典")
-    assert challenge.current_handler() is None
+    assert getattr(challenge.current_handler(), "name", "") in (
+        "solver-handler", "slider-handler")
+
+
+def test_foreign_handler_is_not_clobbered(tmp_path):
+    """别人显式注册的处理器不许被采集器构造顺手换掉。
+
+    2026-11-05 实测：`ensure_slider_handler` 原先无条件注册，于是
+    `register_handler(MyHandler())` 之后只要构造任一采集器就被静默换回
+    内置实现——接缝等于形同虚设（`test_challenge_handler_seam` 抓到）。
+    """
+
+    class _Mine:
+        name = "my-handler"
+
+    challenge.register_handler(_Mine())
+    _crawler(tmp_path, slider={"auto": "auto"})
+    assert getattr(challenge.current_handler(), "name", "") == "my-handler"
 
 
 def test_recording_ledger_dir_unwritable_is_silent(tmp_path):

@@ -22,7 +22,7 @@ from typing import List
 import httpx
 from core import net as _net
 
-from .base import BaseCrawler, iata2, profile_headers
+from .base import (BaseCrawler, iata2, profile_headers, scoped_id)
 from .challenge import classify_text
 from .qunar import QunarCrawler as _Q
 from core.intl import airport_city_code, is_intl_route
@@ -233,54 +233,67 @@ class FliggyCrawler(BaseCrawler):
         # 飞猪国内搜索入参是城市码（北京=BJS），机场码 PEK 会落到
         # “入参校验失败：三字码查不到城市信息”；国际同样先归并城市码。
         fc, tc = airport_city_code(from_city.upper()), airport_city_code(to_city.upper())
-        for date in dates:
-            t0 = time.time()
-            flights = self._fetch_pc(fc, tc, date)
-            _blocked = bool(getattr(self, "_last_blocked", False))
-            _login = bool(getattr(self, "_last_login", False))
-            _status = ("ok" if flights else
-                       ("blocked" if _blocked else
-                        ("login" if _login else "empty")))
-            # 成功也记地址（r409/r409b）：用 _fetch_pc 记下的列表页 URL。
-            # 浏览器上下文已关，页面取不到；这里只用它自己构造的那个值，
-            # 取不到就留空（宁缺勿错，不编造）。
-            _pg_url = str(getattr(self, "_last_list_url", "") or "")
-            self.path_note("PC", _status,
-                           rows=len(flights), date=date,
-                           url=_pg_url,
-                           detail=("人机验证页，需在渠道登录窗口完成验证"
-                                   if _blocked else
-                                   ("登录墙/请登录" if _login else
-                                    "sjipiao.fliggy.com SSR 列表")),
-                           ms=int((time.time() - t0) * 1000))
-            if flights:
-                best = min(flights, key=lambda f: f["price"])
-                results.append(FlightPrice(
-                    platform=self.name,
-                    from_city=from_city, to_city=to_city,
-                    depart_date=date, price=float(best["price"]),
-                    airline=best.get("name", "")[:20],
-                    flight_no=best.get("code", ""),
-                    depart_time=best.get("depTime", ""),
-                    arrive_time=best.get("arrTime", ""),
-                    extra=json.dumps(flights, ensure_ascii=False),
-                ))
-                self.logger.info(
-                    "[fliggy] %s 最低价 ￥%.0f（PC 明细 %d 条）",
-                    date, best["price"], len(flights))
-            else:
-                self.logger.warning("[fliggy] %s PC 页未解析到航班", date)
-            self._sleep()
+        # 链路闸门（r1063 T8）：PC 明细这条通路被策略停用/冷却时**只跳过
+        # 它**——results 保持空，末尾的 `_h5_fallback` 照常接手，不 return
+        # 整个查询（那样等于停一条路 = 停一家渠道）。
+        # 闸门放在循环**外层**：被停用的通路整段不跑（不逐日重复问闸门、
+        # 也不逐日重复记 paced），单程列表循环本体保持原形状不变。
+        _pc_ok = self.path_gate("PC", "domestic")
+        if _pc_ok:
+            for date in dates:
+                t0 = time.time()
+                flights = self._fetch_pc(fc, tc, date)
+                _blocked = bool(getattr(self, "_last_blocked", False))
+                _login = bool(getattr(self, "_last_login", False))
+                _status = ("ok" if flights else
+                           ("blocked" if _blocked else
+                            ("login" if _login else "empty")))
+                # 成功也记地址（r409/r409b）：用 _fetch_pc 记下的列表页 URL。
+                # 浏览器上下文已关，页面取不到；这里只用它自己构造的那个值，
+                # 取不到就留空（宁缺勿错，不编造）。
+                _pg_url = str(getattr(self, "_last_list_url", "") or "")
+                self.path_note("PC", _status,
+                               rows=len(flights), date=date,
+                               url=_pg_url,
+                               detail=("人机验证页，需在渠道登录窗口完成验证"
+                                       if _blocked else
+                                       ("登录墙/请登录" if _login else
+                                        "sjipiao.fliggy.com SSR 列表")),
+                               ms=int((time.time() - t0) * 1000))
+                if flights:
+                    best = min(flights, key=lambda f: f["price"])
+                    results.append(FlightPrice(
+                        platform=self.name,
+                        from_city=from_city, to_city=to_city,
+                        depart_date=date, price=float(best["price"]),
+                        airline=best.get("name", "")[:20],
+                        flight_no=best.get("code", ""),
+                        depart_time=best.get("depTime", ""),
+                        arrive_time=best.get("arrTime", ""),
+                        extra=json.dumps(flights, ensure_ascii=False),
+                    ))
+                    self.logger.info(
+                        "[fliggy] %s 最低价 ￥%.0f（PC 明细 %d 条）",
+                        date, best["price"], len(flights))
+                else:
+                    self.logger.warning("[fliggy] %s PC 页未解析到航班", date)
+                self._sleep()
         if not results:
-            results.extend(self._h5_fallback(from_city, to_city, dates, ret_date))
+            results.extend(self._h5_fallback(from_city, to_city, dates,
+                                             ret_date, dim="domestic"))
         return results
 
     def _h5_fallback(self, from_city: str, to_city: str,
-                     dates: List[str], ret_date: str = "") -> list:
+                     dates: List[str], ret_date: str = "",
+                     dim: str = "") -> list:
         """PC 登录/验证失败时，用独立淘宝 H5 槽位再取一次。
 
         没有 H5 会话或页面仍落登录墙时只记路径，不伪造行。
         """
+        # 链路闸门（r1063 T8）：H5 这条通路自己就是回退的最后一格——
+        # 被策略停用时如实记 paced 并返回空，**不伪造行也不改记失败**。
+        if not self.path_gate(_FLIGGY_H5_PATH, dim):
+            return []
         try:
             from .fliggy_h5 import FliggyH5Crawler
             h5 = FliggyH5Crawler(self.config, self.logger)
@@ -331,7 +344,8 @@ class FliggyCrawler(BaseCrawler):
         经 _calendar_params 单源（tripType=1+backDate）。"""
         try:
             with _net.new_client(
-                    self.config.get("tls_impersonate", "chrome"),
+                    scoped_id("identity_headers.tls", "fliggy",
+                              self.config.get("tls_impersonate", "chrome")),
                     timeout=25, follow_redirects=True,
                               proxy=(self.proxy or None),
                               headers=profile_headers(
@@ -472,13 +486,18 @@ class FliggyCrawler(BaseCrawler):
             results.extend(self._fetch_intl_calendar(
                 fc, tc, missing, from_city, to_city, ret_date))
         if not results:
-            results.extend(self._h5_fallback(from_city, to_city, dates, ret_date))
+            results.extend(self._h5_fallback(from_city, to_city, dates,
+                                             ret_date, dim="intl"))
         return results
 
     def _fetch_intl_pc(self, fc: str, tc: str,
                        dates: List[str]) -> dict:
         """国际列表页逐日采集（一个持久上下文内顺序加载）。"""
         out = {}
+        # 链路闸门（r1063 T8）：国际 PC 列表被停用时返回空 dict，
+        # 调用方（`_fetch_intl`）会把缺日交给日历兜底，不中断整条查询。
+        if not self.path_gate("PC", "intl"):
+            return out
         with self.browser() as ctx:
             page = self.new_page(ctx)
             for date in dates:
@@ -654,6 +673,10 @@ class FliggyCrawler(BaseCrawler):
         """日历兜底（原 r325 路径）：PC 列表空/未登录/往返时的最低含税价。"""
         results: List[FlightPrice] = []
         if not dates:
+            return results
+        # 链路闸门（r1063 T8）：日历这条通路被停用时只跳过它——国际往返
+        # 只有这一条价源，如实返回空，不编价也不把整条查询判死。
+        if not self.path_gate("日历", "intl"):
             return results
         days = self._intl_calendar(fc, tc, dates[0], ret_date=ret_date)
         if days is None:

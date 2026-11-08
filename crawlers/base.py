@@ -33,6 +33,13 @@ else:
 _PROFILE_LOCKS = {}
 _PROFILE_LOCKS_GUARD = threading.Lock()
 
+# 链路闸门单次等待的**硬上限**（秒）。铁律 I6：本仓库每一处 sleep 都必须
+# 有累计上限——否则 `min_gap_s` 配大了、或链路桶里排着一队未消化的窗口，
+# 一次采集会被钉在纯空等上，后面的渠道整轮轮不到（qunar 曾累计空等
+# 2891 秒 = 48.6 分钟，就是这个形态）。超出的部分不补：宁可这一轮少等，
+# 也不拿别人的时间去赌一条链路的礼貌间隔。
+PATH_GATE_SLEEP_CAP_S = 15.0
+
 
 # 采集/探针共用：全局最多 2 个渠道浏览器，同渠道串行。调度器与探针
 # 都必须走同一组闸门，否则两边叠加仍会同时开 4-5 个浏览器触发验证。
@@ -114,9 +121,32 @@ def kernel_major() -> int:
         return v
 
 
-MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
-             "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-             "Version/16.6 Mobile/15E148 Safari/604.1")
+# 移动档 UA（r1063 T25）：**必须与运行时同族**。运行时是 Playwright Chromium，
+# 旧值是一个 iPhone/Safari 的 UA——那会同时与 `navigator.userAgentData`、
+# `window.chrome`、`sec-ch-ua*` 三处矛盾（`python -m core.fp_audit` 报 high）。
+# 现在用 Android Chrome：引擎、UA-CH、TLS(chrome) 三处自洽。
+def scoped_id(pid: str, plat: str, fallback):
+    """按**渠道**取身份参数（r1063 T58）：参数层有意见才采用，否则用配置值。
+
+    为什么需要：UA / 移动 UA / TLS 指纹这些"伪装参数"只读 `self.config` 的全局
+    值，界面上按渠道改就白改。优先级与 `slider._pval`、`Pacing._scoped` 一致：
+    **参数层是默认来源，不是永远优先**。
+
+    fail-soft：参数层出任何问题都退回 `fallback`，伪装参数读不到不该让采集挂掉。
+    """
+    try:
+        from core import strategy_params as _sp
+        got = _sp.resolve(str(pid), plat=str(plat or ""))
+        if str(getattr(got, "source", "default")) != "default":
+            return got.value
+    except Exception:
+        pass
+    return fallback
+
+
+MOBILE_UA = MOBILE_UA = ("Mozilla/5.0 (Linux; Android 14; Pixel 8) "
+             "AppleWebKit/537.36 (KHTML, like Gecko) "
+             "Chrome/126.0.0.0 Mobile Safari/537.36")
 
 # 本地指纹一致性（crawler.stealth，默认开）：
 # 只抹掉「这是自动化浏览器」的显式标记，让页面看到一个普通 Chrome。
@@ -359,31 +389,36 @@ def stealth_replacements(fp: dict) -> dict:
     height = int(vp.get("height") or (844 if mobile else 900))
     seed = int((fp or {}).get("seed") or 0)
     if mobile:
-        glv, glr = "Apple Inc.", "Apple GPU"
-        vendor, plat = "Apple Computer, Inc.", "iPhone"
-        cores, mem, touch, dpr = 6, 0, 5, 3
-        plugins = _MOBILE_PLUGINS
+        # Android Chrome（r1063 T25）：与 MOBILE_UA 同族。旧值是 iPhone/Safari
+        # 那一套（Apple vendor / iPhone platform / Apple GPU / 无 chrome /
+        # 无 userAgentData），与 Chromium 运行时的能力面直接对不上——
+        # 换掉 UA 却留这套，等于把矛盾从"UA 与引擎"搬到"页面与头"。
+        glv, glr = "Qualcomm", "Adreno (TM) 730"
+        vendor, plat = "Google Inc.", "Linux armv8l"
+        cores, mem, touch, dpr = 8, 8, 5, 2.625      # Pixel 8 口径
+        plugins = ()
     else:
         glv, glr = _DESKTOP_GL[seed % len(_DESKTOP_GL)]
         vendor, plat = "Google Inc.", "Win32"
         cores, mem, touch, dpr = 8, 8, 0, 1
         plugins = _DESKTOP_PLUGINS
+    # userAgentData：**两档都给**（两档都是 Chromium）。移动档 `mobile: true`
+    # + `platform: "Android"`，与 MOBILE_UA 和 sec-ch-ua-* 三处自洽。
     uad = None
-    if not mobile:
-        m = re.search(r"Chrome/(\d+)", str((fp or {}).get("ua") or ""))
-        major = m.group(1) if m else "126"
-        uad = {
-            "brands": [
-                {"brand": "Chromium", "version": major},
-                {"brand": "Google Chrome", "version": major},
-                {"brand": "Not-A.Brand", "version": "99"},
-            ],
-            "mobile": False,
-            "platform": "Windows",
-            "fullVersion": "%s.0.0.0" % major,
-        }
+    m = re.search(r"Chrome/(\d+)", str((fp or {}).get("ua") or ""))
+    major = m.group(1) if m else "126"
+    uad = {
+        "brands": [
+            {"brand": "Chromium", "version": major},
+            {"brand": "Google Chrome", "version": major},
+            {"brand": "Not-A.Brand", "version": "99"},
+        ],
+        "mobile": bool(mobile),
+        "platform": "Android" if mobile else "Windows",
+        "fullVersion": "%s.0.0.0" % major,
+    }
     return {
-        "__ADDCHROME__": "true" if not mobile else "false",
+        "__ADDCHROME__": "true",      # 两档都是 Chromium：都该有 window.chrome
         "__VENDOR__": json.dumps(vendor),
         "__PLAT__": json.dumps(plat),
         "__CORES__": str(cores),
@@ -428,8 +463,10 @@ def profile_headers(fp: dict, extra=None) -> dict:
     """按指纹档案生成稳定 HTTP 头（B1 单源）。
 
     - UA 取 fp["ua"]；Accept-Language 由 fp["locale"] 派生；
-    - 桌面 Chrome 才出现 sec-ch-ua*，版本与 UA 的 Chrome 大版本一致；
-    - 移动档（iPhone Safari）完全不出现 sec-ch-ua*；
+    - 只要 UA 是 Chromium 系（桌面/移动都算）就发 sec-ch-ua*，
+      版本与 UA 的 Chrome 大版本一致；移动档发 `?1` + `"Android"`；
+    - UA 不是 Chromium（如用户自配 Safari UA）时**不发** UA-CH——
+      发了反而与 UA 矛盾（`python -m core.fp_audit` 会报 high）；
     - Referer / Accept-Encoding 等由 extra 传入，本函数不硬编码；
     - 同 profile 多次调用逐项一致（不随机）。
     """
@@ -445,15 +482,17 @@ def profile_headers(fp: dict, extra=None) -> dict:
         out[str(k)] = v
     out["User-Agent"] = ua
     out["Accept-Language"] = _accept_language(fp.get("locale"))
-    if not mobile:
-        m = re.search(r"Chrome/(\d+)", ua)
-        if m:
-            major = m.group(1)
-            out["sec-ch-ua"] = (
-                '"Chromium";v="%s", "Google Chrome";v="%s", '
-                '"Not-A.Brand";v="99"' % (major, major))
-            out["sec-ch-ua-mobile"] = "?0"
-            out["sec-ch-ua-platform"] = '"Windows"'
+    # UA-CH 只在 UA 本身是 Chromium 系时才发（Safari/Firefox 档发了才是矛盾）。
+    # r1063 T25：**移动档同样要发**——Android Chrome 会发 sec-ch-ua*，
+    # 缺了等于自曝"UA 被改写"，与 UA 里写着 Mobile Safari 一样致命。
+    m = re.search(r"Chrome/(\d+)", ua)
+    if m:
+        major = m.group(1)
+        out["sec-ch-ua"] = (
+            '"Chromium";v="%s", "Google Chrome";v="%s", '
+            '"Not-A.Brand";v="99"' % (major, major))
+        out["sec-ch-ua-mobile"] = "?1" if mobile else "?0"
+        out["sec-ch-ua-platform"] = '"Android"' if mobile else '"Windows"'
     return out
 
 
@@ -472,6 +511,26 @@ def iata2(v) -> str:
     不匹配不落——小写/三位/空串一律挡。数字参位合法（3U 川航/G5 华夏）。"""
     s = str(v or "").strip()
     return s if re.fullmatch(r"[A-Z0-9]{2}", s) else ""
+
+
+def pacing_cfg_for(config) -> dict:
+    """把采集器手上的配置包成 `parse_pacing` 认的形状（复核 2026-11-06）。
+
+    **采集器收到的是 `crawler:` 段**（`main.py:1910`
+    `crawler_cfg = dict(_full["crawler"])`），而 `parse_pacing` 读的是
+    `cfg["crawler"]["rate"] / ["breaker"] / ["schedule"]`（`core/pacing.py:182-185`）。
+    直接把 `self.config` 递给 `Pacing` 会让这份实例永远跑在 `DEFAULTS` 上
+    （`min_gap_s 0` / `per_minute 0`）——「配了不生效」且从数字上看不出来，
+    正是本仓库列为头号缺陷的那一类。
+
+    也接受整份 cfg（含 `crawler:` 段）：此时原样用，**不再套一层**，否则
+    `cfg["crawler"]["crawler"]` 一样是空的。
+    """
+    if not isinstance(config, dict):
+        return {}
+    if isinstance(config.get("crawler"), dict):
+        return config
+    return {"crawler": config}
 
 
 class BaseCrawler:
@@ -564,6 +623,132 @@ class BaseCrawler:
                 pass
         return rec
 
+    # ── 链路闸门（r1063 T8）：用某条通路之前先问一次 ──
+    def _pacing_ctx(self):
+        """本采集器的节流上下文（懒建一次，之后复用）。
+
+        `main.py` 那份 `rt["pacing"]` 管的是**渠道级**节奏（每条查询前
+        `wait_hint` / 每条查询后 `record`）；这里要的是**链路级**的账：
+        「这条通路刚才用过没有」。两者若共用一份实例，采集器写链路桶时
+        就必然连渠道桶一起写（`record` 的默认语义），于是同一个请求被记
+        两遍。所以缺省自建一份，只承载链路桶；主流程/测试要注入时把
+        `self._pacing` 填上即可（那时由调用方负责 `channel=False`）。
+
+        配置层由 `pacing_cfg_for` 包一层 `crawler:`（复核 2026-11-06）：
+        采集器拿到的就是 `crawler:` 段，直接递进去会永远跑在 `DEFAULTS`。
+
+        **刷新边界（r1063 fix-wave 1 起已接线，如实写明边界）**：热重载时
+        `main.py` 的 `reload_config()` 除了 `rt["pacing"].refresh(cfg)`，还会遍历
+        **已经建过**的采集器实例逐份 `refresh()` 这里的私有实例。递进来的 cfg
+        与构造时同形——只有 `crawler:` 段（`pacing_cfg_for`），所以本实例能拿到
+        的是**由 `crawler:` 段派生**的那几项：速率 / 熔断阈值 / 错峰
+        `stagger_seconds` / 并发 `max_concurrency`。**静默窗（`scan_quiet_*`）
+        与调度周期住在外层 `schedule:` 段，本实例从来收不到**——它们由
+        `rt["pacing"]`（那份用整份 cfg 刷新）与调度器负责，热生效的也是那两份。
+        懒建的实例（还没被问过闸门）下次构造时自然读到新 cfg。闸门真正用的速率
+        值仍来自**参数层**（`_rate_limits` 优先 `strategy_params`；它的
+        `set_config()` 已由 r1063 T14 接在 `main.py` 的启动路径与
+        `reload_config()` 上），本实例的 cfg 只在参数层查不到/非法时兜底。
+        """
+        pac = getattr(self, "_pacing", None)
+        if pac is not None:
+            return pac
+        try:
+            from core.pacing import Pacing
+            pac = Pacing(pacing_cfg_for(self.config))
+        except Exception as e:
+            # 闸门是采集的必经路径：构造不出来只能放行（并留痕），
+            # 让它抛异常等于把整家渠道停采。
+            pac = None
+            log = getattr(self, "logger", None)
+            if log is not None:
+                log.warning("[%s] 链路闸门不可用（%s）：本轮按放行处理",
+                            self.name, e)
+        self._pacing = pac
+        return pac
+
+    def note_wait(self, sec) -> None:
+        """记一次「本渠道在等」（秒）。闸门睡眠与渠道内部限速都走这里。
+
+        为什么统一到一处：面板要给用户一个数——「这家的 80s 里有多少是在
+        等我方限速」。分散在各个渠道里各记一套，最后就没人能给出这个数。
+        """
+        try:
+            v = float(sec or 0)
+        except (TypeError, ValueError):
+            return
+        if v > 0:
+            self.waited_s = round(float(getattr(self, "waited_s", 0))
+                                  + v, 2)
+
+    def path_gate(self, path: str, dim: str = "", *, date: str = "") -> bool:
+        """用 `path` 这条通路之前问一次：能不能用、要不要等。False=跳过它。
+
+        决策顺序与口径全部在 `core.pacing.Pacing.gate_path`（策略停用 →
+        熔断 → 限速），这里只做三件事：**封顶等待**、**记 paced 证据**、
+        **只记链路桶**。
+
+        * `allow=False`：只跳过**这一条通路**，调用点不许 `return` 整个
+          查询。同一次查询里别的通路照跑——否则用户关掉一条劣化通路，
+          等于整家渠道停采（这正是本闸门要挡的连坐）。
+        * 证据记 `paced` 而不是失败：`paced` 的语义是「我方主动不发请求」，
+          算进爬取率分母会把「主动让步」读成「渠道不行」，还会拉开整家
+          渠道的熔断。
+        * 等待封顶 `PATH_GATE_SLEEP_CAP_S`（铁律 I6）。
+        * 记账**只写 `渠道|链路` 桶**（`channel=False`）：渠道桶的账
+          `main.py` 已经为这条查询记过一次，这里再记一次就是重复计数
+          （`per_minute` 减半、`min_gap` 翻倍）。节流实现若不吃
+          `channel=`（旧签名），**宁可这条链路不记账**，也不退回带渠道
+          口径的写法——那等于把双记重新打开。
+
+        `dim` 是维度段（`domestic`/`intl`/`calendar`/`round_trip`/…，见
+        `core.channels.DIMENSIONS`）：`渠道/维度/链路` 的覆盖要靠它才查
+        得到，传空串等于把该链路的策略覆盖全部跳过。
+
+        `date` 只在**逐日**的调用点给（qunar 的 H5/PC/API 三条都是逐日
+        问的）：`paced` 证据带上日期，多日查询才看得出这一天被跳了
+        （不带就成了「这一轮跳过了一条路」，看不出是哪天）。
+        """
+        pac = self._pacing_ctx()
+        if pac is None:
+            return True
+        try:
+            allow, wait_s, why = pac.gate_path(self.name, dim, path)
+        except Exception as e:
+            log = getattr(self, "logger", None)
+            if log is not None:
+                log.warning("[%s] 链路闸门判定失败（%s）：%s 按放行处理",
+                            self.name, e, path)
+            return True
+        if not allow:
+            self.path_note(path, "paced", date=date, detail=why)
+            log = getattr(self, "logger", None)
+            if log is not None:
+                log.info("[%s] 跳过通路 %s%s：%s", self.name, path,
+                         ("（%s）" % date) if date else "", why)
+            return False
+        # 等待必须封顶（铁律 I6）。只等闸门自己算出来的那一段，
+        # 不在锁内睡（闸门本身只算不睡）。
+        try:
+            wait = float(wait_s or 0)
+        except (TypeError, ValueError):
+            wait = 0.0
+        if wait > 0:
+            _slp = min(wait, PATH_GATE_SLEEP_CAP_S)
+            time.sleep(_slp)
+            self.note_wait(_slp)      # 记「在等」（r1063 T30）
+        # 只有**这条通路真的要发一次请求**时才记账，且只记链路桶。
+        # 旧签名（`record` 不吃 `channel=`）时**不记**：退回
+        # `record(plat, path=path)` 会把渠道桶一起写，`per_minute` 当场
+        # 减半、`min_gap` 当场翻倍——宁可这条链路少记一次账。
+        try:
+            pac.record(self.name, path=path, channel=False)
+        except TypeError:
+            pass
+        except Exception:
+            pass
+        return True
+
     def __init__(self, config: dict, logger: logging.Logger):
         self.config = config
         self.logger = logger
@@ -575,8 +760,14 @@ class BaseCrawler:
         self.delay_max: float = float(config.get("delay_max", 5))
         self.debug: bool = bool(config.get("debug", False))
         self.debug_dir: str = config.get("debug_dir", "debug")
-        root = str(config.get("user_data_dir") or "user_data").strip() or "user_data"
-        self.user_data_root = os.path.abspath(os.path.join(_REPO_ROOT, root))
+        # 资料根目录：与账本同一口径（config > TM_USER_DATA_DIR > user_data）。
+        # 这一处是第 5 个写点（浏览器 profile / 登录态快照都落在这里），
+        # 漏了它测试照样会把合成资料写进真 user_data。
+        # 直接调用、不写兜底副本：`core.yield_stats` 不反向依赖 crawlers，
+        # 没有循环导入风险；留一份同样的字面量只会让"唯一口径"名存实亡。
+        from core.yield_stats import user_data_root
+        self.user_data_root = os.path.abspath(
+            os.path.join(_REPO_ROOT, user_data_root(config)))
         # 可选本地代理（r319，如 Clash http://127.0.0.1:7897）：浏览器与
         # httpx 采集面统一走它，让出口 IP 可变（IP 级限流绕行）。注意
         # 国内站+境外出口=风控风险升档，建议国内直落节点或负载均衡组
@@ -596,6 +787,9 @@ class BaseCrawler:
             self.session_max_days = 0
         # 指纹一致性（默认开）：关掉它 = 保留 navigator.webdriver 等自动化标记
         self.stealth: bool = bool(config.get("stealth", True))
+        # 本渠道累计「等」了多少秒（r1063 T30）：闸门睡眠 + 渠道内部限速/退避。
+        # 它与抓取耗时分开——「在等」和「在抓」是两种问题，优化手段不同。
+        self.waited_s: float = 0.0
         # 登录窗口默认沿用该 profile 自己的 PC/H5 身份；只有显式开启
         # login_desktop 才强制桌面（手机 profile 上滑块更难拖时的退路，
         # 代价是登录与采集指纹不一致）。
@@ -786,13 +980,24 @@ class BaseCrawler:
         return cookies
 
     def _ua(self) -> str:
-        ua = ((self.config.get("mobile_user_agent") or MOBILE_UA)
-              if self.use_mobile
-              else (self.config.get("user_agent") or DESKTOP_UA))
+        # 按渠道求值（r1063 T58）：界面上按渠道换 UA 要真的生效
+        _mob = scoped_id("identity_headers.mobile_ua", self.name,
+                         self.config.get("mobile_user_agent"))
+        _desk = scoped_id("identity_headers.ua", self.name,
+                          self.config.get("user_agent"))
+        ua = ((_mob or MOBILE_UA) if self.use_mobile else (_desk or DESKTOP_UA))
         if not self.stealth:
             return ua
         maj = kernel_major()
         if not maj:
+            # 记账（r1063 T60）：UA 里的 Chrome 主版本与真实内核不同步，本身就是
+            # 一条高熵矛盾特征（UA-CH / 特性检测任一条都能看出来）。
+            try:
+                from core import degraded as _dg
+                _dg.note("ua_kernel", str(getattr(self, "name", "") or ""),
+                         "读不到内核主版本，UA 无法与真实内核对齐")
+            except Exception:
+                pass
             return ua
         # UA 里的 Chrome/126 与真实内核 151 不一致，本身就是一条高熵
         # 矛盾特征（UA-CH / 特性检测任一条都能看出来）。统一成真实主版本。
@@ -955,8 +1160,15 @@ class BaseCrawler:
                     if _ext:
                         _js = _js + "\n" + _ext
                     ctx.add_init_script(_js)
-                except Exception:
-                    pass
+                except Exception as _ste:
+                    # 记账（r1063 T61）：伪装脚本没注进去 = **整个 stealth 失效**，
+                    # 页面依旧是自动化特征。以前这里只有 pass。
+                    try:
+                        from core import degraded as _dg
+                        _dg.note("stealth_init", str(self.name),
+                                 "注入伪装脚本失败：%s" % str(_ste)[:80])
+                    except Exception:
+                        pass
             state = None
             try:
                 # Chromium 重开可能丢弃 expires=-1 的会话 Cookie；快照
@@ -1310,27 +1522,54 @@ class BaseCrawler:
         self._policy_cache = (ts, pol)
         return pol
 
-    def _policy_enabled(self) -> bool:
+    def _policy_enabled(self, dim: str = "") -> bool:
         """``crawler.policy_gate``：统一策略的**总开关**（默认开）。
 
         关掉它只影响「闸门 + 倍率」，账本照记、报表照出——这样排障时能一键
         回到「各部件各自为政」的旧行为，而不会把度量也一起丢掉。
-        """
-        raw = self.config.get("policy_gate") if isinstance(self.config, dict) \
-            else None
-        if isinstance(raw, str):
-            return raw.strip().lower() not in ("0", "false", "no", "off", "")
-        return True if raw is None else bool(raw)
 
-    def _policy_gate(self) -> bool:
+        **读参数层，不读 `self.config`**（复核 2026-11-06 Important）：
+        `self.config` 是构造时注入的**冷冻配置**，`main.reload_config()` 只喂
+        参数提供者、从不重建采集器，所以拿它判开关时「保存后热生效」是假的——
+        界面写着热生效、实际要重启。这里改成决策那一刻问
+        `strategy_params.switch_on("policy_gate.enabled", plat=渠道, dim=维度)`：
+        同一个采集器对象，下一次 `decide()` 就吃到新值。
+
+        `dim`（r1063 fix-wave 2）：`渠道/维度` 层写的
+        `policy_gate.enabled: false` 要能让这个采集器看到——否则维度级覆盖
+        只有界面文案。缺省空串 = 只看渠道层，与迁移前逐位相同。
+
+        读不到（参数层整个不可用 / 这个键一层都没配过）时退回本实例配置里的
+        `policy_gate` 旧键：那是这台机器上的**全局层**值，生产环境两处是同一
+        份 cfg（`main.py` 注入的就是整份 `crawler:` 段），而只给 `crawler:`
+        段的单测/嵌入方行为因此逐位不变。
+        """
+        try:
+            from core.pacing import _flag
+            from core.strategy_params import switch_on
+            raw = self.config.get("policy_gate") \
+                if isinstance(self.config, dict) else None
+            return switch_on("policy_gate.enabled",
+                             plat=str(getattr(self, "name", "") or ""),
+                             dim=str(dim or ""), fallback=_flag(raw, True))
+        except Exception:            # 参数层不可用：按本实例配置（旧行为）
+            raw = self.config.get("policy_gate") \
+                if isinstance(self.config, dict) else None
+            if isinstance(raw, str):
+                return raw.strip().lower() not in ("0", "false", "no", "off", "")
+            return True if raw is None else bool(raw)
+
+    def _policy_gate(self, dim: str = "") -> bool:
         """采集入口的统一闸门。返回 False = 本轮不发请求。
 
         只有 `riskscore` 到 `pause`/`human`/`rotate` 档才会关闸；**登录退避
         不关闸**（登录墙要如实记 `login` 并继续跑，由人过完再采），产量差也
         不关闸（真无票与风控无关）。关闸轮次**不计入爬取率**——它不是渠道
         的失败，是我们自己选择不打。
+
+        `dim` 原样递给 `_policy_enabled()`（维度级覆盖要用它）。
         """
-        if not self._policy_enabled():
+        if not self._policy_enabled(dim=dim):
             return True
         pol = self._policy_now(two_way=False)
         if pol is None:
@@ -1526,7 +1765,11 @@ class BaseCrawler:
         # 短时冷却仍归 ChannelBreaker（它拿得到 Retry-After）。关闸轮次
         # 不发请求、也不计入爬取率——那是我们选择不打，不是渠道失败。
         self.policy_blocked = False
-        if not self._policy_gate():
+        # 维度（r1063 fix-wave 2）：闸门开关（`policy_gate.enabled`）可被
+        # `渠道/维度` 层覆盖，所以这里把本次采集的维度递给它。口径与
+        # `main._dim_of_query()` 同一句：挂了返程日 = 往返采集，否则明细。
+        if not self._policy_gate(
+                dim="round_trip" if str(ret_date or "").strip() else "detail"):
             return []
         try:
             # 域标记入日志（r415）：健康面板此前只能按厂商聚合，同一家
@@ -1582,14 +1825,91 @@ class BaseCrawler:
             pass
 
     # ---------- 爬取率账本 ----------
+    # 解析失败留现场的容量上限（份数）：多了没用，还会占满盘
+    PARSE_SCENE_KEEP = 10
+    PARSE_SCENE_MAX_BYTES = 400_000
+
+    def save_parse_scene(self, bodies, tag: str = "", anchors=()) -> dict:
+        """把"有响应但解析不出"的现场存下来，返回**结构指纹**（r1063 T66）。
+
+        为什么必须留：`国际列表有响应但未解析出价格` 这类记录只说明"没对上"，
+        但**对不上哪一版**、长什么样，全靠猜。存一份 HTML + 一份结构指纹之后，
+        下一次改版只要比两个指纹（节点数/高频 class/锚点命中）就知道变没变。
+
+        ``anchors`` 给解析真正依赖的选择器/文案：命不中就说明页面结构变了。
+        """
+        out = {"path": "", "bytes": 0, "nodes": 0, "classes": 0,
+               "anchors": {}, "why": ""}
+        try:
+            body = ""
+            for b in (bodies or ()):
+                if isinstance(b, bytes):
+                    b = b.decode("utf-8", "replace")
+                if b:
+                    body = str(b)
+                    break
+            if not body:
+                out["why"] = "没有响应体"
+                return out
+            out["bytes"] = len(body)
+            import re as _re
+            out["nodes"] = len(_re.findall(r"<(?:div|li|tr|a|span)\b", body))
+            cls = _re.findall(r'class="([^"]{1,80})"', body)
+            out["classes"] = len(set(cls))
+            for a in (anchors or ()):
+                out["anchors"][str(a)] = body.count(str(a))
+            # 落盘
+            from core.yield_stats import user_data_root
+            root = os.path.join(user_data_root(self.config), self.name,
+                                "parse_fail")
+            os.makedirs(root, exist_ok=True)
+            fn = "%s_%s.html" % (str(tag or "parse")[:24],
+                                 time.strftime("%Y%m%d_%H%M%S"))
+            fp = os.path.join(root, fn)
+            with open(fp, "w", encoding="utf-8", errors="replace") as f:
+                f.write(body[:self.PARSE_SCENE_MAX_BYTES])
+            out["path"] = fp
+            self._prune_parse_scenes(root)
+        except Exception as e:
+            out["why"] = "%s: %s" % (type(e).__name__, str(e)[:60])
+        return out
+
+    def _prune_parse_scenes(self, root: str) -> None:
+        """只留最近 N 份现场（按修改时间）。"""
+        try:
+            files = [os.path.join(root, n) for n in os.listdir(root)
+                     if n.endswith(".html")]
+            files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            for p in files[int(self.PARSE_SCENE_KEEP):]:
+                try:
+                    os.remove(p)
+                except OSError:
+                    continue
+        except Exception:
+            pass
+
+    @staticmethod
+    def scene_sig(scene: dict) -> str:
+        """把结构指纹压成一句话，直接写进路径账的 detail。"""
+        if not scene or not scene.get("bytes"):
+            return "无现场（%s）" % str((scene or {}).get("why") or "未知")
+        miss = [k for k, v in (scene.get("anchors") or {}).items() if not v]
+        return "现场 %d 字节/%d 节点/%d 类，锚点未命中 %s，已存 %s" % (
+            scene.get("bytes") or 0, scene.get("nodes") or 0,
+            scene.get("classes") or 0,
+            ("、".join(miss)[:60] if miss else "无"),
+            os.path.basename(str(scene.get("path") or "")) or "未落盘")
+
     def _yield_ledger(self):
         """成功率账本（懒加载；拿不到就当没有，绝不阻断采集）。"""
         led = getattr(self, "_yield_led", None)
         if led is not None:
             return led
         try:
-            from core.yield_stats import default_ledger
-            root = str(self.config.get("user_data_dir") or "user_data")
+            from core.yield_stats import default_ledger, user_data_root
+            # 根目录唯一口径（config > TM_USER_DATA_DIR > user_data）；
+            # 测试由 conftest 的 autouse fixture 重定向，别再往真 user_data 写
+            root = user_data_root(self.config)
             profile = str(getattr(self, "profile_name", "") or self.name)
             self._yield_led = default_ledger(
                 os.path.join(_REPO_ROOT, root), profile)
@@ -1606,22 +1926,50 @@ class BaseCrawler:
         链路的原生事实。
         """
         try:
+            # **归因缺口**（与 app_base 的 app-silent 对称）：既没出数、
+            # 又一条通路都没记时，`statuses_ok([])` 返回空 path，账本只会
+            # 落成 `unknown` —— 报表上看得出「失败」却看不出卡在哪，
+            # 与真风控混在同一个分母里。
+            # 放在取账本**之前**：留痕不该依赖账本可用
+            # （允许说不出原因，不允许什么都不说）；健康卡读的是 self.paths。
+            if not self.paths and not results:
+                try:
+                    self.path_note(
+                        "web-silent", "error",
+                        detail="抓取返回空且未记录任何通路")
+                except Exception:
+                    pass
             led = self._yield_ledger()
             if led is None:
                 return {}
-            from core.yield_stats import statuses_ok, is_paced
+            from core.yield_stats import (statuses_ok, is_paced,
+                                          is_non_attempt)
             # 主动让位（配额/节流）**不算样本**：既不是成功也不是失败。
             # qunar 国际航线的配额让位原先被记成 soft_reject，账面成功率
             # 只有 50%，看起来像被风控，实际是在守配额（2026-11-04）。
             if is_paced(self.paths):
                 return {"minutes": int(self.config.get("interval_minutes", 30)
                                        or 30), "factor": 1.0, "paced": True}
+            # 非采集轮（不支持的通路 / 纯基础设施步骤）**不进样本**：
+            # 把它算成"渠道失败"会让建议间隔和健康卡都指向错误结论
+            # ——实测 app_zhixing 数据通路 0.99，却被 snap-restore 的
+            # 266 条"0 行"拖到 0.59，于是建议间隔从 24 分钟涨到 45 分钟。
+            if is_non_attempt(self.paths):
+                return {"minutes": int(self.config.get("interval_minutes", 30)
+                                       or 30), "factor": 1.0, "paced": True,
+                        "non_attempt": True,
+                        "why": "非采集轮（不支持的通路/基础设施），不计样本"}
             ok, rows, path = statuses_ok(self.paths)
             if not ok and results:
                 # 路径账本没标 ok 但确实拿到行：仍算成功，路径归到 last_path
                 ok, rows = True, len(results)
                 path = path or (self.last_path or "unknown")
-            led.note(self.name, path or "unknown", ok, rows=rows)
+            # 顺便记下主通路的**状态**：账本只累加 ok/fail 的话，
+            # "确实没票(empty)"、"解析失败(error)"、"登录墙(login)"
+            # 会混成一个 fail 数字，处置方向完全不同（2026-11-05）。
+            _st = next((str(r.get("status") or "") for r in (self.paths or [])
+                        if str(r.get("path") or "") == path), "")
+            led.note(self.name, path or "unknown", ok, rows=rows, status=_st)
             rec = led.recommend_interval(
                 self.name, int(self.config.get("interval_minutes", 30)
                                or 30))

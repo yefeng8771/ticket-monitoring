@@ -293,10 +293,10 @@ tongcheng    domestic=y intl=y calendar=y detail=y round_trip=y  multi_city="" l
 tuniu        domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_zhixing  domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_qunar    domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
-app_fliggy  domestic=y intl="" calendar="" detail=y round_trip="" multi_city="" low_fare=""
+app_fliggy  domestic=y intl="" calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_ctrip    domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_tongcheng domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
-gaps: app_zhixing=(multi_city)   app_qunar=(multi_city)   app_fliggy=(intl,calendar,round_trip,multi_city,low_fare)   app_ctrip=(multi_city)   app_tongcheng=(multi_city)
+gaps: app_zhixing=(multi_city)   app_qunar=(multi_city)   app_fliggy=(intl,multi_city)   app_ctrip=(multi_city)   app_tongcheng=(multi_city)
 ```
 矩阵变了 → 先查是谁改的、为什么，**不要直接改门禁迁就**（见 §7.2）。
 

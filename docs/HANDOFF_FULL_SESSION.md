@@ -253,11 +253,11 @@ tongcheng    domestic=y intl=y calendar=y detail=y round_trip=y  multi_city="" l
 tuniu        domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_zhixing  domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_qunar    domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
-app_fliggy  domestic=y intl="" calendar="" detail=y round_trip="" multi_city="" low_fare=""
+app_fliggy  domestic=y intl="" calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_ctrip    domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 app_tongcheng domestic=y intl=y calendar=y detail=y round_trip=y multi_city="" low_fare=y
 
-App 缺口：app_zhixing=(multi_city)   app_qunar=(multi_city)   app_fliggy=(intl,calendar,round_trip,multi_city,low_fare)   app_ctrip=(multi_city)   app_tongcheng=(multi_city)
+App 缺口：app_zhixing=(multi_city)   app_qunar=(multi_city)   app_fliggy=(intl,multi_city)   app_ctrip=(multi_city)   app_tongcheng=(multi_city)
 ```
 
 **稳定基线 7 家**：浏览器 5（携程/去哪儿/飞猪/同程/途牛）+ App 2（**智行 App / 去哪儿 App**）。

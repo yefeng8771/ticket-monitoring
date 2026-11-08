@@ -31,6 +31,28 @@ COL0 = 71.5
 COL_STEP = 126.0
 FIRST_ROW_DY = 106.0
 ROW_STEP = 88.0
+
+#: 按屏幕宽度标定的列几何：(列中心起点, 列距, 首行相对月标题的 dy)。
+#: 900×1600 是历史基准；1260×2800 与选日栅格（app_ctrip_parse 的
+#: CAL_CALIB）用同一组实测值，避免两条路各标一套。
+_CAL_GEO = {
+    900.0: (71.5, 126.0, 106.0),
+    1260.0: (90.0, 180.0, 139.0),
+}
+
+
+def _geo(width=None):
+    """取该宽度下的 (col0, col_step, first_row_dy)；未知宽度按 900 等比缩放。"""
+    try:
+        w = float(width) if width else None
+    except (TypeError, ValueError):
+        w = None
+    if not w:
+        return (COL0, COL_STEP, FIRST_ROW_DY)
+    if w in _CAL_GEO:
+        return _CAL_GEO[w]
+    k = w / 900.0
+    return (COL0 * k, COL_STEP * k, FIRST_ROW_DY * k)
 _ROW_CLUSTER_DY = 25.0
 _PRICE_MAX_DX = 48.0
 # 机票不会是 ¥1：OCR 把 1001 拆成 1+001 时只认后段会读出 1，
@@ -44,11 +66,11 @@ def _price_num(text: str):
     return float(m.group()) if m else None
 
 
-def _month_headers(words):
+def _month_headers(words, x_max=240.0):
     """[(year, month, header_y)]，按 y 排序；只取左侧标题区。"""
     lines = []
     for w in sorted(words, key=lambda w: (w["y"], w["x"])):
-        if w["x"] > 240:
+        if w["x"] > x_max:
             continue
         for ln in lines:
             if abs(ln["y"] - w["y"]) <= 12:
@@ -140,7 +162,7 @@ def _weekday_label(d, today):
     return _WEEK_CN[d.weekday()]
 
 
-def parse_calendar_words(words, today=None):
+def parse_calendar_words(words, today=None, width=None):
     """OCR 词块 → [{date, weekday, price}]（只含能反推且有价的日期）。
 
     空/坏输入返回 []；不猜没有价格的日期，不造月外日期。
@@ -148,7 +170,11 @@ def parse_calendar_words(words, today=None):
     if not words:
         return []
     today = today or _dt.date.today()
-    heads = _month_headers(words)
+    col0, col_step, first_dy = _geo(width)
+    # 左栏界限按宽度缩放：900 下是 240，1260 下是 336。
+    heads = _month_headers(words,
+                           x_max=(float(width) if width else 900.0)
+                           * 240.0 / 900.0)
     if not heads:
         return []
     prices = _price_cells(words)
@@ -167,11 +193,13 @@ def parse_calendar_words(words, today=None):
             continue
         # 首行一般在标题下 ~105px；若首行整行无价（都已过期/不可售），
         # 第一个价格行会落到 ~210px，此时用标题兜底换算，不把第 2 行当第 1 行。
-        base = cys[0] if cys[0] - hy <= 130 else hy + FIRST_ROW_DY
+        # 首行可能整行无价（都已过期/不可售），此时用标题兜底换算。
+        _near = first_dy * 1.25          # 阈值也按宽度缩放（900 下≈132）
+        base = cys[0] if cys[0] - hy <= _near else hy + first_dy
         for cx, py, price in prices:
             if not (hy <= py < nxt):
                 continue
-            col = int(round((cx - COL0) / COL_STEP))
+            col = int(round((cx - col0) / col_step))
             if col < 0 or col > 6:
                 continue
             row = int(round((py - base) / pitch))

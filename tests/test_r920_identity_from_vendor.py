@@ -126,7 +126,12 @@ def test_ensure_prefers_vendor_when_creating(tmp_path, monkeypatch):
     dev = _Dev()
     rep = fp.ensure(dev, {"android": {"identity": {"enabled": True}}},
                     _LOG, user_data_dir=str(tmp_path), profile="device", vm=0)
-    assert rep["ok"] is True
+    # 假设备上 `setprop ro.*` 无效，`ok` 由 `android_id`（settings put）决定；
+    # 这里关心的是"身份来源选了 vendor"，不是"props 写进去了"。
+    # 关心的是"身份选了 vendor 来源"，不是"props 写进去了"
+    # （假设备上 ro.* 写不动，`ok` 现在如实为 False）。
+    assert rep.get("identity") is not None
+    assert rep.get("created") is True
     # 非模拟器 → 不写 props，但身份已按官方值生成并落盘
     saved = fp.default_store(str(tmp_path), "device").get(0)
     assert saved.ident_id
@@ -183,9 +188,20 @@ def test_apply_reports_zero_verified_when_disk_readonly(tmp_path):
     dev = _NoWriteDev()
     ident = fp.build_from_vendor(_VENDOR, 7, vm=0)
     rep = fp.apply(dev, ident, uid=False)
-    assert rep["applied"], rep          # 命令层确实"报成功"了
+    # 假设备的 `setprop` 是 no-op：命令层不报成功、也不该报成功。
+    # 关键不变量是 **verified 为空**（没有任何一条被真改写）。
+    assert not rep["verified"], rep
     assert rep["verified"] == [], rep   # 但读回一条都没生效
-    assert rep["mismatch"], rep         # 差异被如实记下来
+    # **不许假阳性有三种正确形态**：
+    #   * 试了但没写进去 → `mismatch` 记下差异；
+    #   * 机型/构建字段**根本不许运行中试** → `hot_write_skipped` 点名；
+    #   * `ro.*` 差异**留给开机模块**（2026-11-05：运行期不再 `adb root`，
+    #     因为那会把 adbd 打到握手卡死）→ `deferred_ro` 点名。
+    # 三者都没有才说明"静默糊过去了"，那才是回归。
+    assert (rep["mismatch"] or rep.get("hot_write_skipped")
+            or rep.get("deferred_ro")), rep
+    if rep.get("hot_write_skipped"):
+        assert "官方键" in (rep.get("note") or ""), rep.get("note")
 
 
 def test_apply_uses_shared_implementation(tmp_path, monkeypatch):
@@ -193,12 +209,34 @@ def test_apply_uses_shared_implementation(tmp_path, monkeypatch):
     from core.android import abi_canary
     seen = {}
 
-    def _fake(dev, mapping, use_root=True):
+    def _fake(dev, mapping, use_root=True, **kw):
         seen["keys"] = sorted(mapping)
+        seen["allow"] = kw.get("allow_build_props")
         return {"applied": [], "verified": [], "failed": [], "mismatch": {},
                 "unchanged": [], "resetprop": ""}
     monkeypatch.setattr(abi_canary, "apply_props", _fake)
     ident = fp.build_from_vendor(_VENDOR, 7, vm=0)
     rep = fp.apply(_NoWriteDev(), ident, uid=False)
-    assert seen["keys"] == sorted(ident.props())   # 整份 props 交给共享实现
+    # 只把**非 ro 键**交给共享实现（`ro.*` 差异留给开机模块，运行期不写：
+    # 写它们要 `adb root`，而本机 `adb root` 会把 adbd 打到握手卡死）。
+    assert seen["keys"], "一条都没交给共享实现"
+    assert set(seen["keys"]) <= set(ident.props()), seen["keys"]
+    assert not [k for k in seen["keys"] if k.startswith("ro.")], seen["keys"]
     assert rep["verified"] == []
+    # 不显式要求时不写机型/构建字段（保守默认保留）
+    assert seen["allow"] is False
+
+
+def test_apply_can_request_build_props(monkeypatch):
+    """`allow_build_props=True` 必须透传到共享实现（50003 的硬判据在这批字段）。"""
+    from core.android import abi_canary
+    seen = {}
+
+    def _fake(dev, mapping, use_root=True, **kw):
+        seen["allow"] = kw.get("allow_build_props")
+        return {"applied": [], "verified": [], "failed": [], "mismatch": {},
+                "unchanged": [], "resetprop": ""}
+    monkeypatch.setattr(abi_canary, "apply_props", _fake)
+    ident = fp.build_from_vendor(_VENDOR, 7, vm=0)
+    fp.apply(_NoWriteDev(), ident, uid=False, allow_build_props=True)
+    assert seen["allow"] is True

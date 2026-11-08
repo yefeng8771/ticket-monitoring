@@ -162,8 +162,12 @@ def test_h5_low_fare_maps_to_not_connected(monkeypatch):
     import crawlers.app_qunar as aq
     from core.special_radar import RadarQuery, _app_qunar_deals
 
+    # **相对日期**：`_app_qunar_deals` 在「请求区间已过去」时会提前返回
+    # `empty`，写死过去的日期会让本用例跨过午夜后必然失败
+    # （2026-11-06 实际踩到：期望 not_connected，实得 empty）。
+    _t0 = dt.date.today()
     q = RadarQuery("", "BJS", "北京", "SHA", "上海",
-                   dt.date(2026, 11, 3), dt.date(2026, 11, 5),
+                   _t0, _t0 + dt.timedelta(days=2),
                    ["app_qunar"])
 
     def _fake(status):

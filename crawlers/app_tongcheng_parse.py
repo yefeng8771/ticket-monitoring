@@ -54,26 +54,60 @@ def _usable_airport(t: str) -> bool:
 
 
 def parse_form(xml: str):
-    """原生表单的 (出发, 到达, 日期文案)；不是表单返回 None。"""
+    """原生表单的 (出发, 到达, 日期文案)；不是表单返回 None。
+
+    **城市位不再用写死的 y 窗口**（2026-11-05）。原来是
+    ``380 <= cy <= 520``（按 900×1600 标定）；设备换成 1260×2800 后城市位
+    落到 **y≈788**，那个窗口里只剩下顶部档位 tab，于是 dep/arr 双双读成
+    "机票"——`_set_city` 的"城市位是否改变"检查永远失败，整条同程渠道
+    判 `app-city timeout`，而其实**城市早就设对了**。
+
+    新判据用页面自身的结构：出发/到达是**同一行左右并排的两个城市名**
+    （左右跨度 > 200，排除"两个并列 tab"）。与分辨率无关，不依赖 y 常量。
+    """
     ns = nodes(xml)
     if not any(n["text"] == "机票查询" for n in ns):
         return None
-    # 城市位在表单 y=418（往返档）/466（单程档），左右两列；排除档位 tab。
-    cities = [n for n in ns
-              if 380 <= n["cy"] <= 520 and n["text"]
-              and not re.search(r"\d", n["text"])
-              and n["text"] not in ("国内", "国际", "往返", "多程")]
+
+    _TAB = ("国内", "国际", "往返", "多程", "单程", "机票", "低价机票",
+            "火车票", "酒店", "汽车票", "门票", "打车", "机票查询",
+            "民宿/客栈", "接送机/包车")
+
+    def _is_city(t):
+        return bool(t) and t not in _TAB and not re.search(r"\d", t) \
+            and 2 <= len(t) <= 8 \
+            and re.fullmatch(r"[一-鿿·]+", t) is not None
+
+    city_nodes = [n for n in ns if n["cy"] > 500 and _is_city(n["text"])]
     dep = arr = ""
-    if cities:
-        left = [n for n in cities if n["cx"] < 450]
-        right = [n for n in cities if n["cx"] >= 450]
-        if left:
-            dep = min(left, key=lambda n: abs(n["cy"] - 466))["text"]
-        if right:
-            arr = min(right, key=lambda n: abs(n["cy"] - 466))["text"]
+    best = None
+    for a in city_nodes:
+        for b in city_nodes:
+            if a is b or abs(a["cy"] - b["cy"]) > 25:
+                continue
+            if a["cx"] >= b["cx"] or (b["cx"] - a["cx"]) < 200:
+                continue
+            if best is None or a["cy"] < best[0]:
+                best = (a["cy"], a["text"], b["text"])
+    if best is not None:
+        dep, arr = best[1], best[2]
+    else:
+        # 老窗口兜底（900×1600 那套），仅在新判据取不到时用
+        cities = [n for n in ns
+                  if 380 <= n["cy"] <= 520 and n["text"]
+                  and not re.search(r"\d", n["text"]) and n["text"] not in _TAB]
+        if cities:
+            left = [n for n in cities if n["cx"] < 450]
+            right = [n for n in cities if n["cx"] >= 450]
+            if left:
+                dep = min(left, key=lambda n: abs(n["cy"] - 466))["text"]
+            if right:
+                arr = min(right, key=lambda n: abs(n["cy"] - 466))["text"]
+
     date = ""
+    # 日期文案同样不设 y 上限：1260×2800 下它在 y≈971
     for n in ns:
-        if n["cy"] < 700 and re.search(r"\d+月\d+日", n["text"]):
+        if re.search(r"\d+月\d+日", n["text"]):
             date = re.split(r"[\n ]+", n["text"])[0]
             break
     if not (dep or arr or date):
@@ -158,28 +192,62 @@ def parse_round_trip_form(xml: str):
     ns = nodes(xml)
     if not any(n["text"] == "机票查询" for n in ns):
         return None
-    cities = [n for n in ns
-              if 380 <= n["cy"] <= 520 and n["text"]
-              and not re.search(r"\d", n["text"])
-              and n["text"] not in ("国内", "国际", "往返", "多程")]
+
+    _TAB = ("国内", "国际", "往返", "多程", "单程", "机票", "低价机票",
+            "火车票", "酒店", "汽车票", "门票", "打车", "机票查询")
+
+    def _is_city(t):
+        return bool(t) and t not in _TAB and not re.search(r"\d", t) \
+            and 2 <= len(t) <= 8 \
+            and re.fullmatch(r"[一-鿿·]+", t) is not None
+
+    # 城市：**同一行左右成对**（与分辨率无关），不再用 380..520 的 y 窗口
+    city_nodes = [n for n in ns if n["cy"] > 500 and _is_city(n["text"])]
     dep = arr = ""
-    left = [n for n in cities if n["cx"] < 450]
-    right = [n for n in cities if n["cx"] >= 450]
-    if left:
-        dep = min(left, key=lambda n: abs(n["cy"] - 440))["text"]
-    if right:
-        arr = min(right, key=lambda n: abs(n["cy"] - 440))["text"]
-    dep_date = ret_date = ""
+    best = None
+    for a in city_nodes:
+        for b in city_nodes:
+            if a is b or abs(a["cy"] - b["cy"]) > 25:
+                continue
+            if a["cx"] >= b["cx"] or (b["cx"] - a["cx"]) < 200:
+                continue
+            if best is None or a["cy"] < best[0]:
+                best = (a["cy"], a["text"], b["text"])
+    if best is not None:
+        dep, arr = best[1], best[2]
+    else:
+        # 老窗口兜底（900×1600 那套）
+        cities = [n for n in ns
+                  if 380 <= n["cy"] <= 520 and n["text"]
+                  and not re.search(r"\d", n["text"])
+                  and n["text"] not in ("国内", "国际", "往返", "多程")]
+        left = [n for n in cities if n["cx"] < 450]
+        right = [n for n in cities if n["cx"] >= 450]
+        if left:
+            dep = min(left, key=lambda n: abs(n["cy"] - 440))["text"]
+        if right:
+            arr = min(right, key=lambda n: abs(n["cy"] - 440))["text"]
+
+    # 日期：去/返按**两个日期节点的中位 x** 分左右（不再写死 cx<450）
+    dps = []
     for n in ns:
-        if n["cy"] >= 1000 or "月" not in n["text"]:
+        if "月" not in n["text"]:
             continue
         m = re.search(r"(\d+月\d+日)", n["text"])
-        if not m:
-            continue
-        if n["cx"] < 450 and not dep_date:
-            dep_date = m.group(1)
-        elif n["cx"] >= 450 and not ret_date:
-            ret_date = m.group(1)
+        if m:
+            dps.append((n["cx"], m.group(1)))
+    dep_date = ret_date = ""
+    if dps:
+        dps.sort()
+        if len(dps) == 1:
+            dep_date = dps[0][1]
+        else:
+            mid = (dps[0][0] + dps[-1][0]) / 2.0
+            for cxv, txt in dps:
+                if cxv <= mid and not dep_date:
+                    dep_date = txt
+                elif cxv > mid and not ret_date:
+                    ret_date = txt
     if not (dep or arr or dep_date):
         return None
     return {"dep": dep, "arr": arr, "dep_date": dep_date,
@@ -413,15 +481,27 @@ def parse_result_rows(xml: str):
     """
     ns = nodes(xml)
     deps = [n for n in ns if TIME_RE.match(n["text"]) and n["cx"] < 220]
+    # **行内间距不再用写死的偏移**（2026-11-05）。
+    #
+    # 原实现假设「机场行在时刻下方 +10..+50、航班号在 +35..+120」——
+    # 那是 900×1600 的实测间距（约 30/60px）。设备换成 1260×2800 后同样的
+    # 元素落在 +62/+153，全部掉出窗口，于是 airports=[]、flight_no=""，
+    # 整行被丢弃，`parse_result_rows` 返回 0 行，账本记成
+    # 「未取到可用结果」，而**页面上明明有 4 条带价航班**。
+    #
+    # 新判据：每条记录占的纵向区间 = [本条时刻行, 下一条时刻行)，
+    # 在这张"卡片"里取机场与航班号。与分辨率无关，也不依赖任何间距常量。
+    deps.sort(key=lambda n: n["cy"])
     by_key = {}
-    for dep in deps:
+    for i, dep in enumerate(deps):
+        card_end = deps[i + 1]["cy"] if i + 1 < len(deps) else dep["cy"] + 400
         arrs = [n for n in ns if TIME_RE.match(n["text"])
                 and abs(n["cy"] - dep["cy"]) <= 6 and n["cx"] > dep["cx"]]
         if not arrs:
             continue
         arr = min(arrs, key=lambda n: n["cx"])
         near = [n for n in ns
-                if dep["cy"] + 10 <= n["cy"] <= dep["cy"] + 50]
+                if dep["cy"] + 10 <= n["cy"] < min(card_end, dep["cy"] + 200)]
         airports = [n for n in near if _usable_airport(n["text"])
                     and n["x1"] < 600]
         dep_air = min(airports, key=lambda n: n["cx"])["text"] \
@@ -455,7 +535,10 @@ def parse_result_rows(xml: str):
                 break
         flight_no = airline = cabin = aircraft = ""
         for n in ns:
-            if not (dep["cy"] + 35 <= n["cy"] <= dep["cy"] + 120):
+            # 同样用"卡片区间"而不是写死的 +35..+120：1260×2800 下航班号
+            # 落在时刻行下方 ~153px，原窗口取不到 → 整行被判无航班号丢弃。
+            if not (dep["cy"] + 20 <= n["cy"] < min(card_end,
+                                                   dep["cy"] + 300)):
                 continue
             m = FLIGHT_RE.search(n["text"])
             if m and not flight_no:

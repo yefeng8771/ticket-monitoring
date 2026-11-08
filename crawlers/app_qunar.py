@@ -595,6 +595,18 @@ class AppQunarCrawler(AppCrawler):
                            detail="device unavailable")
             return []
 
+        # 链路闸门（r1063 T9）：**必须在拿设备锁之前**按阶段问——闸门要等
+        # 时不能占着设备睡（App 渠道的设备是串行独占的）。一次 fetch 走
+        # 「登录 → 列表」两段（往返查询走「登录 → 往返」）；被停用的阶段
+        # 只记 `paced` 并交空结果，**不记失败**（记失败会拉开整家渠道熔断）。
+        if not self.path_gate("app-login", "detail"):
+            return []
+        if ret_date:
+            if not self.path_gate("往返", "round_trip"):
+                return []
+        elif not self.path_gate("app-list", "detail"):
+            return []
+
         with rt.device_lock(owner=self.name):
             # 每轮只允许一次「杀进程重建首页」（见 `_hard_reset_home`）
             self._home_hard_reset = False
@@ -1063,10 +1075,20 @@ class AppQunarCrawler(AppCrawler):
                 # 记到 target 名下——日期错位价，比缺数据更糟。宁可这天记
                 # timeout，也不产出串味数据。先退回首页，别把日历弹层留给
                 # 下一个日期。
-                self.logger.warning("[%s] 选日期失败（%s），该日不产出数据",
-                                    self.name, target)
+                #
+                # **回首页后重试一次**（2026-11-05 现场）：`pickdate-cell`
+                # 保存的 dump 显示页面停在「单程列表页」（头部上海/曼谷、
+                # MU/KY 航班卡齐全）——日历弹层在选日途中被误触关掉并触发了
+                # 搜索。这种情况**日历本身是好的**，再打开选一次就能成；
+                # 原实现直接放弃，把这天白记成 0 行。
                 self._ensure_home(dev)
-                return [], "pick-date-failed"
+                if self._pick_date(dev, dev.dump() or "", target):
+                    self.logger.info("[%s] 选日期重试成功（%s）", self.name, target)
+                else:
+                    self.logger.warning("[%s] 选日期失败（%s），该日不产出数据",
+                                        self.name, target)
+                    self._ensure_home(dev)
+                    return [], "pick-date-failed"
         # **流程留痕**（2026-11-04）：城市/日期都过了，把"搜索前的页面长什么样"
         # 记一行。`no-list-page` 以前只看得到最终结果，看不出按下搜索时
         # 表单是哪个档——同一句账错了 34 次。这一行让"点之前是什么状态"
@@ -1805,6 +1827,28 @@ class AppQunarCrawler(AppCrawler):
         失败一律返回 `[]` 并用 `path_note` 写明卡在哪——低价发现源宁可
         空，也不能拿错价冒充（下游会跨渠道核实价格）。
         """
+        # 链路闸门（r1063 T9）：低价机票是发现源里的独立一档，在拿设备锁
+        # 之前问（闸门要等时不能占着设备睡）。
+        if not self.path_gate("low-fare", "low_fare"):
+            return []
+        return self._low_fare_impl(from_city, to_city, days=days)
+
+    def _low_fare_impl(self, from_city: str, to_city: str,
+                       days: int = 14) -> List[dict]:
+        """低价页的**实现本体**（不问链路闸门）：`low_fare` 与 `calendar` 共用。
+
+        为什么要拆（r1063 T9 复核）：`calendar()` 走的是同一个低价页的
+        「日历」弹层，与低价发现源共用**一次设备交互**，但它们是**两条
+        通路**。原来 `calendar()` 直接 `self.low_fare(...)`，等于穿了一次
+        `low-fare` 的闸门——于是「停掉 low-fare」会把日历一起清空，而且
+        一条 `app-calendar` 证据都不留：用户以为只关了一个发现源，实际
+        连日历维度都没了（正是本闸门要挡的连坐，见
+        `core/pacing.py:1521` 那句「只停这一条链路，同渠道其它链路照常」）。
+
+        闸门只留在两个**对外入口**（`low_fare` / `calendar`）上，本体不再
+        二次问：同一阶段问两次会让链路桶多记一格，第二次被拒时还会与
+        「前面已经放行、设备已经动过」自相矛盾。
+        """
         import datetime as _dt
         rt = self.runtime()
         ok, why = rt.ensure_ready()
@@ -1832,7 +1876,16 @@ class AppQunarCrawler(AppCrawler):
         `path_note("日历","calendar", rows=<日格数>)` 写入证据链，返回值仅日历行。
         """
         self._calendar_rows = []
-        self.low_fare(from_city, to_city, days=14)
+        # 链路闸门（r1063 T9）：日历与低价共用同一次设备交互，但是**两条
+        # 通路、两个闸门**，各自被停用只停自己：
+        #   * 停 `app-calendar` → 这里直接交空（连设备都不碰），并留下
+        #     `app-calendar / paced` 证据，用户看得出是「日历这档被停」；
+        #   * 停 `low-fare` → 只停特价发现源，日历照跑。所以下面必须走
+        #     `_low_fare_impl`（**不穿** `low_fare` 的闸门）——走 `low_fare`
+        #     就会把日历一起清空，那正是二轮复核抓到的连坐。
+        if not self.path_gate("app-calendar", "calendar"):
+            return []
+        self._low_fare_impl(from_city, to_city, days=14)
         return list(getattr(self, "_calendar_rows", []) or [])
 
     def _low_fare_locked(self, dev, from_city: str, to_city: str,

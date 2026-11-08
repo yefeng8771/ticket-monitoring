@@ -47,6 +47,7 @@ SRC_APP_QUNAR = "app_qunar"
 SRC_APP_ZHIXING = "app_zhixing"
 SRC_APP_TONGCHENG = "app_tongcheng"
 SRC_APP_CTRIP = "app_ctrip"
+SRC_APP_FLIGGY = "app_fliggy"
 _KNOWN_SOURCES = (SRC_TUNIU, SRC_TUNIU_CAL, SRC_CTRIP, SRC_CTRIP_BD, SRC_FLIGGY,
                   SRC_QUNAR, SRC_TONGCHENG, SRC_APP_QUNAR, SRC_APP_ZHIXING,
                   SRC_APP_TONGCHENG, SRC_APP_CTRIP)
@@ -89,7 +90,11 @@ SPECIAL_CAPABILITY = {
                     "note": "真机·逐天最低价·口径未标注"},
     # 验证中的可选 App 渠道：尚无经核实的低价发现源，显式登记为空，
     # 雷达渠道入口能说清「为什么不参与」，而不是从页面上消失。
-    "app_fliggy": {"sources": [], "note": "暂无可用低价发现源（App 明细已接）"},
+    # 飞猪 App 价格日历（2026-11-06 真机）：日历页每格是「日号 + 其下方
+    # 最低价」，OCR 整月逐日价；SHA→PEK 45 天 35 行、连续 20 天无缺口、
+    # 最低 ¥338（11-10）。页面未标口径 → radar 行标「口径未标注」。
+    "app_fliggy": {"sources": [SRC_APP_FLIGGY],
+                   "note": "真机·价格日历逐日价·口径未标注"},
     # 携程 App 价格日历（2026-11-02 真机 OCR，连续两次）：SHA→PEK 61 天
     # ¥380–420，雷达行沿用「口径未标注」，不假设含税。
     "app_ctrip": {"sources": [SRC_APP_CTRIP],

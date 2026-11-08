@@ -68,9 +68,10 @@ def _matrix(port, width):
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_timeout(2200)
             pg.evaluate("""()=>{const t=document.querySelector(
-                  '.cnav [data-tab=login],#cfgnav [data-tab=login]');
+                  '#cfgnav .cnav[data-p=login]');
                   if(t)t.click();}""")
-            pg.wait_for_timeout(2200)
+            pg.wait_for_selector("#cfgDimMatrix .dimtbl", timeout=30000)
+            pg.wait_for_timeout(1200)
             out = pg.evaluate("""()=>{
               const w=document.getElementById('cfgDimMatrix');
               const t=w&&w.querySelector('.dimtbl');
@@ -185,9 +186,10 @@ def test_static_demo_bakes_capability_matrix():
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_timeout(2500)
             pg.evaluate("""()=>{const t=document.querySelector(
-                  '.cnav [data-tab=login],#cfgnav [data-tab=login]');
+                  '#cfgnav .cnav[data-p=login]');
                   if(t)t.click();}""")
-            pg.wait_for_timeout(2200)
+            pg.wait_for_selector('#cfgDimMatrix .dimtbl', timeout=30000)
+            pg.wait_for_timeout(800)
             out = pg.evaluate("""()=>{
               const w=document.getElementById('cfgDimMatrix');
               const t=w&&w.querySelector('.dimtbl');
@@ -266,9 +268,10 @@ def test_matrix_freezes_dimension_column_on_narrow_scroll(server):
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_timeout(2200)
             pg.evaluate("""()=>{const t=document.querySelector(
-                  '.cnav [data-tab=login],#cfgnav [data-tab=login]');
+                  '#cfgnav .cnav[data-p=login]');
                   if(t)t.click();}""")
-            pg.wait_for_timeout(2200)
+            pg.wait_for_selector('#cfgDimMatrix .dimtbl', timeout=30000)
+            pg.wait_for_timeout(800)
             out = pg.evaluate("""()=>{
               const w=document.getElementById('cfgDimMatrix');
               const wrap=w&&w.querySelector('.dimwrap');
@@ -325,9 +328,10 @@ def test_matrix_freezes_dimension_column_on_narrow_scroll(server):
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_timeout(2200)
             pg.evaluate("""()=>{const t=document.querySelector(
-                  '.cnav [data-tab=login],#cfgnav [data-tab=login]');
+                  '#cfgnav .cnav[data-p=login]');
                   if(t)t.click();}""")
-            pg.wait_for_timeout(2200)
+            pg.wait_for_selector('#cfgDimMatrix .dimtbl', timeout=30000)
+            pg.wait_for_timeout(800)
             wide = pg.evaluate("""()=>{
               const w=document.getElementById('cfgDimMatrix');
               const wrap=w&&w.querySelector('.dimwrap');

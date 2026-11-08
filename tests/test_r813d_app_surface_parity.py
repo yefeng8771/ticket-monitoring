@@ -98,6 +98,10 @@ def test_health_grid_handles_six_and_eight_cards(server):
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_function(
                 "typeof S!=='undefined' && S && S.users", timeout=15000)
+            # r1130：诊断卡默认收在「展开说明」浮层里；本门禁量的是卡内网格，
+            # 先显式展开诊断体（与用户点「展开说明」同一状态类）。
+            pg.evaluate("()=>{const b=document.getElementById('healthDiagBody');"
+                        "if(b)b.classList.add('diag-open')}")
             pg.wait_for_selector(".hdiag-card", timeout=15000)
             pg.wait_for_timeout(1200)
 
@@ -135,18 +139,25 @@ def test_health_grid_handles_six_and_eight_cards(server):
                     btn:[...new Set(a.map(x=>x.btn))]}));
                 }""")
 
+            # 2026-11-05：r942b 把渠道清单从"5~10 列 auto-fit"改成**固定两列**
+            # （旧规则把 10 家渠道压成 5~10 列，296×209 的大块里只有四行 11px
+            # 小字，空出来的高度读作"散"）。所以下面的期望跟着改成两列的排布：
+            # 6 张 → 3 行×2，8 张 → 4 行×2；≤700 的窄档仍是单列。
+            # 本条测试要保住的**意图**没变：不留孤卡、同行卡等宽、
+            # 同行"自检"按钮同一纵坐标——这三条对任何列数都成立。
             for n, cases in (
-                    (6, ((1512, 6), (900, 3), (768, 3), (390, 1))),
-                    (8, ((1512, 4), (900, 4), (768, 4), (390, 1)))):
+                    (6, ((1512, [2, 2, 2]), (900, [2, 2, 2]),
+                         (768, [2, 2, 2]), (390, [1] * 6))),
+                    (8, ((1512, [2, 2, 2, 2]), (900, [2, 2, 2, 2]),
+                         (768, [2, 2, 2, 2]), (390, [1] * 8)))):
                 for w, want in cases:
                     pg.set_viewport_size({"width": w, "height": 1100})
                     pg.wait_for_timeout(250)
                     make(n)
                     rws = rows()
-                    assert [r["n"] for r in rws] == [1] * n if w == 390                         else ([r["n"] for r in rws] == [want, want]
-                              if not (n == 6 and w == 1512)
-                              else [r["n"] for r in rws] == [6]), (
-                        "%d 张 %d 档排布异常：%s" % (n, w, rws))
+                    assert [r["n"] for r in rws] == want, (
+                        "%d 张 %d 档排布异常：期望 %s，实际 %s"
+                        % (n, w, want, rws))
                     for r in rws:
                         assert len(r["w"]) == 1 and len(r["btn"]) == 1, (w, r)
             pg.evaluate("""()=>{const e=document.getElementById('srxTestHdiag');
@@ -176,6 +187,8 @@ def test_diag_cards_stay_aligned_at_every_width(server):
                 wait_until="domcontentloaded", timeout=30000)
         pg.wait_for_function(
             "typeof S!=='undefined' && S && S.users", timeout=15000)
+        pg.evaluate("()=>{const b=document.getElementById('healthDiagBody');"
+                    "if(b)b.classList.add('diag-open')}")
         pg.wait_for_selector(".hdiag-card", timeout=15000)
         pg.wait_for_timeout(900)
         return pg.evaluate("""()=>[...document.querySelectorAll('.hdiag-card')].map(c=>{

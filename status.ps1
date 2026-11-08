@@ -28,3 +28,20 @@ if (Test-Path $log) {
 } else {
     Write-Host "(无日志)" -ForegroundColor DarkGray
 }
+
+# --- Android 设备状态（仅当配置里启用了 App 渠道时检查）---
+$cfgFile = Join-Path $root "config.yaml"
+if (Test-Path $cfgFile) {
+    $cfgText = Get-Content $cfgFile -Raw -Encoding utf8
+    if ($cfgText -match "app_(zhixing|qunar|fliggy|ctrip|tongcheng)") {
+        Write-Host ""
+        Write-Host "--- Android 设备 ---"
+        $py = Join-Path $root ".venv\Scripts\python.exe"
+        if (-not (Test-Path $py)) { $py = "python" }
+        try {
+            & $py (Join-Path $root "main.py") --app-status
+        } catch {
+            Write-Host "  (设备状态查询失败；可运行 python scripts/setup_device.py 体检)" -ForegroundColor DarkGray
+        }
+    }
+}

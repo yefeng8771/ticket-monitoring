@@ -33,7 +33,7 @@ BLOCK_NONE = ""
 _ANR_MARKS = ("没有响应", "无响应", "isn't responding", "is not responding")
 _ANR_WAIT = ("等待", "Wait", "稍候")
 
-# 人脸/活体核验：生物特征，自动化既无法也不应伪造 → 只能本人操作。
+# 人脸/活体核验：生物特征核验，自动化不可行（也没有技术路径）→ 只能本人操作。
 # 这类门槛与验证码不同：验证码理论上人也能过且常是一次性的，
 # 人脸往往绑定实名，属于"这条渠道在当前账号下不可自动化"。
 _FACE_MARKS = (
@@ -100,37 +100,72 @@ def _texts(xml: str):
             if m.group(1).strip()]
 
 
-def _close_button(texts):
+def _desc_texts(xml: str):
+    """只取 **content-desc** 的文案（含坐标）。
+
+    为什么要单独一份：`_texts()` 只读 `text=`，而不少弹层的关闭钮是
+    **图标 + content-desc**（text 为空）。2026-11-05 实测智行的营销弹层
+    就是这样：`_close_button` 在 text 里找不到"关闭/跳过"，于是判成
+    「营销弹层（未找到关闭按钮）」，渠道记 `app-blocker ad` 停手 ——
+    而弹层右上角其实是有可点关闭区的。
+
+    刻意与 `_texts()` **分开**：`_AD_MAX_TEXTS`（≤12 判弹层）是按
+    **text 条数**标定的，把 desc 混进去会抬高功能页条数、让弹层判不出来。
+    """
+    out = []
+    for m in re.finditer(r"<node[^>]*>", xml or ""):
+        tag = m.group(0)
+        d = re.search(r'content-desc="([^"]*)"', tag)
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not d or not b:
+            continue
+        s = (d.group(1) or "").strip()
+        if not s:
+            continue
+        out.append((s, (int(b.group(1)) + int(b.group(3))) // 2,
+                    (int(b.group(2)) + int(b.group(4))) // 2))
+    return out
+
+
+def _close_button(texts, xml: str = ""):
     """在文案里找"关闭/跳过"类按钮，返回坐标。
 
     除了文字按钮，还认**图标字形**关闭钮：智行的活动层右上角是一个
     `\\ue706` 之类的私用区字形（text 长度 1，不可读），`clickable=false`
     但坐标点击有效（实测点完活动层消失、列表页露出 8 行带价航班）。
     判据：单字符 + 落在页面右侧 2/3，避免误点正文里的装饰字符。
+
+    ``xml`` 非空时最后再扫一遍 **content-desc**：图标关闭钮的语义往往
+    只在 desc 里（见 `_desc_texts` 的说明）。
     """
     for want in ("跳过广告", "跳过", "关闭", "我知道了", "知道了",
                  "以后再说", "暂不开启", "残忍拒绝"):
         for t, x, y in texts:
             if t == want:
                 return (x, y)
-    if not texts:
-        return None
-    max_x = max(x for _, x, _ in texts) or 0
-    for t, x, y in texts:
-        ch = (t or "").strip()
-        if len(ch) != 1:
-            continue
-        code = ord(ch)
-        # 私用区（U+E000–U+F8FF）就是图标字体；也接受 ✓/✕ 这类符号
-        is_glyph = 0xE000 <= code <= 0xF8FF or ch in "✕✖╳×✗"
-        if not is_glyph:
-            continue
-        # 只按**横向**判右侧，不限纵向：智行活动层的 ✕ 在 y=1092，
-        # 而「一键报名」在 y=1527，按页高一半卡会把 ✕ 排除掉
-        # （实测：限定上半部后本函数返回 None，活动层关不掉）。
-        if max_x and x < max_x * 0.66:
-            continue
-        return (x, y)
+    if texts:
+        max_x = max(x for _, x, _ in texts) or 0
+        for t, x, y in texts:
+            ch = (t or "").strip()
+            if len(ch) != 1:
+                continue
+            code = ord(ch)
+            # 私用区（U+E000–U+F8FF）就是图标字体；也接受 ✓/✕ 这类符号
+            is_glyph = 0xE000 <= code <= 0xF8FF or ch in "✕✖╳×✗"
+            if not is_glyph:
+                continue
+            # 只按**横向**判右侧，不限纵向：智行活动层的 ✕ 在 y=1092，
+            # 而「一键报名」在 y=1527，按页高一半卡会把 ✕ 排除掉
+            # （实测：限定上半部后本函数返回 None，活动层关不掉）。
+            if max_x and x < max_x * 0.66:
+                continue
+            return (x, y)
+    # **最后兜底扫 content-desc**（2026-11-05）：弹层正文是非空的，
+    # 所以不能只在 `not texts` 时才扫；关闭钮常常只有 desc 语义。
+    for t, x, y in _desc_texts(xml):
+        for want in ("关闭", "跳过", "跳过广告", "我知道了", "知道了"):
+            if t == want or t.startswith(want):
+                return (x, y)
     return None
 
 
@@ -188,7 +223,7 @@ def detect_block(xml: str) -> Block:
     # 是遮挡结果页的可关闭提示，不是营销词也不一定符合广告文案阈值。
     # 有明确关闭按钮就点掉继续；没有就交给后续流程，不误记成 empty。
     if "出行提醒" in joined:
-        close_xy = _close_button(texts)
+        close_xy = _close_button(texts, xml)
         if close_xy:
             return Block(BLOCK_AD, "出行提醒（可关闭）", close_xy)
 
@@ -207,7 +242,7 @@ def detect_block(xml: str) -> Block:
     # （点右上角 ✕ 后立刻露出 8 行带价航班）。
     has_ad_word = any(w in joined for w in _AD_MARKS)
     if has_ad_word and not has_payload(xml) and len(texts) <= _AD_MAX_TEXTS:
-        close_xy = _close_button(texts)
+        close_xy = _close_button(texts, xml)
         if close_xy:
             return Block(BLOCK_AD, "可关闭的营销弹层", close_xy)
         return Block(BLOCK_AD, "营销弹层（未找到关闭按钮）", None)
@@ -215,7 +250,7 @@ def detect_block(xml: str) -> Block:
     # r725：文案更多的**营销活动全屏页**（没有航班/价格，但带明显活动语）
     # 同样按广告处理，前提仍然是「无数据」——有数据的列表页不动。
     if has_ad_word and not has_payload(xml):
-        close_xy = _close_button(texts)
+        close_xy = _close_button(texts, xml)
         if close_xy:
             return Block(BLOCK_AD, "可关闭的营销活动页", close_xy)
 

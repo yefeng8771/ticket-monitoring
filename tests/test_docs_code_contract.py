@@ -240,7 +240,12 @@ def test_documented_cli_flags_exist():
     以及收在「坑」语境里说明"这不是本版参数"的引用。
     """
     src = ""
-    for rel in ("main.py", "webui.py", "wizard.py", "tools/ci_shard.py"):
+    for rel in ("main.py", "webui.py", "wizard.py", "tools/ci_shard.py",
+                # 设备侧装机的 CLI 也有文档里写的参数（--apply/--reboot 等），
+                # 纳入扫描才能既保住"文档参数必须真实存在"的严格性，
+                # 又不用给新脚本开白名单。
+                "scripts/setup_device.py", "scripts/device_hardening.py",
+                "scripts/fetch_packages.py"):
         pth = ROOT / rel
         if pth.exists():
             src += pth.read_text(encoding="utf-8", errors="replace")
@@ -264,7 +269,9 @@ def test_documented_cli_flags_exist():
                 # 外部工具的 flag 不归本项目管（git / pyinstaller / pip / pytest /
                 # playwright …）；仓库自带工具（tools/*.py）同样不是产品 CLI。
                 # 产品命令（main.py/webui.py/wizard.py）里的假参数仍会被下面拦下。
-                if re.search(r"\b(git|pyinstaller|pip|pytest|playwright|npm|npx|curl|"
+                # r1063 T46：`python -m 模块 --flag` 也是**命令**，补进前缀
+                # （否则 `python -m core.setup_check --fix` 会被当成未知开关）。
+                if re.search(r"\b(python|python3|git|pyinstaller|pip|pytest|playwright|npm|npx|curl|"
                              r"netstat|findstr|tasklist|powershell|pwsh)\b",
                              span, re.I):
                     continue

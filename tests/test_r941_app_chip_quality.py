@@ -21,7 +21,8 @@ def _open_search(page):
     _goto(page, "#search")
     page.evaluate(
         "()=>{const p=document.getElementById('srxProbe');"
-        "if(p)p.classList.add('open')}")
+        "if(p)p.classList.add('open');"
+        "const d=document.getElementById('srxPlatDD');if(d)d.open=true;}")
     page.wait_for_selector(
         '#srxPlatPick .srx-pchip-ic[data-p="app_zhixing"] img.bic',
         timeout=15000)
@@ -53,7 +54,7 @@ def test_app_chip_has_large_official_icon_badge_and_check(page):
     assert st["w"] >= 20 and st["h"] >= 20, ("App 图标仍是小图", st)
     # PC 档必须有「看得见的 APP 标」：文字标签，或（窄档）角标
     lab_visible = bool(st["lab"] and st["lab"]["display"] != "none"
-                       and "APP" in st["lab"]["text"])
+                       and ("App" in st["lab"]["text"] or "APP" in st["lab"]["text"]))
     assert "APP" in (st["after"] or "") or lab_visible, (
         "缺 App 标（PC 应有可见 APP 小字，窄档应有角标）", st)
     # 扁平化契约：选中只靠软品牌底 + 描边，不回到「勾 / 光环 / 渐变」
@@ -81,7 +82,7 @@ def test_app_chip_row_does_not_overflow_page_at_390(page):
               lab:lab?getComputedStyle(lab).display:null};
     }""")
     assert st["doc"] <= 1, ("App chip 把整页撑出横向滚动", st)
-    assert st["chipW"] >= 34, ("390 档 App chip 被压扁（应保留 36px 方片）", st)
-    assert "APP" in (st["after"] or ""), ("390 档缺 APP 角标", st)
-    assert st["lab"] == "none", ("390 档文字标签应隐藏，给内容省宽", st)
-    assert st["pick"] > 0, ("窄档应由 chip 行自己横向滚动，而不是压扁 chip", st)
+    assert st["chipW"] >= 44, ("390 档 App chip 被压扁", st)
+    # r992：渠道选择进下拉后不再靠角标省宽，App 显示完整名称
+    assert st["lab"] != "none", ("390 档文字标签被隐藏", st)
+    assert st["doc"] <= 1, st

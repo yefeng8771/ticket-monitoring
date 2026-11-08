@@ -65,7 +65,7 @@ class TestWebuiV170Pins:
     def test_glsec_normalized_to_subsec(self):
         """P2-A：glsec 输出 class="subsec"（hairline 收尾线+margin 归一）。"""
         src = self._src()
-        assert 'const glsec=t=>\'<div class="subsec">\'+t+\'</div>\';' in src, \
+        assert "const glsec=(t,fold)=>'<div class=\"subsec\"'" in src, \
             "glsec 未归一 subsec"
         assert 'glsec' in src and src.count('class="glsec"') == 0
         # .subsec 基线仍带 hairline（归一收益的本体）

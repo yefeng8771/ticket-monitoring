@@ -10,6 +10,39 @@ from typing import List, Optional
 from .models import CAL_PATH_FAMILY, PRICE_MIN, FlightPrice
 
 
+# ---------------------------------------------------------------- 维度归属
+#
+# r1063 T15：账本行只记 `entry_path`（入口通路名）与航线，**没有维度列**。
+# 而「成功率保护（自动降频）」要能按维度独立生效（日历烂不该把整家渠道
+# 一起降频），就必须给每行归一个维度。这里用唯一的、可复现的映射，
+# 不新增列、不改抓取口径——改抓取口径会让历史行与新行两套语义。
+#
+# 口径与 `core/channels.py::DIMENSIONS` 对齐：
+#   calendar  ← 日历 / 窗历 / app-calendar（各家的价格日历入口）
+#   round_trip← 往返 / TRIP / app-roundtrip
+#   multi_city← 多程
+#   low_fare  ← low-fare（App 低价机票发现源）
+#   detail    ← 其余全部（PC / H5 / H5/API / API / QUERY / 航班明细 /
+#               app-list / app-route / app-city* / app-date / app-search …）
+# 说明：`domestic`/`intl` 是**域**不是维度，已由 `path_stats` 的 `scopes`
+# 单独给出；维度与域是两个正交轴，别混。
+_DIM_OF_PATH = {
+    "日历": "calendar",
+    "窗历": "calendar",
+    "app-calendar": "calendar",
+    "往返": "round_trip",
+    "TRIP": "round_trip",
+    "app-roundtrip": "round_trip",
+    "多程": "multi_city",
+    "low-fare": "low_fare",
+}
+
+
+def dim_of_path(path: str) -> str:
+    """通路名 → 维度。未知通路一律归 `detail`（宁可保守少拆一层）。"""
+    return _DIM_OF_PATH.get(str(path or ""), "detail")
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS flight_prices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,10 +341,18 @@ class PriceStorage:
             # 只用**人工干预**当分界：auto_trip 等自动事件现在也入账，
             # 拿它当分界会把用户上一次手动干预的前后对比冲掉——而
             # 「我手动救过之后好了没有」正是这个接口要回答的。
+            #
+            # 策略变更（`strategy_*`，r1063 T6）同理，而且更险：它既不是
+            # 人「救了一次」，也不是程序「自己跳了闸」，它是**参数被改了**。
+            # 拿它当分界，面板就会说「本次干预：把开关关掉 → 成功率 0%」，
+            # 读起来像一次失败的人工抢救；而真正的上一次自检被顶掉了。
+            # 台账因此是三族：人工干预 / 自动事件（`auto_*`）/ 策略变更
+            # （`strategy_*`），后两族都不回答「干预有没有救回来」。
             iv = c.execute(
                 "SELECT at, action, ok, scope FROM interventions "
                 "WHERE platform=? "
                 "AND substr(action,1,5) <> 'auto_' "
+                "AND substr(action,1,9) <> 'strategy_' "
                 "ORDER BY id DESC LIMIT 1", (str(platform),)).fetchone()
             if not iv:
                 return {"ok": True, "platform": platform, "has": False}
@@ -481,7 +522,8 @@ class PriceStorage:
         几次真的把渠道救回来了」——这正是决定优先按哪个钮的依据。
 
         判据（只用时间先后，不做语义猜测）：
-          对每次人工干预 I（排除 auto_*），生效窗口为
+          对每次人工干预 I（排除 auto_*，也排除 r1063 T6 的 strategy_*），
+          生效窗口为
           [I.at, 同渠道下一次人工干预) ∩ [I.at, I.at+N 小时]。窗口内出现
           ok/calendar 路径样本即记为有效（healed）。
           右界必须有 N 小时封顶（r611）：判定是 `any(ok)`，窗口越宽越容易
@@ -508,6 +550,7 @@ class PriceStorage:
             ivs = c.execute(
                 "SELECT id, at, platform, action, scope FROM interventions "
                 "WHERE substr(action,1,5) <> 'auto_' "
+                "AND substr(action,1,9) <> 'strategy_' "
                 "AND at >= datetime('now','localtime', ?) "
                 "ORDER BY platform, id", ("-%d hours" % hours,)).fetchall()
             if not ivs:
@@ -634,6 +677,97 @@ class PriceStorage:
             for sd in (d.get("scopes") or {}).values():
                 _finish(sd)
             _finish(d)
+        return out
+
+    def strategy_stats(self, hours=24 * 7):
+        """按**策略**归集的干预计数：`{sid: {interventions, healed, unhealed, unjudged}}`。
+
+        回答的是「这条策略动过几次、几次真把渠道救回来」——`stats` 轴
+        （Spec §4.1）要求的「干预 N 次 / 生效 M 次」就出自这里，面板逐条策略
+        显示它，不需要再自己扫账本。
+
+        **归集键为什么是 note 的 `[<sid>]` 前缀**（不是 `scope` 列）：`scope`
+        是渠道/航线域的词汇表，面板的 `_ivScope` 按它出中文标签，T6 已经把它
+        占掉了；策略 id 记在 `note` 的开头（`webui._strategy_scope_of` 的口径，
+        Spec §6(c)）。于是 SQL 侧就是「`strategy_*` 动作族 + `substr(note,…)`
+        取前缀」这两刀，与 `ledger_strategy_stats` 探针认的形态同一条。
+
+        **只收 `strategy_*` 族**：人工作业（`probe`/`relogin`/`reset`…）与自动
+        事件（`auto_*`）都不是「策略变更」，混进来会把「人救了一次」记成
+        「策略动了 N 次」。同一族也不许反向漏进 `intervention_success_rate()`/
+        `intervention_effect()`（T6 钉死的边界，两边用同一族前缀互相排斥）。
+
+        **healed/unhealed 复用 `intervention_success_rate()` 的同一条判据**，
+        不另造第二套成功标准（造第二套的后果是面板与溯源对不上）：
+        以这条策略干预为起点，右界 = 同渠道**下一次人工干预**（且封顶 N 小时，
+        r611），窗口内出现 ok/calendar 路径样本即 healed。窗口内**零样本**记
+        `unjudged`，不记 unhealed——干预刚做完还没采集样本，不是失败
+        （r506 同一条裁决；算成失败会把成功率压成噪声）。
+
+        因此 `healed + unjudged + unhealed == interventions`：
+        `interventions` 是「动过几次」（与判不判得了无关），后三个才是结果拆分。
+        前缀不是已知策略 id 的行（T6 的停手默认 `sid=渠道`）照样归到那个前缀下，
+        由消费方按目录 id 取——这里不设白名单，免得台账里出现「数得出来却被
+        抹掉」的第三态。
+        """
+        hours = max(1, min(24 * 90, int(hours or 24 * 7)))
+        span = "-%d hours" % hours
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT platform, at, "
+                "substr(note, 2, instr(note || ']', ']') - 2) AS sid "
+                "FROM interventions "
+                "WHERE substr(action,1,9) = 'strategy_' "
+                "AND substr(note,1,1) = '[' "
+                "AND at >= datetime('now','localtime', ?) "
+                "ORDER BY platform, id", (span,)).fetchall()
+            if not rows:
+                return {}
+            # 窗口右界只用**人工干预**（与 intervention_success_rate 同一族判定）
+            manual = c.execute(
+                "SELECT platform, at FROM interventions "
+                "WHERE substr(action,1,5) <> 'auto_' "
+                "AND substr(action,1,9) <> 'strategy_' "
+                "AND at >= datetime('now','localtime', ?) "
+                "ORDER BY platform, id", (span,)).fetchall()
+            oldest = min(str(r["at"] or "") for r in rows)
+            samples = c.execute(
+                "SELECT platform, fetched_at, path_status FROM fetch_paths "
+                "WHERE fetched_at >= ? ORDER BY platform, fetched_at",
+                (oldest,)).fetchall()
+        bounds = {}
+        for m in manual:
+            bounds.setdefault(str(m["platform"] or ""), []).append(
+                str(m["at"] or ""))
+        by_plat = {}
+        for s in samples:
+            by_plat.setdefault(str(s["platform"] or ""), []).append(
+                (str(s["fetched_at"] or ""), str(s["path_status"] or "")))
+        out = {}
+        for r in rows:
+            sid = str(r["sid"] or "").strip()
+            if not sid:
+                continue                      # 没前缀 → 归不到任何策略
+            plat = str(r["platform"] or "")
+            at = str(r["at"] or "")
+            try:
+                cap = (datetime.strptime(at, "%Y-%m-%d %H:%M:%S")
+                       + timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            except (TypeError, ValueError):
+                cap = ""                      # 时间戳读不懂：窗口右界退回「下一次干预」
+            nxt = next((b for b in bounds.get(plat, ()) if b > at), "")
+            right = min(x for x in (nxt, cap) if x) if (nxt or cap) else ""
+            win = [(ts, st) for ts, st in (by_plat.get(plat) or [])
+                   if at <= ts and (not right or ts < right)]
+            d = out.setdefault(sid, {"interventions": 0, "healed": 0,
+                                     "unhealed": 0, "unjudged": 0})
+            d["interventions"] += 1
+            if not win:
+                d["unjudged"] += 1
+            elif any(st in ("ok", "calendar") for _ts, st in win):
+                d["healed"] += 1
+            else:
+                d["unhealed"] += 1
         return out
 
     def interventions(self, platform="", limit=20):
@@ -857,26 +991,37 @@ class PriceStorage:
                      else "dom")
             node = out.setdefault(plat, new_node())
             node.setdefault("scopes", {"dom": new_node(), "intl": new_node()})
+            node.setdefault("dims", {})
             node["paths"].setdefault(path, new_path())
             node["scopes"][scope]["paths"].setdefault(path, new_path())
+            # 维度级节点（r1063 T15）：与域节点同形、共用同一套 bump/finish，
+            # 这样「日历烂、明细好」能在降频决策里分开，不会整家一起降。
+            dim = dim_of_path(path)
+            node["dims"].setdefault(dim, new_node())
+            node["dims"][dim]["paths"].setdefault(path, new_path())
             bump(node, st, last)
             bump(node["paths"][path], st, last)
             bump(node["scopes"][scope], st, last)
             bump(node["scopes"][scope]["paths"][path], st, last)
+            bump(node["dims"][dim], st, last)
+            bump(node["dims"][dim]["paths"][path], st, last)
             aid = str(r["attempt_id"] or "")
             if aid:
-                q = queries.setdefault((plat, aid), {
-                    "scope": scope, "ok": False, "detail": False,
+                # 查询口径按「渠道 × 查询 × 维度」计：一次查询若同时碰了两条
+                # 不同维度的通路，两个维度各记一次（各维度的成功率各自成立）。
+                q = queries.setdefault((plat, aid, dim), {
+                    "scope": scope, "dim": dim, "ok": False, "detail": False,
                     "calendar": False, "paths": set()})
                 q["ok"] = q["ok"] or st in ("ok", "calendar")
                 q["detail"] = q["detail"] or st == "ok"
                 q["calendar"] = q["calendar"] or st == "calendar"
                 q["paths"].add(path)
 
-        for (plat, _aid), q in queries.items():
+        for (plat, _aid, _dim), q in queries.items():
             node = out.get(plat) or {}
             scope = (node.get("scopes") or {}).get(q["scope"])
-            for target in (node, scope):
+            dnode = (node.get("dims") or {}).get(q["dim"])
+            for target in (node, scope, dnode):
                 if not target:
                     continue
                 target["query_attempts"] += 1
@@ -903,7 +1048,36 @@ class PriceStorage:
         # ① 是关键：只要 P 还在出数，无论 Q 多新，P 都没退役。
         # 第一版漏了这条，把**携程 PC（24h 成功 129 次）**误判成淘汰——
         # 它只是最近一次尝试比 H5 早几分钟而已。
-        def _retired_paths(paths):
+        def _retired_on(plat=""):
+            """退役口径策略是否生效（`retired_path.enabled`，缺省 True）。
+
+            r1063 T12c：关掉 = **不做退役剔除**——被淘汰的旧通路重新计入健康度
+            （用户可能认为"这条通路还在用，别帮我排除"）。开关只有"处置"的
+            语义，台账照记：`retired_paths` 仍然算得出来，只是不再用于"在用
+            口径"（见下面的赋值：关掉时 dead 为空 → query_rate_live 回原口径）。
+            """
+            try:
+                from core import strategy_params as sp
+                got = sp.resolve("retired_path.enabled",
+                                 plat=str(plat or "")).value
+            except Exception:        # 参数层不可用：按开启处理（缺省即旧行为）
+                return True
+            if isinstance(got, bool):
+                return got
+            if isinstance(got, (int, float)):
+                return bool(got)
+            text = str(got).strip().lower()
+            if not text:
+                return True
+            if text in ("1", "true", "yes", "on", "y", "是", "开"):
+                return True
+            if text in ("0", "false", "no", "off", "n", "否", "关"):
+                return False
+            return True
+
+        def _retired_paths(paths, plat=""):
+            if not _retired_on(plat):
+                return set()
             obs = {}
             for name, v in (paths or {}).items():
                 la = str(v.get("last_at") or "")
@@ -920,18 +1094,18 @@ class PriceStorage:
                         break
             return dead
 
-        def _live(node):
+        def _live(node, plat=""):
             """按在用路径重算查询口径：只计"至少走过一条在用路径"的查询。
 
             一次查询可能同时留下多条路径的记录（H5 失败→API 兜底）。
             若该次查询走到的路径**全部**已淘汰，这次查询整体不计；否则
             算作一次在用查询（成功与否按原判定）。
             """
-            dead = _retired_paths(node.get("paths") or {})
+            dead = _retired_paths(node.get("paths") or {}, plat)
             if not dead:
                 return None
             qa = qo = qd = qc = 0
-            for (_p, _aid), q in _queries_by_plat.get(id(node), []):
+            for _key, q in _queries_by_plat.get(id(node), []):
                 live_hit = bool(set(q["paths"]) - dead)
                 if not live_hit:
                     continue
@@ -947,26 +1121,36 @@ class PriceStorage:
                     "query_rate": (round(qo / qa, 4) if qa else None)}
 
         _queries_by_plat = {}
-        for (plat, aid), q in queries.items():
+        for (plat, aid, dim), q in queries.items():
             node = out.get(plat)
             if node is None:
                 continue
-            _queries_by_plat.setdefault(id(node), []).append(
-                ((plat, aid), q))
+            key = (plat, aid, dim)
+            _queries_by_plat.setdefault(id(node), []).append((key, q))
             sc = (node.get("scopes") or {}).get(q["scope"])
             if sc is not None:
-                _queries_by_plat.setdefault(id(sc), []).append(
-                    ((plat, aid), q))
+                _queries_by_plat.setdefault(id(sc), []).append((key, q))
+            dn = (node.get("dims") or {}).get(dim)
+            if dn is not None:
+                _queries_by_plat.setdefault(id(dn), []).append((key, q))
 
-        for node in out.values():
+        for _plat, node in out.items():
             finish(node)
             for sc in (node.get("scopes") or {}).values():
                 finish(sc)
+            # 维度级节点同样过 finish（r1063 T15）：`dims` 的 rate / query_rate
+            # 与渠道级、域级同源同算法，避免第二套统计口径。
+            for dn in (node.get("dims") or {}).values():
+                finish(dn)
             # 在用口径挂在节点上，供 UI/建议优先采用；原口径保留可对照。
-            for target in [node] + list((node.get("scopes") or {}).values()):
-                dead = _retired_paths(target.get("paths") or {})
+            # `retired_path.enabled` 关掉时 `_retired_paths()` 返回空集：
+            # `retired_paths` 仍然是「事实」（口径算得出来），但不再参与在用
+            # 口径（`query_rate_live` 回落到原口径）——关的是处置不是记账。
+            for target in ([node] + list((node.get("scopes") or {}).values())
+                           + list((node.get("dims") or {}).values())):
+                dead = _retired_paths(target.get("paths") or {}, _plat)
                 target["retired_paths"] = sorted(dead)
-                live = _live(target) if dead else None
+                live = _live(target, _plat) if dead else None
                 target["query_rate_live"] = (
                     (live or {}).get("query_rate")
                     if live else target.get("query_rate"))

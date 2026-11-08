@@ -150,6 +150,10 @@ crawler:
     base_s: 300             # 首次冷却；连续命中按 2 倍阶梯递增
     cap_s: 3600             # 单次冷却上限
     login_cooldown_s: 900   # 登录墙冷却（固定，不随命中次数增长）
+    # 硬风控冷却：命中「安全容器 / 已被限制登录 / 需实名核验 / Baxia」这类
+    # 证据时，停这么久（默认 6h）。这些不是"解个验证码就过"的挑战，按小时
+    # 重试只会加重风险分；设 0 则退回普通阶梯退避（cap_s 封顶）。
+    challenge_cooldown_s: 21600
   # ── 成功率保护（自动降频）：近 24h 查询率低于 70% 自动拉长该渠道 TTL
   #    （低于 40% 拉 3 倍，样本不足 5 次不判）。关掉后仍统计成功率，
   #    但不再自动降频——只在「宁可多打也不接受变慢」时才关。
@@ -190,26 +194,45 @@ crawler:
   # 建议换身份），浏览器与 App 渠道读的是同一份引擎。关掉 = 回到各部件各自
   # 判断的旧行为；**账本照记、报表照出**，只是不再用它们拦采集。
   policy_gate: true
-  # ── 滑块：分级 + 简单滑块自动尝试（默认关）───────────────────────
-  # 分级先行：极验 v4 / 天御 / baxia / reCAPTCHA / 点选 / 人脸 = strong，
-  # 一律交给人工（这类判定吃的是行为分布，越算越像机器）。
-  # 只有"背景图 + 固定缺口"的几何滑块（simple）才会尝试。
+  # ── 滑块：分级 + 简易题自动尝试（默认开）─────────────────────────
+  # 分级先行：几何滑块 / 拼图 = simple（默认自动尝试）。
+  # 行为型强风控（极验 v4 / 天御 / baxia / reCAPTCHA / 人脸）= strong：
+  #   判据是行为分布与环境指纹，通用开源方案无法稳定通过，默认不尝试；
+  #   本项目**不做自动尝试**（范围决定，不是缺开关），见下方说明。
+  # 点选题（"按顺序点击图中文字/图标"）= 图像定位题，有检测后端即自动尝试。
+  # 默认从 2026-11-05 起改为开启：简易题（几何滑块/算数/单行文字）默认就试，
+  # 边界由分级表守，不靠"默认关"守。要退回纯人工把 auto 设 false 即可。
   slider:
-    auto: "off"          # "off" | "simple" | "auto"（true 等价 simple）
-    daily_cap: 3         # 每渠道每天最多试几次
+    auto: "auto"         # "auto"=简易题都试（默认）| "simple"=只试几何滑块
+                         # | false/"off"=完全不试（只做识别→记账→停手）
+    daily_cap: 20        # 每渠道每天最多试几次（防"尝试风暴"，不是防尝试）
     max_fails: 2         # 连续失败几次拉黑（拉黑 7 天）
     device_distance: 260 # App 侧默认拖动距离（px，缺省按此）
     single_shot: false   # true=只试首选偏移；false=顺次试前 3 个候选
   # ── 简易通用验证码（算数 / 文字 OCR）──────────────────────────
-  # 边界按「题目是否机器可判」划：
-  #   * 算数题（3+7=?）→ 纯文本解析，不依赖 OCR，最可靠；
-  #   * 单行印刷体验证码 → 系统 OCR + cv2 预处理（原图/预处理取更长）；
-  #   * 强人机（极验 v4/天御/baxia/reCAPTCHA/点选/人脸）→ **一律不做**。
+  # 边界按「题目是否机器可判」划（权威表述见 docs/YIELD_AND_SESSION_STRATEGY.md §6.51）：
+  #   * 算数题（3+7=?）→ 纯文本解析，不依赖 OCR，最可靠
+  #     （OCR 把运算符认成汉字时走二次纠正，`3爷7=` 也能算出 10）；
+  #   * 单行印刷体验证码 → 双后端：系统 OCR（原图/预处理各读一次取更长）
+  #     **加上**可选的 ddddocr，谁读出的更长用谁；ddddocr 对字符验证码通常明显更强；
+  #   * 点选题 → 图像定位（检测模型给坐标，按语序左→右点击）；captcha.click 开关；
+  #   * 行为型强风控（极验 v4/天御/baxia/reCAPTCHA/人脸）→ 判的是行为分布与
+  #     环境指纹，本项目不做自动尝试；提高采集率的方向是真机/App 通路。
   # 预算与拉黑与 slider **共用一本账**（不同类别各记一套会互相抵消）。
-  # 依赖：OpenCV 已在环境里；OCR 走项目自带的 core.android.ocr（零新依赖）。
+  # 依赖：OpenCV 已在环境里；系统 OCR 走 core.android.ocr（零新依赖）。
+  # ddddocr 是**可选增强**：`pip install --target=_vendor ddddocr` 装进项目的
+  # `_vendor/`（已 gitignore），装了就会自动用；没装退回系统 OCR，功能不中断。
+  # 想确认当前到底走哪个后端：`python -c "from crawlers import captcha;
+  # print(captcha.backend_name())"` → ddddocr / windows-ocr / none。
   captcha:
     arithmetic: true     # 算数题
     text: true           # 文字题（OCR）
+    click: true          # 点选题（图像检测定位，需 ddddocr 检测模型）
+
+# 行为型强风控（极验 v4 / 天御 / reCAPTCHA / 人脸）：判据是行为分布与环境
+# 指纹，没有通用开源解法，本项目**不做自动尝试**——这是范围决定，不是缺开关。
+# 遇到这类挑战时的处置：识别 → 记账 → 停手，界面给「去验证 / 去登录」动作。
+# 想提高这部分的采集率，方向是**真机 / App 通路**（core/android/*），不是硬解。
     ocr_scale: 3.0       # OCR 前放大倍数（小字号靠它读出来）
   # ── 时区/语言与出口 IP 的地理对齐（可选）────────────────────────
   # 挂着异地/境外出口而页面报 Asia/Shanghai + zh-CN，「IP 在 A 地、时区在
@@ -241,6 +264,14 @@ crawler:
     ctrip: 0
     tongcheng: 0
     tuniu: 0
+    # App 渠道共用一台设备，每次启动 60–150s，自动化痕迹最重：
+    # 建议给 120–360 分钟的硬地板（0=跟随全局 TTL）。
+    # 缺 key 会让调度层在取值时退化成"无节奏"（见 parse_pacing 注释）。
+    app_ctrip: 180
+    app_zhixing: 180
+    app_qunar: 180
+    app_tongcheng: 180
+    app_fliggy: 180
   # 会话年龄看门狗：profile 超过 N 天没更新就强制预热续期（0=关）
   session_max_days: 14
   # 命中人机验证时自动弹出验证窗口（同一采集会话）。
@@ -278,6 +309,48 @@ web:
 # 不检测设备、界面不显示，与没有这个功能完全一致。
 # 启用步骤见 docs/APP_CHANNELS.md；需 Windows + MuMu + VT。
 android:
+  # Magisk resetprop 引导：清 ro.nemu / ro.build.version.nemux。
+  # 这两条只能用 resetprop 改——实测 Ctrip SDK 读到 ro.nemu=1 返回
+  # 「存在风险，限制登录 50003」；清掉后变成「请完成拼图验证」。
+  # 工位实测在 **/data/adb/magisk/**（/data 分区，持久）。配套文件必须齐
+  # （busybox/magisk32/magisk64 等）——缺了 magisk 会静默退化成普通 setprop，
+  # `--delete` 不生效却"命令返回 0"。
+  # 这条路径对 App **不可见**：父目录 /data/adb 是 drwx------ 0700，非特权进程
+  # 连 traverse 都做不到。所以别为了"藏路径"把它搬去 /data/local/tmp
+  # （那儿是 0771，others 有 x，放过去反而**真的会被 stat 到**）。
+  # props 是内存态：实例重启后 nemuinit 会重新 set 回去，每次启动要再清一次。
+  magisk:
+    enabled: true
+  # ── build.prop 身份字段（boot 期生效，默认关）──────────────────────
+  # 为什么要单独一步：逐键比对「文件值 vs 运行时 getprop」发现，
+  # build.prop 里那些 `mumu_win_x86_64` 身份串**都被 MuMu 官方 keys 在
+  # boot 期覆盖**了（现值已是 vivo/V2405A）——改它们是白改。
+  # 真正"文件赢"、App 一次 `getprop ro.build.id` 就能看到的是
+  # **build.id 一族 = V417IR**（MuMu 自己的 build 号）。
+  # 这一步只改 build.id / ro.build.display.id，取值来自
+  # fingerprint.PHONE_POOL（不另立机型常量），并且**绝不碰**
+  # `cpu.abilist` / `dalvik.vm.isa.*` 这类运行期依赖（改那些是真会写坏系统）。
+  # 幂等 / 每分区各自备份 / 写后读回校验；机型不在池里就拒绝改（不凭猜写）。
+  # **必须重启实例才生效**（重启会中断采集，只在采集空档做）：
+  #   MuMuManager.exe control -v <实例序号> restart
+  # 回滚：core.android.bootprops.restore(dev)。
+  boot_props:
+    enabled: false
+  # ── build.id / fingerprint 自洽（默认关，需在采集空档验证）──────────
+  # 运行时 `ro.build.id=V417IR` 是 MuMu 自己的 build 号，还渗在
+  # `ro.build.fingerprint=vivo/V2405A/V2405A:15/V417IR/1171` 里。
+  # `Build.ID` 与 `Build.FINGERPRINT` 是任何 SDK 都会读的字段，
+  # 而 V417IR 在所有 MuMu 实例上**完全相同** ⇒ 一条强相关性键。
+  # 为什么不用改文件：5 个分区的 build.prop 实测都改成功、重启后文件仍是
+  # 改后的值，但运行时照旧 V417IR ⇒ 文件不是这些键的出处（MuMu 的 boot
+  # 注入器盖在上面）；且 `/system/build.prop` 是 0600 root，App 读不到文件。
+  # 所以只能用已验证的 `resetprop --delete` + set 通道去盖掉注入结果。
+  # 只碰展示型字符串（id / display.id / description / 各分区 fingerprint）：
+  # **绝不碰** `ro.build.version.*` / `ro.product.cpu.*` / `ro.hardware`——
+  # 改那类今天两次让 system_server 重启、一次让 linker 打不开 so。
+  # 实例重启后注入器会写回 V417IR，由 harden() 的 build-id 步重新对齐。
+  build_id:
+    enabled: false
   enabled: false           # 总开关；false 时下面所有字段都不生效
   provider: mumu           # 目前仅支持 mumu
   install_dir: ""          # 空=自动探测 D:\Program Files\Netease\MuMu 等常见位置
@@ -319,6 +392,15 @@ android:
     #     print(abi_canary.run(d,'ctrip.android.view',{},{},restart_wait_s=60))"
     # 判定 ok 且未过期（7 天）后填 auto 才会真正启用；填 true 是无条件写（不推荐）。
     spoof_abi: null
+    # 机型/构建字段是否允许热写（默认 **true**，2026-11-05 起）。
+    # 这批字段是「设备有风险 50003」的最硬判据：机型可以伪装成 vivo X200 Pro，
+    # 但 `ro.build.flavor` 里的 `missi_` 内部代号、MuMu 构建号 `1171`、
+    # `ro.boot.hardware=kona`（骁龙 865）、`first_api_level=31` 一读就露。
+    # 关闭 = 只写 model/brand/serial/android_id 等，构建字段留给 MuMu 官方键；
+    # 代价是 Build 指纹仍然自相矛盾，深度设备检测仍会拦。
+    # 注意：开启后写 `ro.build.*` 会让 **adbd 重启**（`adb devices` 变 offline），
+    # 系统本身不受影响，ensure() 会自动 `adb root` 重连。
+    hot_build_props: true
   # ── MuMu 官方接口（优先级最高：能官方做的就别改 props）──────────
   # 2026-11-03 用 `MuMuManager.exe setting -v 0 --all` 枚举出的官方键：
   #   phone_brand/phone_model/phone_miit/phone_imei   → 机型（对应
@@ -357,3 +439,13 @@ android:
   # 竖屏写死的，改了所有 App 渠道一起瘫）。
   tuning:
     enabled: true
+  # 定位（r1063 T45）：把模拟器 GPS 钉在上海浦东世博片区（中华艺术宫/世博大道一带）。
+  # 为什么要钉：出厂定位是加州山景城（Google 总部），而出口 IP 与系统时区都在上海，
+  # 「IP 上海 / 时区上海 / GPS 加州」是风控里最便宜的一条矛盾。
+  # 每次开查前自动重打一遍（模拟器重启会复位）；关掉把 enabled 设 false。
+  geo:
+    enabled: true
+    name: 上海浦东世博片区
+    lat: 31.1874
+    lon: 121.4921
+    alt: 10

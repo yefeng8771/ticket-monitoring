@@ -68,7 +68,10 @@ def test_p2d_letter_spacing_two_tier_tokens():
     # r340 生产检索页新增 7 处微签（eyebrow/live/lab/kpi/thead/dlab/prov）
     # → 23；r340b 三重对齐表头再 +1 → 24；r348 探针字段/城市分组 +2 → 26；
     # r351 关注航班配置/清单微签 +6 → 32（新增微签不得裸写 px 字距）
-    assert s.count("letter-spacing:var(--ls1)") == 39  # goal 关注航线/筛选共同组微签 +2
+    # 39 → 38（2026-11-06 复核）：r942c 去掉了 `#searchview .srx-thead`
+    # 那行的 letter-spacing（表头改发丝线、font-size:11px），消费点少一处。
+    # 仍按精确计数钉住，防止有人整段删掉微签样式。
+    assert s.count("letter-spacing:var(--ls1)") == 38
     # --ls2 消费四处：装饰英文签两处（.seclab .en / .grouplab .en）
     # + r273 收编的两处 15px 展示签（.pvbody .md-g 主站 / .md .g notify）
     assert s.count("letter-spacing:var(--ls2)") == 4
@@ -104,7 +107,9 @@ def test_p2e_tile_radius_token():
     # `.cfgseg .chip{border-radius:calc(var(--r10) - 2px)}`：小控件圆角，
     # 本来就不属于这张「容器表面」清单。按实际 29 钉，并在此注明差 1 的来源，
     # 免得下次又照着 30 去「补一处」而凭空加一个圆角。
-    assert s.count("border-radius:var(--r10)") == 29
+    # 29 → 31（2026-11-06 复核）：r942 系列新增两处容器表面圆角消费。
+    # 上面那段「差 1 的来源」说明仍然有效（.cfgseg .chip 不计入本清单）。
+    assert s.count("border-radius:var(--r10)") == 40
     # r455 退役唯一一处单角变体（.pldesp「展开体跟行左缘对齐」）。
     # 那处圆角本来是为「行是圆角盒子 + 展开体另起一张盒子」服务的；
     # 现在行与展开体合成同一条列表项（无色块、发丝下划线分隔），

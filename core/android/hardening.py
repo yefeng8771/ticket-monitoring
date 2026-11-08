@@ -137,15 +137,28 @@ def _coordinate_check(dev, config: dict, logger=None) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)[:120]}
     same = (got.get("width"), got.get("height")) == design
-    rep = {"ok": same, "design": list(design),
+    # 设备尺寸≠设计基准**不一定**是问题：`runtime.device()` 会无条件
+    # `set_design(900,1600)` 开线性换算（尺寸相同时比例正好 1.0，行为不变）。
+    # 2026-11-05：改到 1260×2800 后这里仍照旧告警"必须 set_design"，
+    # 而换算其实早就开了 —— 告警要反映真实处置状态，否则操作员会去
+    # 手动再开一次，或者误以为坐标一定是坏的。
+    converted = bool(getattr(dev, "design", None))
+    rep = {"ok": same or converted, "design": list(design),
            "actual": [got.get("width"), got.get("height")],
-           "density": got.get("density"), "override": got.get("override", False)}
-    if not same and logger:
+           "density": got.get("density"),
+           "override": got.get("override", False),
+           "converted": converted}
+    if not same and not converted and logger:
+        # **措辞要准确**：不是"必须开 set_design"（2026-11-05 实测那条建议
+        # 是错的——开了之后 UI 树坐标会被二次缩放，点什么都点偏）。
+        # 真实影响范围只有**写死的常量**（App 渠道 1 处 tap + 18 处 swipe）；
+        # 绝大多数点击来自 UI 树 bounds，不受影响。
         logger.warning(
-            "[android] 屏幕 %sx%s ≠ 坐标基准 %dx%d：App 渠道写死坐标会偏，"
-            "必须 dev.set_design(%d, %d)（或用 scripts/display_spoof.py --restore 回滚）",
-            got.get("width"), got.get("height"), design[0], design[1],
-            design[0], design[1])
+            "[android] 屏幕 %sx%s ≠ 硬编码基准 %dx%d：写死的 tap/swipe 会偏"
+            "（UI 树点击不受影响）。不要用 set_design 全局换算——那会把"
+            "UI 树坐标也乘一遍；确需修正请直接改那些常量或用 "
+            "scripts/display_spoof.py --restore 回到基准分辨率",
+            got.get("width"), got.get("height"), design[0], design[1])
     return rep
 
 
@@ -153,9 +166,10 @@ def harden(dev, config: dict = None, logger=None, *, vm: int = 0,
            user_data_dir: str = "user_data", profile: str = "device",
            force: bool = False) -> dict:
     """跑完整套硬化。返回 ``{ok, steps, identity, stealth, tuning,
-    display, abi}``。"""
+    display, abi, vendor, boot_props, build_id}``。"""
     rep = {"ok": False, "steps": [], "identity": {}, "stealth": {},
-           "tuning": {}, "display": {}, "abi": {}, "vendor": {}}
+           "tuning": {}, "display": {}, "abi": {}, "vendor": {},
+           "boot_props": {}, "build_id": {}}
 
     # ---------- ⓿ 厂商官方接口（比改 props 更稳，优先用）----------
     #
@@ -169,6 +183,55 @@ def harden(dev, config: dict = None, logger=None, *, vm: int = 0,
         rep["vendor"] = {"ok": False, "error": str(e)[:160]}
     rep["steps"].append(("vendor-read", bool(rep["vendor"].get("ok", False))))
 
+    # ---------- ⓪ Magisk resetprop 引导（最先，③ 依赖它）----------
+    #
+    # 为什么放最前：`ro.nemu=1` / `ro.build.version.nemux=true` 是**唯一**
+    # 只剩的两条暴露面（值本身就在自报"我是 MuMu"），而它们只能用
+    # `resetprop` 改。实测 Ctrip SDK 读到就返回 **50003 限制登录**；
+    # 清掉之后登录入口从「存在风险，限制登录」变成「请完成拼图验证」。
+    #
+    # 两个事实要分开：
+    #   * **二进制部署是持久的**：`/data/local/tmp/magisk_bin/` 在 /data 上；
+    #   * **props 是内存态**：实例重启后 MuMu 的 nemuinit 会重新 set 回去。
+    # 所以每次启动都要"确认二进制在 + 再清一次"——本步骤就是做这个。
+    # 失败不影响后续（没有 resetprop 时 ③ 会如实报 props-readonly）。
+    try:
+        import importlib.util as _ilu
+        import os as _os
+        _bs = _os.path.join(_os.path.dirname(_os.path.dirname(
+            _os.path.dirname(_os.path.abspath(__file__)))),
+            "scripts", "magisk_bootstrap.py")
+        _rep_magisk = {"ok": False, "detail": "未启用"}
+        if _sec(config, "magisk").get("enabled", True) and _os.path.isfile(_bs):
+            _spec = _ilu.spec_from_file_location("_tm_magisk_boot", _bs)
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _rep_magisk = _mod.ensure(dev, logger) or {}
+        rep["magisk"] = _rep_magisk
+    except Exception as e:
+        rep["magisk"] = {"ok": False, "error": str(e)[:160]}
+    rep["steps"].append(("magisk-resetprop",
+                         bool((rep.get("magisk") or {}).get("ok", True))))
+
+    # ---------- ①·² build.id / fingerprint 自洽（默认关）----------
+    #
+    # 运行时 `ro.build.id=V417IR`（MuMu 自己的 build 号）还渗在
+    # `ro.build.fingerprint=vivo/V2405A/V2405A:15/V417IR/1171` 里，
+    # 而 `Build.ID`/`Build.FINGERPRINT` 是任何 SDK 都会读的字段。
+    # 实测证伪了"改文件"这条路（§6.41：5 个分区 build.prop 都改过、重启后
+    # 文件还在，运行时照旧 V417IR ⇒ 文件不是出处），所以只能盖掉注入结果。
+    #
+    # **只碰展示型字符串**，绝不碰 `ro.build.version.*` / `cpu.*` /
+    # `ro.hardware`——今天两次 system_server 重启就是那类改动造成的。
+    # 默认关：需要在采集空档单独验证（"没崩过"不等于"安全"）。
+    # 放在 magisk 步之后，因为这条通道依赖 resetprop 已就位。
+    try:
+        from . import buildid as _buildid
+        rep["build_id"] = _buildid.sync(dev, config, logger) or {}
+    except Exception as e:
+        rep["build_id"] = {"ok": False, "error": str(e)[:160]}
+    rep["steps"].append(("build-id", bool(rep["build_id"].get("ok", True))))
+
     # ---------- ① 身份 ----------
     try:
         rep["identity"] = fp_mod.ensure(
@@ -177,6 +240,33 @@ def harden(dev, config: dict = None, logger=None, *, vm: int = 0,
     except Exception as e:
         rep["identity"] = {"ok": False, "error": str(e)[:160]}
     rep["steps"].append(("identity", bool(rep["identity"].get("ok"))))
+
+    # ---------- ①·⁵ build.prop 身份字段（**boot 期生效**，默认关）----------
+    #
+    # 实测逐键比对「文件值 vs 运行时 getprop」（§6.41）：
+    # 文件里那一大堆 `mumu_win_x86_64` 身份串**都被 MuMu 官方 keys 在 boot 期
+    # 覆盖掉了**（现值已是 vivo/V2405A），改它们属于白改；真正"文件赢"、
+    # App 一次 `getprop ro.build.id` 就能看到的，只有 **build.id 一族 = V417IR**
+    # （MuMu 自己的 build 号）。所以这一步只改它，取值来自 PHONE_POOL。
+    #
+    # **默认关**：它写的是静态镜像文件、且**必须重启实例才生效**，
+    # 属于操作员的决定（与上面 vendor 步同一约定）。开启方式：
+    #   android: {boot_props: {enabled: true}}   然后重启实例。
+    try:
+        from . import bootprops as _bootprops
+        _bp_sec = _sec(config, "boot_props")
+        if _bp_sec.get("enabled", False):
+            rep["boot_props"] = _bootprops.apply(dev, config, logger) or {}
+        else:
+            rep["boot_props"] = {
+                "ok": True, "changed": 0, "files": [],
+                "restart_required": False,
+                "skipped": "未启用（android.boot_props.enabled=true 才写 build.prop）"}
+    except Exception as e:
+        # 失败软着陆：改不动 build.prop 也不该拖垮整轮采集
+        rep["boot_props"] = {"ok": False, "error": str(e)[:160]}
+    rep["steps"].append(("boot-props",
+                         bool(rep["boot_props"].get("ok", True))))
 
     # ---------- ② 显示对齐（零风险路线；不改设备设置）----------
     ident = None

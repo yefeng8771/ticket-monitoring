@@ -557,6 +557,14 @@ class TongchengCrawler(BaseCrawler):
         # 真因。探针面仍优先真实明细（人要的是航班号/时刻），窗历只
         # 兜住没有明细的日期。
         if not ret_date:
+            # 链路闸门（r1063 T8）：窗历这条通路被策略停用/冷却时**只跳过
+            # 它**——探针面仍走页内真实列表（人要的是明细），定时面到此为止
+            # （页内日历对本渠道恒 444，硬打只会刷出一串假现场）。
+            if not self.path_gate("窗历", "intl"):
+                if not self.probe_mode:
+                    return results
+                return self._intl_browser_fallback(
+                    from_city, to_city, dates, fc, tc)
             covered, win = self._intl_window_prices(fc, tc, dates)
             try:
                 from datetime import date as _d
@@ -719,6 +727,10 @@ class TongchengCrawler(BaseCrawler):
         fc, tc = (airport_city_code(from_city.upper()),
                   airport_city_code(to_city.upper()))
         results: List[FlightPrice] = []
+        # 链路闸门（r1063 T8）：国际往返这条通路被策略停用时如实返回空
+        # （不启浏览器；往返与单程各自独立记账，互不连坐）。
+        if not self.path_gate("往返", "intl"):
+            return results
         bak = self.use_mobile
         self.use_mobile = False
         try:
@@ -857,6 +869,10 @@ class TongchengCrawler(BaseCrawler):
                           dates: List[str], fc: str, tc: str,
                           ret_date: str = "") -> List[FlightPrice]:
         results: List[FlightPrice] = []
+        # 链路闸门（r1063 T8）：页内日历/明细这条通路被策略停用时如实
+        # 返回空（不启浏览器），由调用方按已有的「无覆盖」口径记账。
+        if not self.path_gate("日历", "intl"):
+            return results
         # 列表接口依赖已保存会话：仅用户主动探针开可见窗口复用可信
         # 会话；定时监控保持配置的无头档，不弹窗也不假装有明细。
         with self.browser(headless=(False if self.probe_mode else None)) as ctx:
@@ -1165,12 +1181,16 @@ class TongchengCrawler(BaseCrawler):
         """
         import httpx
         fc, tc = from_city.upper(), to_city.upper()
+        # 链路闸门（r1063 T8）：国内往返接口被策略停用时如实返回空
+        # （一条请求都不发，也不把单程价顶上来）。
+        out: List[FlightPrice] = []
+        if not self.path_gate("往返", "round_trip"):
+            return out
         headers = profile_headers(self.fingerprint(), {
             "Content-Type": "application/json",
             "Accept": "application/json, text/plain, */*",
             "Referer": "https://m.ly.com/",
             "tcplat": "518"})
-        out: List[FlightPrice] = []
         for i, date in enumerate(dates):
             if i:
                 self._sleep()
@@ -1246,11 +1266,14 @@ class TongchengCrawler(BaseCrawler):
         # （省一次浏览器导航，也避免两条通路对同一天给出不同最低价）。
         # PC 挂掉不影响整轮——缺的日期继续走 H5。
         pc_map: dict = {}
-        try:
-            pc_map = self._fetch_pc_dom(from_city, to_city, dates)
-        except Exception as e:
-            self.logger.warning("[tongcheng][pc] 回退 H5: %s", e)
-            pc_map = {}
+        # 链路闸门（r1063 T8）：PC 通路被策略停用/冷却时**只跳过它**——
+        # pc_map 保持空，全部日期照常走 H5，不 return 整个查询。
+        if self.path_gate("PC", "domestic"):
+            try:
+                pc_map = self._fetch_pc_dom(from_city, to_city, dates)
+            except Exception as e:
+                self.logger.warning("[tongcheng][pc] 回退 H5: %s", e)
+                pc_map = {}
         for date, rows in pc_map.items():
             if not rows:
                 continue
@@ -1267,6 +1290,10 @@ class TongchengCrawler(BaseCrawler):
                 extra=json.dumps(rows, ensure_ascii=False)))
         dates = [d for d in dates if not (pc_map.get(d) or [])]
         if not dates:
+            return results
+        # 链路闸门（r1063 T8）：H5 被停用时只交出 PC 已出的行
+        # （results 里已有的日期照常返回），不把整条查询判死。
+        if not self.path_gate("H5", "domestic"):
             return results
         with self.browser() as ctx:
             page = self.new_page(ctx)

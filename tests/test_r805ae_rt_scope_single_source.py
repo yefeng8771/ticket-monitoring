@@ -50,7 +50,7 @@ def test_partial_round_trip_channels_declare_scope_and_note():
                if cells.get("round_trip") == "y"
                and (p, "round_trip") in DIMENSION_SCOPE}
     assert partial == {"fliggy", "qunar", "app_qunar",
-                      "app_tongcheng"}, (
+                      "app_tongcheng", "app_fliggy"}, (
         "「只覆盖一端」的往返渠道集合变了：%s（改声明时同步改本判据）"
         % sorted(partial))
     for p in partial:
@@ -286,8 +286,11 @@ def test_scope_note_follows_the_route_type():
             "国际航线上途牛已能出往返，不该列进「暂无」：%r" % got["intl_miss"])
         assert "飞猪" not in intl_miss, (
             "国际航线上飞猪能出往返，不该列进「暂无」：%r" % got["intl_miss"])
+        # 飞猪 App 2026-11-06 接通往返，但**仅国内**：国际航线上它覆盖不了，
+        # 因此仍应如实列进「这条航线暂无往返」（与「去哪儿 App 仅国内」同理）。
         assert "飞猪 App" in intl_miss, (
-            "飞猪 App 未接往返，应如实列进「暂无」：%r" % got["intl_miss"])
+            "国际航线上飞猪 App（仅国内）应算「没有往返」：%r"
+            % got["intl_miss"])
         assert "去哪儿 App" in intl_miss, (
             "国际航线上去哪儿 App（仅国内）应算没有：%r" % got["intl_miss"])
         assert "去哪儿 App" not in dom_miss, (
@@ -299,7 +302,10 @@ def test_scope_note_follows_the_route_type():
             "国内航线应提示「去哪儿 App仅国内」：%r" % got["dom_scope"])
         assert "飞猪仅国际" in got["intl_scope"], (
             "国际航线应提示「飞猪仅国际」：%r" % got["intl_scope"])
-        assert "飞猪" not in got["dom_scope"], (
+        # 断的是「浏览器飞猪（仅国际）」不该出现在国内航线的范围提示里。
+        # 不能直接查子串「飞猪」——飞猪 App 自 2026-11-06 起支持国内
+        # 往返，它会合法地出现在 dom_scope（「飞猪 App」）。
+        assert "飞猪仅国际" not in got["dom_scope"], (
             "国内航线不该出现「飞猪仅国际」这种无关提示：%r" % got["dom_scope"])
     finally:
         srv.terminate()

@@ -45,9 +45,15 @@ class FakeMuMu:
 
 
 class FakeDevice:
-    def __init__(self, online=True):
+    def __init__(self, online=True, recoverable=False):
         self._online = online
         self.connect_calls = 0
+        self.reconnect_calls = 0
+        # recoverable=True 模拟"只是 adb 端点坏了，逐级重连能救回来"
+        # （2026-11-04 实测：`adb kill-server` 之后 TCP 端点 offline，
+        #  而同一实例的 emulator-5554 还是 device 态——重连 9 秒就好，
+        #  根本不需要重启整个实例）。
+        self._recoverable = recoverable
 
     def connect(self):
         self.connect_calls += 1
@@ -55,6 +61,19 @@ class FakeDevice:
 
     def online(self):
         return self._online
+
+    def state(self):
+        return "device" if self._online else "offline"
+
+    def reconnect(self, logger=None, settle_s=0.0):
+        """与 `AdbDevice.reconnect` 同契约：返回最终状态字符串。"""
+        self.reconnect_calls += 1
+        if self._online:
+            return "device"
+        if self._recoverable:
+            self._online = True
+            return "recovered:server"
+        return "offline"
 
     def prop(self, key):
         return "arm64-v8a"
@@ -110,6 +129,22 @@ def test_boot_timeout_reported():
     assert ok is False
     assert why in ("timeout", "not_started")
     assert rt.status()["state"] in ("starting", "stopped")
+
+
+def test_endpoint_recoverable_is_not_treated_as_dead():
+    """**端点坏 ≠ 设备坏**（2026-11-04 误诊两次之后钉住的契约）。
+
+    真实场景：db kill-server 或 db root 重启 adbd 之后，
+    TCP 端点显示 offline，而同一实例的 emulator-5554 还是 device 态。
+    当时我判定"设备离线"→ 去 MuMuManager control restart，
+    白丢一轮采集 + 全部内存态；实际 kill-server+connect 9 秒就好。
+
+    所以：能靠逐级重连救回来的，**必须**返回 ready，不许报 adb 失败。
+    """
+    rt = _make(device=FakeDevice(online=False, recoverable=True))
+    ok, why = rt.ensure_ready()
+    assert ok is True, (ok, why, rt.last_error)
+    assert rt.status()["state"] == "ready", rt.status()
 
 
 def test_adb_offline_reported():

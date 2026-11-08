@@ -232,8 +232,10 @@ def test_ensure_applies_then_skips_this_boot(tmp_path):
            "user_data_dir": str(tmp_path)}
     rep = fp.ensure(dev, cfg, user_data_dir=str(tmp_path),
                     profile="device", vm=0)
-    assert rep["ok"] is True
-    assert rep["apply"]["applied"], rep
+    # 假设备的 `setprop ro.*` 是 no-op，`applied`（命令层报成功）会为空；
+    # 真正生效的是走 `settings put` 的 `android_id`（2026-11-04 改语义）。
+    assert rep["ok"] is True, rep.get("why")
+    assert rep["apply"].get("android_id"), rep["apply"]
     assert rep["audit"]["identity_id"]
     # android_id 真的写进去了
     assert rep["apply"]["android_id"] == fp.IdentityStore(
@@ -262,7 +264,8 @@ def test_ensure_reapplies_after_reboot(tmp_path):
     rep = fp.ensure(dev, cfg, user_data_dir=str(tmp_path),
                     profile="device", vm=0)
     assert rep.get("skipped") != "applied this boot"
-    assert rep["apply"]["applied"], rep
+    # 假设备 ro.* 写不动，真正生效的是 android_id（settings put）
+    assert rep["apply"].get("android_id"), rep["apply"]
 
 
 def test_ensure_disabled_is_noop(tmp_path):
@@ -313,12 +316,28 @@ def test_stealth_hide_without_root_reports_failure():
     assert rep["actions"] and rep["actions"][0]["ok"] is False
 
 
-def test_stealth_prepare_marker_short_circuit(tmp_path):
+def test_stealth_prepare_marker_short_circuit():
+    """本 boot 已全量隐藏过 → 早退，**但廉价重清仍要跑**。
+
+    契约变化（2026-11-04）：以前这里是"两条 adb 就 return"。
+    但实测 `nemuinit` 会在几分钟内把 `nemud.*` 写回来
+    （19:19 归零 → 19:26 又 57 行），所以早退分支现在仍要跑一次
+    `refresh()`（1 条 getprop，必要时一条批量删除）。
+
+    **仍然不许**跑的是贵的动作：denylist 读写 sqlite、抓 logcat 快照、
+    magiskpolicy 复核。那才是这个标记存在的意义。
+    """
     dev = FakeDev(props=_EMU_PROPS)
     dev._stealth_mark = "boot-abc"
     rep = st.prepare(dev, {"android": {"stealth": {"enabled": True}}}, vm=0)
     assert rep["skipped"] == "done this boot"
-    assert len(dev.calls) <= 2      # 只读了 boot_id 与标记
+    # 廉价重清确实跑了
+    assert "refresh" in rep, "早退时没重清：nemuinit 写回后无人负责"
+    # 贵的动作一个都不许有
+    joined = "\n".join(dev.calls)
+    assert "logcat" not in joined, "早退还去抓 logcat 快照（每轮白烧）"
+    assert "denylist" not in joined, "早退还在读写 denylist sqlite"
+    assert "dumpsys" not in joined, "早退不该做全量复核"
 
 
 def test_stealth_detect_lists_unfixable():

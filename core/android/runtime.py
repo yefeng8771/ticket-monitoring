@@ -83,7 +83,51 @@ class AndroidRuntime:
             serial = mgr.adb_serial()
             self._device = AdbDevice(mgr.adb_path, serial,
                                      timeout=self.cfg.action_timeout_s)
+            self._apply_design_basis(self._device)
         return self._device
+
+    def _apply_design_basis(self, dev) -> None:
+        """**仅在显式配置** ``android.display.design`` 时开启坐标换算。
+
+        2026-11-05 教训（我自己引入又修掉的坑）：
+        一开始这里"无条件开 ``set_design(900,1600)``"，理由是"尺寸相同时
+        比例正好 1.0、行为不变"。但设备后来被改成 1260×2800，于是：
+
+          * **从 UI 树 bounds 读出来的坐标本来就是设备坐标**（如点「机票」
+            宫格的 (630,362)），`tap()` 又乘了一次 1.4/1.75 →
+            实际点到 (882,633)，正好落在旁边的「火车票」上；
+          * 现象是：表单页永远打不开、20 秒超时、整轮 0 条，
+            而账本只记 `app-form timeout`，完全看不出是坐标被放大了。
+
+        正确语义（见 ``display`` 模块头）：换算只服务**写死的设计常量**
+        （App 渠道里 1 处 tap + 18 处 swipe）；UI 树坐标不该被缩放。
+        而现有采集器绝大多数点击都来自 UI 树，所以**默认必须关闭**——
+        只有确认"写死常量需要换算"时才显式配置，并同步把 UI 坐标用
+        ``dev.to_design()`` 换回去（目前没有采集器这么做）。
+        """
+        design = None
+        try:
+            sec = self.raw.get("display") if isinstance(self.raw, dict) else None
+            d = (sec or {}).get("design")
+            if isinstance(d, (list, tuple)) and len(d) == 2:
+                design = (int(d[0]), int(d[1]))
+        except Exception:
+            design = None
+        if not design:
+            # 不设 design：UI 树坐标原样使用（这是绝大多数采集器的路径）
+            dev.set_design(0, 0)
+            return
+        try:
+            dev.set_design(*design)
+            if self.logger:
+                self.logger.info(
+                    "[android] 坐标换算已开：设计基准 %dx%d"
+                    "（注意：UI 树坐标需自行 to_design 换回）",
+                    design[0], design[1])
+        except Exception as e:
+            if self.logger:
+                self.logger.warning("[android] 坐标换算开启失败：%s", e)
+
 
     # ---------- 状态 ----------
     def status(self) -> dict:
@@ -138,12 +182,45 @@ class AndroidRuntime:
             return False, "adb"
 
         if not dev.online():
-            # 再连一次；MuMu 偶尔在首次查询时会话未建立
-            dev.connect()
-            if not dev.online():
-                self._state = "error"
-                self.last_error = "adb 未连接（设备离线）"
-                return False, "adb"
+            # **逐级恢复 adb 端点**（2026-11-04 改）。
+            #
+            # 原来这里只做一次 `dev.connect()`，而实测 connect 在
+            # **本地 adb server 握手状态坏掉**时会返回"already connected"
+            # 却仍是 offline —— 于是我误判成"Android 被我改挂了"，
+            # 去重启了整个实例，白丢一轮采集。
+            #
+            # 关键认知：`offline` 大多数是**端点问题**（`adb root` 重启 adbd、
+            # `adb kill-server`、MuMu 同实例的第二端点 `emulator-5554`
+            # 还在 device 态），不是设备故障。**先分辨再处置**。
+            _r = dev.reconnect(getattr(self, "logger", None))
+            if _r != "device" and not _r.startswith("recovered"):
+                # **adb 端点坏了不等于设备不能用**（2026-11-05）。
+                #
+                # 本机实测：一轮设备操作之后 adbd 经常卡在握手阶段
+                # （`adb devices` 变 offline、`adb shell` 挂住），但设备本身
+                # 一直健康，而且 **MuMu 自己的 root shell 通道始终可用**
+                # （`MuMuManager sh -v N -c`，走 VMMDev，不经过 adbd）。
+                # `AdbDevice` 已支持在这条通道上跑 shell / 截图 / push。
+                #
+                # 所以这里不该因为 adb 端点坏了就判"运行时未就绪"——
+                # 那会让整轮 App 采集直接归零（现象是
+                # `android-runtime unsupported runtime not ready: adb`）。
+                _mumu_ok = False
+                try:
+                    _mumu_ok = bool(getattr(dev, "mumu_available", None)
+                                    and dev.mumu_available())
+                except Exception:
+                    _mumu_ok = False
+                if not _mumu_ok:
+                    self._state = "error"
+                    self.last_error = (
+                        "adb 未连接（端点状态 %s，已试过 connect/重握手/重启本地 "
+                        "adb server），且 MuMu shell 通道也不可用" % _r)
+                    return False, "adb"
+                self.last_error = ""
+                if self.logger:
+                    self.logger.warning(
+                        "[android] adb 端点不可用（%s），改走 MuMu root shell 继续", _r)
 
         self._state = "ready"
         self.last_error = ""

@@ -162,10 +162,10 @@ def test_guard_covers_every_write_endpoint_structurally():
     src = io.open(os.path.join(ROOT, "webui.py"), encoding="utf-8",
                   newline="").read()
     i = src.index("def _do_POST(self):")
-    seg = src[i:i + 2200]
-    j_demo = seg.index('DEMO["on"]')
-    j_guard = seg.index("跨站请求已拒绝")
-    j_cfg = seg.index('if self.path == "/api/config":')
+    # 新增会话重置/写分支会把 /api/config 推后；只钉相对顺序。
+    j_demo = src.index('DEMO["on"]', i)
+    j_guard = src.index("跨站请求已拒绝", i)
+    j_cfg = src.index('"/api/config"', i)
     assert j_demo < j_guard < j_cfg, (
         "跨站闸门必须在演示短路之后、所有写分支之前")
 
