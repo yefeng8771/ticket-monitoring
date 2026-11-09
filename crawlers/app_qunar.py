@@ -582,6 +582,8 @@ class AppQunarCrawler(AppCrawler):
 
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        if self.early_skip(dates):      # 停服/需登录：不发请求（r1063 T69）
+            return []
         rt = self.runtime()
         ok, why = rt.ensure_ready()
         if not ok:

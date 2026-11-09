@@ -65,7 +65,7 @@ SNAP = r"""() => {
     over:document.documentElement.scrollWidth-innerWidth,
     probe:rr(probe),form:rr(form),
     plat:rr(q('#srxPlatPop')),batch:rr(q('#srxBatchDock')),
-    ch:rr(q('#srxChLinksBox')),fly:rr(q('#srxCtxFly'))};
+    ch:rr(q('#srxChLinksDrawer')),fly:rr(q('#srxCtxFly'))};
 }"""
 
 
@@ -125,7 +125,7 @@ def test_transient_panels_do_not_push_content(base, w):
         if w <= 1200:
             _open_more(pg)
         before = pg.evaluate(SNAP)["sh"]
-        pg.evaluate("()=>document.querySelector('#srxChLinks>summary').click()")
+        pg.evaluate("()=>document.getElementById('srxChLinksBtn').click()")
         pg.wait_for_timeout(600)
         a = pg.evaluate(SNAP)
         assert a["sh"] == before, (w, "渠道入口把正文撑高", before, a["sh"])

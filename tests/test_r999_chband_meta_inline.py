@@ -60,12 +60,16 @@ def test_rendered_channel_header_is_one_line():
                 pg.wait_for_function(
                     "typeof S!=='undefined'&&S&&S.users", timeout=30000)
                 pg.evaluate("()=>switchView('cfg')")
-                try:
-                    pg.wait_for_selector('#cfgChannelLinks .chband',
-                                         timeout=20000)
-                except Exception:
-                    pytest.skip("演示环境未渲染旧渠道卡（新渠道入口已替代）")
-                pg.wait_for_timeout(600)
+                # 渠道入口由登录态+入口接口异步渲染；固定等待在 CI 慢机
+                # 会量到 0 条（断言 0>=2 假红）。等到五条渠道带齐再量。
+                # 等的是「量得到的那 2 条」而不是「DOM 里存在」：CI 上
+                # 元素已在但容器还在折叠/过渡时 offsetParent 为 null、
+                # 高度为 0，随后 map 出空数组（断言 0>=2 假红）。
+                pg.wait_for_function(
+                    "()=>[...document.querySelectorAll('.chband-id')]"
+                    ".filter(e=>e.offsetParent"
+                    "&&e.getBoundingClientRect().height>5).length>=2",
+                    timeout=20000)
                 d = pg.evaluate(r"""()=>{
                   const ids=[...document.querySelectorAll('.chband-id')]
                     .filter(e=>e.offsetParent&&e.getBoundingClientRect().height>5)

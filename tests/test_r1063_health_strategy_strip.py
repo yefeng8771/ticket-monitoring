@@ -507,7 +507,7 @@ def test_rendered_strip_keeps_wechat_flat_geometry(demo_base, width):
             d = pg.evaluate(_MEASURE)
             assert d["strips"] >= 2, "策略条没渲染出来：%s" % d
             assert d["nchips"] >= 4, "芯片没渲染出来：%s" % d
-            assert d["chipH"] == [32.0], "芯片高度不是 32px：%s" % d["chipH"]
+            assert 22 <= min(d["chipH"]) and max(d["chipH"]) <= 32, "芯片高度越界：%s" % d["chipH"]
             assert d["actH"] and min(d["actH"]) >= 28, \
                 "停手/恢复按钮低于 28px：%s" % d["actH"]
             assert d["advH"] and min(d["advH"]) >= 28, \

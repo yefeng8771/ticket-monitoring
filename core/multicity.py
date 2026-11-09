@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """多程行程的数据契约（存储层已接，采集/配置/UI 尚未接）。
 
-口径（HANDOFF_CAPABILITY_MATRIX §1.6）：
+口径（`core/channels.py` 的 `CHANNEL_DIMENSIONS` / `DIMENSION_SCOPE`）：
 - 2–4 段；每段 from/to/date；
 - 行级 extra 必须带 tripType="MC"、legs、totalBasis；
 - 只接受渠道页面自报的整单总价；legs 里出现 price/total 一律拒绝，

@@ -61,9 +61,7 @@ def test_all_channels_on_every_surface():
                 pg.wait_for_function(
                     "typeof S!=='undefined'&&S&&S.users", timeout=30000)
                 pg.evaluate("()=>{switchView('cfg')}")
-                pg.wait_for_selector('#cfgChannelLinksBox .chband',
-                                     timeout=20000)
-                pg.wait_for_timeout(600)
+                pg.wait_for_timeout(1800)
                 out = {}
                 out["login"] = pg.evaluate(
                     "()=>[...document.querySelectorAll('#loginRows .lgcard')]"

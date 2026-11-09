@@ -84,11 +84,10 @@ def srv():
 
 def _snap(pg):
     return pg.evaluate("""(() => {
-      const d=document.getElementById('srxChLinks');
-      const s=d&&d.querySelector('summary');
-      const t=s&&s.querySelector('.srx-chbtn-txt');
+      const d=document.getElementById('srxChLinksDrawer');
+      const s=document.getElementById('srxChLinksBtn');
       const r=s?s.getBoundingClientRect():null;
-      return {open:!!(d&&d.open), text:t?(t.textContent||'').trim():'',
+      return {open:!!(d&&!d.hidden), text:s?(s.textContent||'').trim():'',
         aria:s?s.getAttribute('aria-expanded'):null,
         title:s?s.title:'',
         box:r?[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height)]:null};
@@ -113,7 +112,7 @@ def test_channel_entry_text_toggles_and_does_not_move(srv):
         assert closed["aria"] == "false", closed
         assert "展开" in closed["title"], closed
 
-        pg.click("#srxChLinks > summary")
+        pg.click("#srxChLinksBtn")
         pg.wait_for_timeout(400)
         opened = _snap(pg)
         assert opened["open"] is True, opened
@@ -123,7 +122,7 @@ def test_channel_entry_text_toggles_and_does_not_move(srv):
         # 同词同长：按钮盒位置和宽度不因状态文案而跳
         assert opened["box"][:3] == closed["box"][:3], (closed, opened)
 
-        pg.click("#srxChLinks > summary")
+        pg.click("#srxChLinksDrawer .clx-x")
         pg.wait_for_timeout(300)
         again = _snap(pg)
         assert again["open"] is False, again

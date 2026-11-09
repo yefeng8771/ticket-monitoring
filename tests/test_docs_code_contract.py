@@ -2138,7 +2138,7 @@ def test_release_process_claims_match_checker():
         "canonical intro": "canonical intro",
         "version badge": "version badge",
         "round jargon": "round jargon",
-        "release notes": "release notes",
+        "release body template": "release body template",
         "pytest count": "pytest count",
         "uitest count": "uitest count",
         "screenshot": "screenshot",
@@ -2756,111 +2756,6 @@ def _mumu_install_dir():
     return None
 
 
-def test_mobile_docs_sizes_match_reality():
-    """移动端文档里的体积数字必须与磁盘实测一致。
-
-    实测踩过两处：①「4 个 APK 约 448 MB」实际目录 768 MB 且智行样本已不在；
-    ②「MuMu 3.6 GB」是安装器本体，装完实例后实测 7.1 GB。
-    这类数字读者会直接拿去估算部署成本，错了就是误导。
-    """
-    import shutil
-    runtime_doc = ROOT / "docs" / "MOBILE_RUNTIME_VERIFICATION.md"
-    mumu_doc = ROOT / "docs" / "MOBILE_MUMU_ACCEPTANCE.md"
-
-    # ① APK 目录：文档若提到该目录，就必须写明真实体量量级
-    apk_dir = ROOT / "_scratch" / "mobile_paths" / "apk"
-    if runtime_doc.exists() and apk_dir.is_dir():
-        doc = runtime_doc.read_text(encoding="utf-8", errors="replace")
-        total = sum(f.stat().st_size for f in apk_dir.rglob("*") if f.is_file())
-        gb = total / (1024 ** 3)
-        # 文档写的 GB 数必须落在实测 ±20% 内
-        nums = [float(x) for x in re.findall(r"约 \*\*(\d+(?:\.\d+)?)\s*MB\*\*", doc)]
-        nums += [float(x) * 1024 for x in re.findall(r"约 \*\*(\d+(?:\.\d+)?)\s*GB\*\*", doc)]
-        if nums:
-            claimed_mb = max(nums)
-            assert abs(claimed_mb - total / 1024 ** 2) / (total / 1024 ** 2) < 0.2, (
-                "APK 目录体量与文档不符：实测 %.0f MB，文档写 %.0f MB"
-                % (total / 1024 ** 2, claimed_mb))
-
-    # ② MuMu 安装目录：按环境变量/常见安装位置探测，找不到就跳过。
-    #    不能把某一台机器的绝对路径写进测试——换机必假红，也泄露本机信息。
-    mumu = _mumu_install_dir()
-    if mumu_doc.exists() and mumu is not None:
-        doc = mumu_doc.read_text(encoding="utf-8", errors="replace")
-        total = sum(f.stat().st_size for f in mumu.rglob("*") if f.is_file())
-        gb = total / (1024 ** 3)
-        m = re.search(r"(\d+(?:\.\d+)?)\s*GB", doc[doc.find("实测"):] if "实测" in doc else doc)
-        assert m, "MuMu 文档未写实测体积"
-        claimed = float(m.group(1))
-        assert abs(claimed - gb) / gb < 0.2, (
-            "MuMu 体量与文档不符：实测 %.1f GB，文档写 %.1f GB" % (gb, claimed))
-
-def test_mobile_runtime_status_claims_match_reality():
-    """文档若声称「本机还没装 Android 运行时」，那 adb 就不能真连上设备。
-
-    实测踩过：PATH_B_PLAN 写「本机还没装任何 Android 运行时」，
-    而此时 MuMu 已装、`127.0.0.1:16384` 在监听——这句话会让后来的人
-    以为要从头装环境，实际已经装好了。
-    """
-    import shutil
-    plan = ROOT / "docs" / "MOBILE_PATH_B_PLAN.md"
-    assert plan.exists(), "PATH_B_PLAN 不在版本库，判据失去靶子"
-    doc = plan.read_text(encoding="utf-8", errors="replace")
-
-    def _time_scoped():
-        return "**当时**" in doc or "当时" in doc
-
-    devices = []
-    if shutil.which("adb") or (ROOT / "_scratch" / "spike_mobile").is_dir():
-        try:
-            from adbutils import adb as _adb
-            devices = [d.serial for d in _adb.list()]
-        except Exception:
-            devices = []
-    if not devices:
-        # 没有设备时无法证伪「已装」，但仍能守一件事：这句话必须带
-        # 时点限定，不能成为对当前环境的断言。
-        assert ("本机还没装任何 Android 运行时" not in doc
-                or _time_scoped()), (
-            "文档无时点限定地声称「本机还没装任何 Android 运行时」"
-            "——读者会以为现在仍要从头装环境")
-        return
-
-    has_device = bool(devices)
-    stale = "本机还没装任何 Android 运行时" in doc and not _time_scoped()
-    if has_device and stale:
-        raise AssertionError(
-            "文档声称未装 Android 运行时，但 adb 已连上设备 %s——需更新" % devices)
-
-
-def test_handoff_mobile_verdict_not_left_at_theory():
-    """App 抓包结论不得停留在"仅理论可行"而不提已实测跑通。
-
-    实测踩过：结论行只写「理论可行…成本高…不作为主方案」，
-    而另一份文档里 MuMu 已把美团/智行都跑通——同一个仓库两种结论。
-    根 HANDOFF 不入库；判据改用两份**已入库**文档：
-      * `docs/MOBILE_MUMU_ACCEPTANCE.md` —— 真机实测已跑通；
-      * `docs/HANDOFF_FULL_SESSION.md` —— 边界：运行时跑通 ≠ 已接入爬虫。
-    """
-    mumu = ROOT / "docs" / "MOBILE_MUMU_ACCEPTANCE.md"
-    assert mumu.exists(), "MuMu 验收文档不在版本库"
-    text = mumu.read_text(encoding="utf-8", errors="replace")
-    assert "实测跑通" in text, "MuMu 文档没有实测跑通结论"
-
-    full = ROOT / "docs" / "HANDOFF_FULL_SESSION.md"
-    assert full.exists(), "交接全文不在版本库"
-    ftxt = full.read_text(encoding="utf-8", errors="replace")
-    assert "未接入" in ftxt, "交接文档没写清边界（运行时跑通 ≠ 渠道已支持）"
-
-    handoff = ROOT / "HANDOFF.md"
-    if handoff.exists():
-        htxt = handoff.read_text(encoding="utf-8", errors="replace")
-        if "App 抓包" in htxt:
-            assert "MOBILE_RUNTIME_VERIFICATION" in htxt, (
-                "HANDOFF 谈 App 抓包却没指向实测记录文档")
-            assert "仍未接入爬虫" in htxt or "不等于渠道已支持" in htxt, (
-                "HANDOFF 未写清边界：运行时跑通 ≠ 渠道已支持")
-
 def test_计划文档checkbox状态须与实际一致():
     """计划类文档若 0 个勾选但产物已存在，必须写明「落地状态」。
 
@@ -3243,93 +3138,6 @@ def test_security_policy_claims_match_code():
         "SECURITY.md 未写明 ghimg 失败后的熔断时长（代码 %s 秒）" % m.group(1))
 
 
-def test_mobile_docs_conclusions_are_consistent():
-    """5 份移动端文档对同一事实的说法必须一致，且过期结论要被标注推翻。
-
-    实测踩过（2026-10-28）：`MOBILE_CHANNEL_OPTIONS.md` 头部说 MuMu 已验收
-    （`adb connect` 免点界面、美团跑通），同一文件的路径表 C 行却仍标「⚠️ 未实测」；
-    同时 `MOBILE_MUMU_ACCEPTANCE.md` 写「智行装不上（只有 32 位）」，而同日
-    `MOBILE_ZHIXING_A12_RESULT.md` 已推翻该结论——三处互相矛盾。
-    读者按哪份做都会得到不同结论，这是移动端这组文档最典型的漂移形态。
-    """
-    opts = ROOT / "docs" / "MOBILE_CHANNEL_OPTIONS.md"
-    mumu = ROOT / "docs" / "MOBILE_MUMU_ACCEPTANCE.md"
-    zx = ROOT / "docs" / "MOBILE_ZHIXING_A12_RESULT.md"
-    for p in (opts, mumu, zx):
-        assert p.exists(), "%s 不存在" % p.name
-
-    opt = opts.read_text(encoding="utf-8", errors="replace")
-    # 1) MuMu 那行不得再标"未实测"
-    line_c = next((l for l in opt.splitlines()
-                   if l.startswith("| **C**")), None)
-    assert line_c, "路径总表找不到 C 行（本门禁失去锚点）"
-    assert "未实测" not in line_c or "LDPlayer" in line_c, (
-        "C 行仍把 MuMu 标成未实测，但 MOBILE_MUMU_ACCEPTANCE.md 已验收：%s"
-        % line_c.strip()[:90])
-    assert "已实测" in line_c, "C 行未写明 MuMu 已实测通过"
-
-    # 2) MuMu 验收文档里"智行装不上"必须标注已被推翻。
-    #    标注常在下方引用块/表格后的段落里，所以看该行 + 后续 8 行，
-    #    不能只看同一行（实测：标注写成紧邻的 `>` 引用段，逐行判会假红）。
-    mu = mumu.read_text(encoding="utf-8", errors="replace")
-    mu_lines = mu.splitlines()
-    for i, line in enumerate(mu_lines):
-        if "智行" not in line:
-            continue
-        if not re.search(r"(装不上|只有 32 位|armeabi)", line):
-            continue
-        window = "\n".join(mu_lines[i:i + 9])
-        assert re.search(r"(推翻|已推翻|以 .*ZHIXING.* 为准|旧结论|当次)", window), (
-            "MOBILE_MUMU_ACCEPTANCE 仍把「智行只有 32 位/装不上」写成结论而未标注推翻：%s"
-            % line.strip()[:90])
-
-    # 3) 智行文档必须仍给出 64 位结论（不得被回退）
-    z = zx.read_text(encoding="utf-8", errors="replace")
-    assert "arm64-v8a" in z and "64 位" in z, (
-        "MOBILE_ZHIXING_A12_RESULT 不再声明 64 位包可用的结论")
-
-
-def test_zhixing_apk_abi_claim_matches_files():
-    """智行文档的「两个包，一个 32 位一个 64 位」必须能被本地 APK 逐字节复现。
-
-    实测踩过（2026-10-28）：文档写 88.5MB/armeabi、104.0MB/arm64-v8a 并给了
-    精确安装字节 104,041,797，但 `_scratch/mobile_paths/apk/` 下另有两份
-    10.26.0 版（79–80MB、**只有 armeabi**）——若不指明路径，复核者会打开错的包，
-    得出「智行还是只有 32 位」的反向结论（这正是文档第 1 节记录的历史误判）。
-    本门禁钉住：路径被点名 + 字节数/A­BI/.so 数三项都对得上。
-    """
-    import zipfile
-    doc_path = ROOT / "docs" / "MOBILE_ZHIXING_A12_RESULT.md"
-    assert doc_path.exists(), "MOBILE_ZHIXING_A12_RESULT.md 不存在"
-    doc = doc_path.read_text(encoding="utf-8", errors="replace")
-
-    cases = [
-        ("_scratch/mobile_paths/apk2/zhixing_travel_10.25.8.apk", 88475842, "armeabi", 51),
-        ("_scratch/mobile_paths/apk2/zhixing_v2.apk", 104041797, "arm64-v8a", 65),
-    ]
-    for rel, size, abi, nso in cases:
-        p = ROOT / rel
-        # APK 样本只在装了移动运行时的机器上存在（_scratch 不入库）。
-        # 缺失时跳过**体积/ABI**子断言，仍校验文档写明了路径与结论——
-        # 否则这条门禁在 CI 上永远红，读者也看不到任何有效结论。
-        if not p.exists():
-            assert rel in doc, "文档未写明 64/32 位样本的本地路径：%s" % rel
-            continue
-        assert rel in doc, "文档未写明 64/32 位样本的本地路径：%s" % rel
-        assert p.stat().st_size == size, (
-            "%s 实际 %d 字节，文档写 %d" % (rel, p.stat().st_size, size))
-        with zipfile.ZipFile(p) as z:
-            libs = [n for n in z.namelist()
-                    if n.startswith("lib/") and n.endswith(".so")]
-        abis = {n.split("/")[1] for n in libs}
-        assert abis == {abi}, "%s 的 ABI 是 %s，文档写 %s" % (rel, sorted(abis), abi)
-        assert len(libs) == nso, (
-            "%s 的 .so 有 %d 个，文档写 %d" % (rel, len(libs), nso))
-    # 精确安装字节必须出现在文档里，且与 64 位包一致
-    assert "%d" % 104041797 in doc.replace(",", ""), (
-        "文档未记录 64 位包的精确安装字节 104041797")
-
-
 def test_design_context_doc_matches_code():
     """`.impeccable.md`（设计上下文）里的硬值必须与代码一致。
 
@@ -3363,37 +3171,6 @@ def test_design_context_doc_matches_code():
     # 3) 走势范围不得写死成只有 48h
     assert "近 48h 轮次聚类" not in doc, (
         "设计上下文仍把走势范围写死为「近 48h」——实际有 48h/7天/30天/90天/半年")
-
-
-def test_historical_release_notes_declare_staleness():
-    """历史版本的 release-notes 必须声明「这是当次快照」。
-
-    实测踩过（2026-10-28）：38 份 release-notes 里有 37 份**没有任何时效声明**，
-    正文却写满测试计数、渠道状态、界面结论——读者（尤其 AI）会把
-    「v1.5.265 渠道 5/5 全绿」当成现状引用，而这正是文档漂移的主要来源。
-    当前版本那份不标（它就是现状），其余一律要标。
-    """
-    main_py = (ROOT / "main.py").read_text(encoding="utf-8")
-    cur = re.search(r'^__version__\s*=\s*"([^"]+)"', main_py, re.M).group(1)
-    notes = sorted((ROOT / "docs").glob("release-notes-v*.md"))
-    assert notes, "docs/ 下没有 release-notes，本门禁失去检查对象"
-
-    missing = []
-    checked = 0
-    for p in notes:
-        m = re.match(r"release-notes-v([\d.]+)\.md$", p.name)
-        assert m, "release-notes 命名不符合 release-notes-vX.Y.Z.md: %s" % p.name
-        ver = m.group(1)
-        if ver == cur:
-            continue          # 当前版本 = 现状，不需要历史声明
-        checked += 1
-        head = "\n".join(p.read_text(encoding="utf-8", errors="replace").splitlines()[:8])
-        if "时效边界" not in head:
-            missing.append(p.name)
-    assert checked >= 5, "只找到 %d 份历史 release-notes，疑似目录结构变更" % checked
-    assert not missing, (
-        "这些历史 release-notes 缺「时效边界」声明，读者会把当次快照误当现状：%s"
-        % missing[:8])
 
 
 def test_contributing_commands_carry_required_env():
@@ -3489,22 +3266,41 @@ def test_python_floor_matches_pep604_usage():
 
 
 def test_tests_carry_no_machine_specific_paths():
-    """测试不得写死本机真实路径/工作目录（换机必假红，也泄露本机信息）。
+    """测试、随仓库交付的脚本与设计文档不得写死本机真实路径/工作目录。
 
     实测踩过：文档体积校验把某一台机器的 MuMu 安装目录写死在测试里，
-    换机后该断言直接不执行（假绿），换平台还会假红。
-    判据只认「本机独有的目录名」（开发目录/用户主目录名）；喂给路径
-    校验函数的合成样例（D:/ok/prices.db、C:/MuMu）不算。
+    换机后该断言直接不执行（假绿），换平台还会假红；执行规范/runbook
+    把作者的工作目录（`…\\idea_project\\…`）当成交付事实，别人照抄必错。
+    判据只认「本机独有的目录名」（开发目录/用户主目录）；产品默认探测位置
+    （如 MuMu 常见安装目录）与喂给路径函数的合成样例（D:/ok/prices.db）不算。
     """
+    MARKERS = ("idea_project", "c:\\users\\", "\\appdata\\local\\temp\\")
+
+    def hits(line):
+        low = line.lower()
+        return [m for m in MARKERS if m in low]
+
+    # 负控：判据必须能抓住真路径、放过合成样例
+    assert hits(r"cd D:\idea_project\ticket-monitoring")
+    assert not hits("D:/ok/prices.db")
+
     bad = []
     skip = {"test_docs_code_contract.py"}
-    for p in sorted((ROOT / "tests").rglob("*.py")):
-        if p.name in skip:
+    roots = [ROOT / "scripts", ROOT / "core", ROOT / "crawlers"]
+    files = []
+    for r in roots:
+        files += sorted(r.rglob("*.py"))
+    files += [ROOT / n for n in ("webui.py", "main.py", "report.py", "wizard.py")]
+    files += sorted((ROOT / "docs").rglob("*.md")) + sorted(ROOT.glob("*.md"))
+    files += sorted((ROOT / "tests").rglob("*.py"))
+    for p in files:
+        if not p.is_file() or p.name in skip:
             continue
+        rel = p.relative_to(ROOT).as_posix()
         for i, line in enumerate(
                 p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             if "noqa: machine-path" in line:
                 continue
-            if "idea_project" in line.lower():
-                bad.append("%s:%d  %s" % (p.name, i, line.strip()[:90]))
-    assert not bad, "测试里出现本机开发目录路径：%s" % bad[:10]
+            if hits(line):
+                bad.append("%s:%d  %s" % (rel, i, line.strip()[:90]))
+    assert not bad, "仓库里出现本机开发目录路径：%s" % bad[:10]

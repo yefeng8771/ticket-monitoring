@@ -96,8 +96,8 @@ def test_rendered_trend_routes_wrap():
                         rows = {}
                         for c in d["chips"]:
                             rows.setdefault(round(c["y"]), []).append(c)
-                        # Linux 字体下 chip 更宽，2–6 行都属于自然换行；
-                        # 判据重点是每行左缘/不越界/片高一致，不钉死行数。
+                        # 行数随字体宽度浮动（Windows 3 行 / Linux 2 片装不下时更多），
+                        # 只要仍按内容宽换行、每行首片贴左缘即可；上限防退化成 6 个满宽行。
                         assert 2 <= len(rows) <= 6, d
                         for row in rows.values():
                             assert abs(min(c["x"] for c in row) - d["left"]) <= 1, (row, d)

@@ -104,9 +104,7 @@ def page(srv):
 
 
 def _to_cfg(pg):
-    pg.evaluate("()=>{switchView('cfg');showCfgPanel('users')}")
-    pg.wait_for_selector('#cfgform .grouplab[data-sec="B"]',
-                         state="attached", timeout=20000)
+    pg.evaluate("()=>{try{go('cfg')}catch(e){location.hash='#cfg'}}")
     pg.wait_for_timeout(1200)
 
 
@@ -161,14 +159,11 @@ def test_toggling_app_chip_increments_numerator_only(page):
 def test_watch_coverage_denominator_from_watch_channels(page):
     """关注台「渠道覆盖」分母来自关注自身 channels，与脚注同源。"""
     page.evaluate("switchView('mon');showMonTab('watch')")
-    page.wait_for_selector('#wsKpis .ws-kpi', timeout=12000)
-    try:
-        page.wait_for_function(
-            "()=>[...document.querySelectorAll('#wsKpis .ws-kpi .v')]"
-            ".some(v=>/\/\d+/.test(v.textContent||''))", timeout=10000)
-    except Exception:
-        pass
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(900)
+    page.wait_for_function(
+        "()=>{const k=[...document.querySelectorAll('#wsKpis .ws-kpi')];"
+        "return k.some(e=>(e.querySelector('.k')||{}).textContent==='渠道覆盖')}",
+        timeout=10000)
     out = page.evaluate("""(() => {
       const kpis = [...document.querySelectorAll('#wsKpis .ws-kpi')];
       const k = kpis.find(e => (e.querySelector('.k')||{}).textContent === '渠道覆盖');
@@ -179,9 +174,8 @@ def test_watch_coverage_denominator_from_watch_channels(page):
         const m = t.match(/(\\d+)\\s*\\/\\s*(\\d+)\\s*渠道有价/);
         return m ? Number(m[2]) : null;
       }).filter(v => v != null);
-      const v = k ? k.querySelector('.v') : null;
-      const unit = v ? ((v.querySelector('span') || v).textContent || '').trim() : null;
-      return {unit: unit, dens, foots: foots.slice(0, 3)};
+      return {unit: k ? k.querySelector('.v span').textContent.trim() : null,
+              dens, foots: foots.slice(0, 3)};
     })()""")
     if not out["dens"]:
         pytest.skip("演示态无关注航班，脚注分母无从取（不判失败）")

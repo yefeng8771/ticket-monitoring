@@ -50,6 +50,11 @@ def test_every_channel_declares_detail():
     # 行复验，现已写 y；保留集合给将来新增但尚未复验的可选渠道。
     unverified = set()
     for p in tuple(BROWSER_CHANNELS) + tuple(APP_CHANNELS):
+        if p == "qunar":
+            # 去哪儿网页版 PC/H5 均已停服：detail=n 是整条通路退役，
+            # 不是「只剩日历」；数据走 app_qunar。
+            assert CHANNEL_DIMENSIONS[p].get("detail") == "n"
+            continue
         if p in unverified:
             assert CHANNEL_DIMENSIONS[p].get("detail") != "y", (
                 "%s 已有连续复验后应移除 unverified 名单" % p)

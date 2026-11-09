@@ -1,8 +1,7 @@
 # packages/ —— 设备侧安装包目录
 
 这个目录里的二进制**不入库**（见 `.gitignore`）。
-**完整的地址清单见 [`docs/DEVICE_PACKAGES.md`](../docs/DEVICE_PACKAGES.md)**——
-模块包版本、下载地址、大小、SHA256、NDK、MuMu、App 包名都在那张表里，与代码同源。
+**版本、下载地址、大小、SHA256 全部钉死在 [`scripts/fetch_packages.py`](../scripts/fetch_packages.py) 的 `PACKAGES` 表里**——`--list` 可查看，`--verify` 按钉死哈希校验。
 
 ## 需要放什么
 
@@ -29,4 +28,4 @@ Zygisk 实现与 root 隐藏模块的兼容性很脆：实测 ZygiskNext v1.5.2�
 ReZygisk v1.0.0 在 MuMu + Magisk 31.1 上都注入失败，只有 NeoZygisk v2.4 成功。
 所以 `fetch_packages.py` 固定版本而不是永远取 latest——避免"昨天能跑、
 今天一更新就崩"。换版本请同时改 `PACKAGES` 里的 `url` / `sha256` / `size`
-**和** `docs/DEVICE_PACKAGES.md`（有测试钉住两者一致）。
+**，然后跑 `python scripts/fetch_packages.py --force --verify`。

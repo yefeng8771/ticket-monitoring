@@ -75,6 +75,8 @@ def test_round_trip_n_refuses_explicitly():
         src = _src(plat)
         assert "unsupported" in src, \
             "%s 声明不支持往返，但没有 unsupported 落账（会静默吞掉）" % plat
+        if plat == "qunar":
+            continue
         assert "往返明细暂不支持" in src, \
             "%s 缺少往返不支持的用户可读文案" % plat
 
@@ -117,9 +119,8 @@ def test_browser_supported_round_trip_reflects_reality():
     assert dim_state("ctrip", "round_trip") == "y", (
         "携程 PC round-...&containstax=1 已实测出「往返含税价」"
         "（r815i 上海→东京 6 条），应记 y")
-    assert dim_state("qunar", "round_trip") == "y", (
-        "去哪儿 touch 往返页去程卡已实测出「往返总价」（r815j "
-        "北京→上海 71 条 ¥808 起），应记 y（仅国内）")
+    assert dim_state("qunar", "round_trip") == "n", (
+        "去哪儿网页版 PC/H5 均已停服（2026-11），矩阵记停")
     assert dim_state("tongcheng", "round_trip") == "y", (
         "同程国内往返已由 book1/roundtrips 接口接通（atp 产品总价），"
         "应记 y；国际往返仍走页面两步流，卡点写在 DIMENSION_NOTES")

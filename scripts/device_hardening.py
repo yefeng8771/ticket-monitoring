@@ -285,7 +285,7 @@ def checks_from_report(rep):
     mver = rep.get("MV", "").strip()
     checks.append(("Magisk 已安装", bool(mver),
                    mver if mver else
-                   "未检测到 Magisk：先按 docs/DEVICE_IDENTITY_PLAYBOOK.md "
+                   "未检测到 Magisk：先跑 scripts/setup_device.py --apply "
                    "「Magisk 落地」一节安装，再跑 --apply"))
 
     root = rep.get("ROOT", "").strip()
@@ -427,7 +427,7 @@ def _inspect_slow(dev, packages_dir=None):
     has_magisk = bool(mver)
     checks.append(("Magisk 已安装", has_magisk,
                    mver if has_magisk else
-                   "未检测到 Magisk：先按 docs/DEVICE_IDENTITY_PLAYBOOK.md "
+                   "未检测到 Magisk：先跑 scripts/setup_device.py --apply "
                    "「Magisk 落地」一节安装，再跑 --apply"))
 
     # 身份
@@ -518,7 +518,7 @@ def apply(dev, packages_dir, log=print, mumu=None, do_reboot=False):
     if not mver:
         return [("Magisk 预检", False,
                  "设备上没有 Magisk，模块全部装不了。先装 Magisk"
-                 "（见 docs/DEVICE_IDENTITY_PLAYBOOK.md 的 Magisk 一节），"
+                 "（先跑 scripts/setup_device.py --apply 装 Magisk），"
                  "装好后重跑本命令")]
     steps.append(("Magisk 预检", True, "版本 %s" % mver))
 

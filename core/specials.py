@@ -71,7 +71,7 @@ SPECIAL_CAPABILITY = {
     # `_tongcheng_deals`（H5 低价日历 90/180 天窗口，免登录免签名）
     # **都是真实可用源**——同一件事两张表给出相反答案，属文档/代码漂移。
     # 这里按实现收敛：有源就登记源，并如实写明各自的边界。
-    "qunar": {"sources": [SRC_QUNAR], "note": "官方 H5 低价日历（自签名）"},
+    "qunar": {"sources": [], "note": "网页版已停服（2026-11），数据走 app_qunar"},
     "tongcheng": {"sources": [SRC_TONGCHENG],
                   "note": "H5 低价日历（90/180 天窗口）"},
     # 去哪儿 App「低价机票」：登录后落原生 RN 页

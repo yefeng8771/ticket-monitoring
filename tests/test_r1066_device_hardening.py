@@ -303,7 +303,7 @@ def test_magisk_missing_is_flagged():
     checks = {n: (ok, det) for n, ok, det in m.inspect(FakeDev(d))}
     ok, det = checks["Magisk 已安装"]
     assert ok is False
-    assert "Magisk" in det and "docs/" in det
+    assert "Magisk" in det and "scripts/setup_device.py" in det
 
 
 def test_magisk_present_passes():

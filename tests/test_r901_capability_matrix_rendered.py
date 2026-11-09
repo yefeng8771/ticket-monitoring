@@ -9,7 +9,7 @@
 
 判据（真渲染，不看源码字面）：
 1. 矩阵表格出现在 `#cfgDimMatrix`，列数 = 注册渠道数，行数 = 维度数；
-2. 每格是真三态之一（✓ 支持 / × 不支持 / ? 未验证），不是空白；
+2. 每格是明确状态之一（✓ 已验证 / × 未实现 / 停 渠道停服 / — 不适用），不是空白；
 3. App 缺口清单必须在屏上（`.dimgap` 非空），且点名缺口维度；
 4. 无 pageerror；窄档允许横向滚动但不得把内容裁没。
 """
@@ -68,10 +68,9 @@ def _matrix(port, width):
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_timeout(2200)
             pg.evaluate("""()=>{const t=document.querySelector(
-                  '#cfgnav .cnav[data-p=login]');
+                  '.cnav [data-tab=login],#cfgnav [data-tab=login]');
                   if(t)t.click();}""")
-            pg.wait_for_selector("#cfgDimMatrix .dimtbl", timeout=30000)
-            pg.wait_for_timeout(1200)
+            pg.wait_for_timeout(2200)
             out = pg.evaluate("""()=>{
               const w=document.getElementById('cfgDimMatrix');
               const t=w&&w.querySelector('.dimtbl');
@@ -145,12 +144,12 @@ def test_matrix_shows_every_channel_and_dimension(server):
            n_surf_ch, len(SURFACES), ncell, out.get("kinds")))
 
 
-def test_every_cell_is_one_of_three_states(server):
+def test_every_cell_is_one_of_explicit_states(server):
     out, _ = _matrix(server, 1512)
     assert not out.get("err"), out
     assert out["empty"] == 0, "有 %d 个格子是空的（既不是支持也不是不支持）" % out["empty"]
-    assert set(out["kinds"]) <= {"✓", "×", "?"}, (
-        "出现了三态以外的标记：%s" % out["kinds"])
+    assert set(out["kinds"]) <= {"✓", "×", "停", "—"}, (
+        "出现未定义的状态标记：%s" % out["kinds"])
 
 
 def test_app_gaps_are_named_on_screen(server):
@@ -186,10 +185,9 @@ def test_static_demo_bakes_capability_matrix():
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_timeout(2500)
             pg.evaluate("""()=>{const t=document.querySelector(
-                  '#cfgnav .cnav[data-p=login]');
+                  '.cnav [data-tab=login],#cfgnav [data-tab=login]');
                   if(t)t.click();}""")
-            pg.wait_for_selector('#cfgDimMatrix .dimtbl', timeout=30000)
-            pg.wait_for_timeout(800)
+            pg.wait_for_timeout(2200)
             out = pg.evaluate("""()=>{
               const w=document.getElementById('cfgDimMatrix');
               const t=w&&w.querySelector('.dimtbl');
@@ -268,10 +266,9 @@ def test_matrix_freezes_dimension_column_on_narrow_scroll(server):
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_timeout(2200)
             pg.evaluate("""()=>{const t=document.querySelector(
-                  '#cfgnav .cnav[data-p=login]');
+                  '.cnav [data-tab=login],#cfgnav [data-tab=login]');
                   if(t)t.click();}""")
-            pg.wait_for_selector('#cfgDimMatrix .dimtbl', timeout=30000)
-            pg.wait_for_timeout(800)
+            pg.wait_for_timeout(2200)
             out = pg.evaluate("""()=>{
               const w=document.getElementById('cfgDimMatrix');
               const wrap=w&&w.querySelector('.dimwrap');
@@ -328,10 +325,9 @@ def test_matrix_freezes_dimension_column_on_narrow_scroll(server):
                     wait_until="domcontentloaded", timeout=30000)
             pg.wait_for_timeout(2200)
             pg.evaluate("""()=>{const t=document.querySelector(
-                  '#cfgnav .cnav[data-p=login]');
+                  '.cnav [data-tab=login],#cfgnav [data-tab=login]');
                   if(t)t.click();}""")
-            pg.wait_for_selector('#cfgDimMatrix .dimtbl', timeout=30000)
-            pg.wait_for_timeout(800)
+            pg.wait_for_timeout(2200)
             wide = pg.evaluate("""()=>{
               const w=document.getElementById('cfgDimMatrix');
               const wrap=w&&w.querySelector('.dimwrap');

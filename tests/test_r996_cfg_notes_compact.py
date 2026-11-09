@@ -82,6 +82,12 @@ def test_rendered_login_notes_are_compact():
                         "typeof S!=='undefined'&&S&&S.users", timeout=30000)
                     pg.evaluate("()=>{switchView('cfg')}")
                     pg.wait_for_selector("#loginRows .lgcard", timeout=15000)
+                    # 登录卡由轮询异步重建；固定 900ms 在 CI 上会读到「停服」
+                    # 还没渲染的半页，被当成内容缺失。等到 10 行 + 停服文案到齐。
+                    pg.wait_for_function(
+                        "()=>document.querySelectorAll('#loginRows .lgcard').length===10"
+                        "&&document.getElementById('sec-login').textContent.includes('停服')",
+                        timeout=15000)
                     pg.wait_for_timeout(900)
                     out[w] = pg.evaluate(r"""()=>{
                       const lines=el=>{if(!el)return 0;
@@ -117,14 +123,15 @@ def test_rendered_login_notes_are_compact():
         except Exception:
             srv.kill()
     a, m = out[1512], out[390]
-    # Linux 字体把同一句话量成多一行；紧凑判据放宽 1 行，仍禁止长墙。
-    assert a["secLines"] <= 2, a
-    assert m["secLines"] <= 3, m
+    assert a["secLines"] == 1, a
+    assert m["secLines"] <= 2, m
     assert a["footLines"] == 1 and m["footLines"] == 1, out
     assert a["dimLines"] == 1 and m["dimLines"] == 1, out
     for k in (1512, 390):
         assert not out[k]["lgnote"], out[k]
-        assert not out[k]["qunar"], out[k]
+        # r1063 T68：去哪儿网页版**正式停服**，登录卡必须说出来，
+        # 否则等于劝人去登一个已经不存在的入口。
+        assert out[k]["qunar"], out[k]
         assert out[k]["padL"] >= 14 and out[k]["padR"] >= 14, out[k]
         assert out[k]["cards"] == 10, out[k]
         assert out[k]["overflow"] <= 0, out[k]

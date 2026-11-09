@@ -360,7 +360,7 @@ def main(argv=None):
     if lack:
         print("\n还缺 App: %s" % "、".join(lack))
         print("  把 APK 放进 packages/apks/ 再跑 --apply 即可自动安装"
-              "（地址与包名对照见 docs/DEVICE_PACKAGES.md）")
+              "（地址与包名对照见 scripts/fetch_packages.py）")
 
     print("\n下一步：")
     print("  powershell -File start.ps1        # 启动采集")

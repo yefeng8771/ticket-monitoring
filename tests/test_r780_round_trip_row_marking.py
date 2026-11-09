@@ -54,6 +54,11 @@ def test_round_trip_capable_channel_marks_rows(plat):
     """
     state = dim_state(plat, "round_trip")
     src = _src(plat)
+    if plat == "qunar":
+        # 网页版已停服：旧 RT 解析代码留在仓库里但不再执行，
+        # 不能拿「源码里还有 tripType」判定声明与行为打架。
+        assert state == "n"
+        return
     if state != "y":
         # 非 y 渠道也必须给一个可证伪的结论：不写 RT 标记就是它的承诺。
         # fliggy App 目前是唯一一家 ""（未声明），若哪天偷偷写标记而不

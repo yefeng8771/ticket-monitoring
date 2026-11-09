@@ -181,8 +181,12 @@ def test_demo_login_state_also_exposes_six_slots():
     assert "LOGIN_SLOT_ORDER" in demo, "demo 槽位未按单一顺序表生成"
     assert "LOGIN_SLOTS" in demo, "demo 槽位未复用槽位定义"
     # 定义侧必须是 6 个槽位且飞猪占两个
-    assert len(LOGIN_SLOT_ORDER) == 6
-    assert sum(1 for k in LOGIN_SLOT_ORDER if LOGIN_SLOTS[k]["plat"] == "fliggy") == 2
+    # r1063 T82 起统一为**双端固定登录**：四家浏览器渠道各 PC/H5 两格
+    # （ctrip/fliggy/tongcheng/tuniu）+ 去哪儿停服说明位 = 9
+    assert len(LOGIN_SLOT_ORDER) == 9
+    for _plat in ("ctrip", "fliggy", "tongcheng", "tuniu"):
+        assert sum(1 for k in LOGIN_SLOT_ORDER
+                   if LOGIN_SLOTS[k]["plat"] == _plat) == 2, _plat
     """节流面板搬到健康卡后，参数仍在配置页。原来那句「参数在…里调」
     是死文字，用户要自己翻三层导航。必须是一键直达的分区链接。"""
     src = _src()

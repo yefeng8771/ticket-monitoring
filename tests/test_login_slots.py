@@ -8,9 +8,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def test_six_slots_include_fliggy_pc_and_taobao_h5():
+    """槽位表：**双端固定登录**（r1063 T82 统一设计）。
+
+    用户要求："途牛和同程的弹窗登录现在默认全部到 H5 页面了，原来不是 PC 吗，
+    要不然就跟飞猪一样，做双端固定登录，携程也是，统一设计算了"。
+    于是每家浏览器渠道都有 PC/H5 两格（profile 也按端分开：域不同、cookie 不共享），
+    去哪儿网页版正式停服，保留一格只做说明。
+    """
     from core.login_slots import LOGIN_SLOTS, LOGIN_SLOT_ORDER
     assert LOGIN_SLOT_ORDER == (
-        "ctrip", "qunar", "fliggy", "fliggy_h5", "tongcheng", "tuniu")
+        "ctrip", "ctrip_h5", "fliggy", "fliggy_h5", "tongcheng",
+        "tongcheng_h5", "tuniu", "tuniu_h5", "qunar")
     assert set(LOGIN_SLOTS) == set(LOGIN_SLOT_ORDER)
     pc = LOGIN_SLOTS["fliggy"]
     h5 = LOGIN_SLOTS["fliggy_h5"]

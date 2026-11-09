@@ -122,7 +122,7 @@ def _rt_row_errors(body):
             elif not ("国内" in cell and "国际" in cell):
                 errs.append("%s 往返已全接通，范围应含国内与国际：%r"
                             % (cn, cell))
-        elif not any(k in cell for k in ("未接", "未验证", "不支持", "无此")):
+        elif not any(k in cell for k in ("未接", "未验证", "不支持", "无此", "停服")):
             errs.append("%s 往返未接通/未验证，范围列必须写明：%r"
                         % (cn, cell))
     return errs
@@ -212,7 +212,7 @@ def test_body_surface_column_matches_declared_surfaces():
         % (len(_matrix_rows(body)), len(CHANNEL_CN)))
     assert _surface_errors(body) == [], _surface_errors(body)
     # 负控：删掉去哪儿 PC 停服说明 / 飞猪 H5 待验证说明，都必须报错
-    assert _surface_errors(body.replace("H5（PC 已停服）", "H5")), (
+    assert _surface_errors(body.replace("网页版已停服（PC/H5）", "PC / H5")), (
         "负控失败：停服原因删除没被拦")
     assert _surface_errors(
         body.replace("PC / H5（H5 待验证）", "PC / H5")), (
@@ -240,8 +240,10 @@ def _rt_count_errors(body):
     errs = []
     if "%d 家" % n not in body:
         errs.append("往返已接通家数没写 %d 家" % n)
+    if "%d 家均已有已接通通路" % n in body:
+        errs.append("往返不得写 %d 家均接通（去哪儿网页版停服）" % n)
     if "10 家均已有已接通通路" in body:
-        errs.append("往返不得写 10 家均接通（飞猪 App 未验证）")
+        errs.append("往返不得写 10 家均接通（去哪儿网页版停服）")
     return errs
 
 

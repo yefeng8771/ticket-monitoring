@@ -4,7 +4,7 @@
 
 ## v1.5.293 本轮真实矩阵（2026-10-24 14:16-14:22）
 
-运行：`http://127.0.0.1:8765`，版本 **1.5.293**，PID 143816，启动目录 `D:\idea_project\ticket-monitoring`，配置 `_scratch/dev-config.yaml`。证据文件：`_scratch/v293_domestic.json`、`_scratch/v293_intl.json`（探针结果不落库、不推送）。
+运行：`http://127.0.0.1:8765`，版本 **1.5.293**，PID 143816，启动目录为本仓库根，配置 `_scratch/dev-config.yaml`。证据文件：`_scratch/v293_domestic.json`、`_scratch/v293_intl.json`（探针结果不落库、不推送）。
 
 ### 国内：SHA→BJS / SHA→CAN × 2026-11-10 / 11-11（4 腿 × 5 渠道 = 20 组合）
 
@@ -276,7 +276,7 @@
 ## 4. 尚未完成
 
 - 携程 H5 官方列表 30212 不供明细（边界结论，PC `batchSearch` 为已验证数据路径；不作为待办，除非渠道恢复 H5 明细）；
-- 官方 Release/标签/部署与远端一致性（已提交 HEAD 本地 24/24；当前未提交树 20/24，差量为计数钉按 HEAD 3571/617 比对与历史 round 词面〔**当时的数字**，非当前基线〕；完整检查 44/50，6 项均为未推送/未发布远端项；远端仍指向 v1.5.289，未授权推送/发布）。仓库外源码备份已建：`D:\idea_project\ticket-monitoring-backup-r368-20261023.tar.gz`（13MB、587 项、sha256 `ab2fbc09…4979771c`，不含 user_data/data/ghtoken/_scratch）。
+- 官方 Release/标签/部署与远端一致性（已提交 HEAD 本地 24/24；当前未提交树 20/24，差量为计数钉按 HEAD 3571/617 比对与历史 round 词面〔**当时的数字**，非当前基线〕；完整检查 44/50，6 项均为未推送/未发布远端项；远端仍指向 v1.5.289，未授权推送/发布）。仓库外源码备份已建（备份包在仓库外，不入库）（13MB、587 项、sha256 `ab2fbc09…4979771c`，不含 user_data/data/ghtoken/_scratch）。
 
 ## 4.5 用户级特价雷达（2026-10-23 22:40 实机）
 

@@ -101,8 +101,7 @@ def test_tongcheng_domestic_round_trip_declared_after_api():
         "国际往返没有读 tp/lng（含税总价 + 去/返两段）")
 
 
-DOCS_MAKING_CHANNEL_CLAIMS = ("docs/INTL_DESIGN.md", "docs/APP_CHANNELS.md",
-                              "docs/HANDOFF_CAPABILITY_MATRIX.md")
+DOCS_MAKING_CHANNEL_CLAIMS = ("docs/INTL_DESIGN.md", "docs/APP_CHANNELS.md")
 
 
 @pytest.mark.parametrize("doc", DOCS_MAKING_CHANNEL_CLAIMS)

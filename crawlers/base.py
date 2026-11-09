@@ -125,6 +125,33 @@ def kernel_major() -> int:
 # 旧值是一个 iPhone/Safari 的 UA——那会同时与 `navigator.userAgentData`、
 # `window.chrome`、`sec-ch-ua*` 三处矛盾（`python -m core.fp_audit` 报 high）。
 # 现在用 Android Chrome：引擎、UA-CH、TLS(chrome) 三处自洽。
+# 「这条通路的服务已经下线」的报文特征（r1063 T67）
+# 现场实证（去哪儿）：`服务调整通知：…网页版机票查询及预订服务已停止提供，请前往…App`
+SERVICE_CLOSED_MARKS = ("停止提供", "已停止服务", "服务已下线", "业务调整",
+                        "请前往", "请下载")
+
+
+def is_service_closed_body(bodies):
+    """响应里是不是**明确写着"这条通路没了"**。返回 (bool, 依据片段)。
+
+    为什么要与"被拦/改版"分开：被拦等一会儿可能好、改版能改解析；
+    **停服只能换通路**（换 App/换家）。判据只认明确字面，不做推测。
+    """
+    for b in (bodies or ()):
+        try:
+            t = (b.decode("utf-8", "replace") if isinstance(b, bytes)
+                 else str(b or ""))
+        except Exception:
+            continue
+        if not t:
+            continue
+        hits = [m for m in SERVICE_CLOSED_MARKS if m in t]
+        # 至少两个特征同时出现才算（避免登录页"请下载 App"这类误判）
+        if len(hits) >= 2 or "停止提供" in t:
+            return True, t[:160]
+    return False, ""
+
+
 def scoped_id(pid: str, plat: str, fallback):
     """按**渠道**取身份参数（r1063 T58）：参数层有意见才采用，否则用配置值。
 
@@ -564,11 +591,36 @@ class BaseCrawler:
         self.last_path = ""
         self.last_status = ""
 
+    # ---------- 分段计时（r1063 T77）----------
+    # 只做观测：计时抛异常绝不影响采集。
+    def timed(self, name: str):
+        try:
+            return self.phases_timer()(name)
+        except Exception:
+            import contextlib
+            return contextlib.nullcontext()
+
+    def phases_timer(self):
+        if getattr(self, "_phases", None) is None:
+            from core.phase_timer import PhaseTimer
+            self._phases = PhaseTimer()
+        return self._phases
+
     def path_note(self, path: str, status: str, rows: int = 0,
                   date: str = "", detail: str = "", ms: int = 0,
                   http_status: int = 0, url: str = ""):
         if status not in self.PATH_STATUS:
             status = "error"
+        # 分段打点（r1063 T77）：上一条账到这一条账的间隔 = 上一步的耗时。
+        try:
+            import time as _pt
+            _now = _pt.time()
+            if getattr(self, "_phase_prev", None):
+                _pn, _pt0 = self._phase_prev
+                self.phases_timer().mark(_pn, _now - _pt0)
+            self._phase_prev = (str(path), _now)
+        except Exception:
+            pass
         rec = {"path": str(path), "status": status,
                "rows": int(rows or 0), "date": str(date or ""),
                "detail": str(detail or "")[:160], "ms": int(ms or 0),
@@ -591,6 +643,14 @@ class BaseCrawler:
         self.paths.append(rec)
         self.last_path = rec["path"]
         self.last_status = rec["status"]
+        # 会话可用期（r1063 T93）：量化"登录后能用多久"
+        try:
+            from core import session_window as _sw
+            from core.yield_stats import user_data_root as _udr
+            # 走**唯一口径**（r972）：config 显式值 > TM_USER_DATA_DIR > user_data
+            _sw.note(_udr(self.config), self.name, rec["status"])
+        except Exception:
+            pass
         # 被拦/登录墙往往返回 200 页面而不是 403：只在响应监听里记现场
         # 会漏掉最常见的人机验证。path_note 是各渠道确认"这条路过不去"
         # 的统一落点，在这里补页面 URL（调用方没显式给 url 时才用页面
@@ -1105,6 +1165,62 @@ class BaseCrawler:
         finally:
             lock.release()
 
+    def login_window_size(self) -> tuple:
+        """登录窗口尺寸（宽, 高）——按端给默认值，可用配置覆盖。
+
+        `web.login_window`（PC，默认 1280×900）与 `web.login_window_h5`
+        （H5，默认 480×880）。H5 是手机页面，给手机比例窗口才点得到控件。
+        任何非法配置都退回默认值——**这里抛异常等于弹不出窗**。
+        """
+        # r1063 T181：端从**槽位**来（login_surface），没有才退回采集口径。
+        # 反例（现场）：CtripCrawler.use_mobile=True 是采集走 m 站的意思，
+        # 但它的 **PC 登录槽位**必须开桌面尺寸窗口，否则 passport 页面被裁。
+        _surf = str(getattr(self, "login_surface", "") or "").lower()
+        if _surf in ("h5", "mobile", "m"):
+            is_h5 = True
+        elif _surf in ("pc", "desktop", "web"):
+            is_h5 = False
+        else:
+            is_h5 = bool(getattr(self, "use_mobile", False))
+        cfg = (self.config or {}).get("web") or {}
+        default = (480, 880) if is_h5 else (1280, 900)
+        key = "login_window_h5" if is_h5 else "login_window"
+        v = cfg.get(key) or {}
+        try:
+            w = int(v.get("w") or default[0])
+            h = int(v.get("h") or default[1])
+        except (TypeError, ValueError, AttributeError):
+            return default
+        if w < 320 or h < 480:          # 太小的窗口人没法登录
+            return default
+        return (w, h)
+
+    @contextmanager
+    def using_surface(self, surface: str):
+        """临时切到该端**独立槽位 profile**（r1063 T144）。
+
+        `slot_crawler` 给每个槽位分了独立 profile，但采集时必须**主动切过去**，
+        否则 H5 通路还在读 PC profile —— 用户登两次却只用一次。
+        只在目标 profile **确有会话**时才切，避免把已登录的 PC 态切丢。
+        """
+        old = self.profile_name
+        switched = False
+        try:
+            if str(surface or "").lower() == "h5":
+                cand = "%s_h5" % self.name
+                try:
+                    has = os.path.isfile(os.path.join(
+                        self.user_data_root, cand, "session-state.json"))
+                except Exception:
+                    has = False
+                if has:
+                    self.profile_name = cand
+                    switched = True
+            yield self
+        finally:
+            if switched:
+                self.profile_name = old
+
     @contextmanager
     def _browser_context(self, headless, window_front, window_idx, save_session):
         hl = self.headless if headless is None else headless
@@ -1113,7 +1229,18 @@ class BaseCrawler:
             x, y = 40 + window_idx * 170, 24 + window_idx * 150
             launch_args = [f"--window-position={x},{y}"]
             if window_front:
-                launch_args += [f"--window-size=1180,760",
+                # r1063 T140：登录窗口尺寸可配，且按端给默认值
+                # （PC 1280×900 够看表格；H5 480×880 是手机比例，点得到）
+                _w, _h = self.login_window_size()
+                try:
+                    self.logger.info(
+                        "[登录窗] %s 端=%s 尺寸=%dx%d",
+                        self.name,
+                        (getattr(self, "login_surface", "") or "（未标注）"),
+                        _w, _h)
+                except Exception:
+                    pass
+                launch_args += [f"--window-size={_w},{_h}",
                                 f"--window-position={x},{y}"]
             # 旁路关闭（WebRTC 内网 IP 泄漏等）：不改页面行为，只掐泄漏面。
             # 与 STEALTH_JS 同一条开关，stealth=false 时零干预。
@@ -1829,6 +1956,123 @@ class BaseCrawler:
     PARSE_SCENE_KEEP = 10
     PARSE_SCENE_MAX_BYTES = 400_000
 
+    # ---------- 登录墙记忆（r1063 T69，通用）----------
+    LOGIN_WALL_FILE = "login_wall.json"
+    LOGIN_PROBE_S = 2 * 3600
+
+    def login_wall_path(self) -> str:
+        from core.yield_stats import user_data_root as _udr
+        return os.path.join(str(_udr(self.config)), self.name,
+                            self.LOGIN_WALL_FILE)
+
+    def login_wall_until(self) -> float:
+        try:
+            with open(self.login_wall_path(), encoding="utf-8") as f:
+                return float((json.load(f) or {}).get("until") or 0)
+        except Exception:
+            return 0.0
+
+    def mark_login_wall(self, detail: str = "") -> None:
+        """记住"这家要登录"，落盘（跨进程）。登好后由 `clear_login_wall` 清掉。"""
+        # r1063 T127：登录墙/验证页要在面板「降级」里可见，否则只看到 0 条
+        try:
+            from core import degraded as _dg
+            _dg.note("app_risk_blocked", self.name, str(detail or "")[:110])
+        except Exception:
+            pass
+        try:
+            win = float(self.config.get("login_probe_s") or self.LOGIN_PROBE_S)
+        except (TypeError, ValueError):
+            win = float(self.LOGIN_PROBE_S)
+        try:
+            p = self.login_wall_path()
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"until": time.time() + win,
+                           "detail": str(detail)[:200],
+                           "at": time.time()}, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def clear_login_wall(self) -> None:
+        try:
+            os.remove(self.login_wall_path())
+        except Exception:
+            pass
+
+    def login_wall_skip(self, dates, path: str = "app-login") -> bool:
+        """登录墙窗口内让位：**不发请求**，状态记 `login`（健康页显示需登录）。
+
+        为什么记 `login` 而不是 `paced`：`paced` 是"我方主动让位"，而这里
+        是"等人动手登录"——两者对用户的含义完全不同，界面要能分清。
+        """
+        until = self.login_wall_until()
+        now = time.time()
+        if until <= now:
+            return False
+        left_m = (until - now) / 60.0
+        for d in (dates or []):
+            try:
+                self.path_note(path, "login", date=d,
+                               detail="需登录（%.0f 分钟内不再重试）："
+                                      "到「渠道登录」登一次即可恢复" % left_m)
+            except Exception:
+                continue
+        return True
+
+    # ---------- 通路停服（r1063 T68，通用）----------
+    SERVICE_CLOSED_FILE = "service_closed.json"
+    SERVICE_PROBE_S = 6 * 3600
+
+    def _sst_root(self) -> str:
+        from core.yield_stats import user_data_root as _udr
+        return str(_udr(self.config))
+
+    def service_closed_path(self) -> str:
+        """停服记忆落盘位置（口径在 `core.service_state`，与 App 侧共用）。"""
+        from core import service_state as _sst
+        return _sst.path_for(self._sst_root(), self.name, "service_closed")
+
+    def service_closed_until(self) -> float:
+        """停服记忆到期时间（0=没记过）。读不到就当没记过——不吓唬自己。"""
+        from core import service_state as _sst
+        return _sst.until(self._sst_root(), self.name, "service_closed")
+
+    def mark_service_closed(self, detail: str = "", *, permanent=False) -> None:
+        """记住"这条通路停服了"并落盘（跨进程有效）。
+
+        `permanent=True` 表示**永久停服**（用户确认过的那种，例如去哪儿网页版
+        机票查询下线）：不再按窗口探测，直到有人手动清掉记忆。
+        """
+        from core import service_state as _sst
+        try:
+            win = float(self.config.get("service_probe_s")
+                        or self.SERVICE_PROBE_S)
+        except (TypeError, ValueError):
+            win = float(self.SERVICE_PROBE_S)
+        _sst.mark(self._sst_root(), self.name, "service_closed", detail,
+                  window_s=win, permanent=permanent)
+
+    def service_closed_skip(self, dates, path: str = "QUERY") -> bool:
+        """停服窗口内让位：**不发请求**、记 `unsupported`。返回是否让位。
+
+        `unsupported` 是**能力边界**，不计入渠道失败；记成 `error`/`empty`
+        会白白拉低成功率（T67 定下的口径）。
+        """
+        until = self.service_closed_until()
+        now = time.time()
+        if until <= now:
+            return False
+        left_h = (until - now) / 3600.0
+        for d in (dates or []):
+            try:
+                self.path_note(
+                    path, "unsupported", date=d,
+                    detail="网页通路已停服，暂停查询（%.1f 小时后重探）" % left_h)
+            except Exception:
+                continue
+        return True
+
     def save_parse_scene(self, bodies, tag: str = "", anchors=()) -> dict:
         """把"有响应但解析不出"的现场存下来，返回**结构指纹**（r1063 T66）。
 
@@ -1967,9 +2211,19 @@ class BaseCrawler:
             # 顺便记下主通路的**状态**：账本只累加 ok/fail 的话，
             # "确实没票(empty)"、"解析失败(error)"、"登录墙(login)"
             # 会混成一个 fail 数字，处置方向完全不同（2026-11-05）。
-            _st = next((str(r.get("status") or "") for r in (self.paths or [])
-                        if str(r.get("path") or "") == path), "")
-            led.note(self.name, path or "unknown", ok, rows=rows, status=_st)
+            _pv = next((r for r in (self.paths or [])
+                        if str(r.get("path") or "") == path), {})
+            _st = str(_pv.get("status") or "")
+            # 原因原文一起进账（r1063 T75）：只留状态的话，"为什么失败"要靠翻日志
+            led.note(self.name, path or "unknown", ok, rows=rows, status=_st,
+                     detail=str(_pv.get("detail") or ""))
+            # 分段耗时也进账（r1063 T77）：只记成功率的话，"慢在哪一步"永远是谜
+            try:
+                _ph = self.phases_timer().summary()
+                if _ph:
+                    led.note_phases(self.name, _ph)
+            except Exception:
+                pass
             rec = led.recommend_interval(
                 self.name, int(self.config.get("interval_minutes", 30)
                                or 30))
@@ -2027,8 +2281,13 @@ class BaseCrawler:
         换八个浏览器都没用（issue 原话）。失败时本方法不置位，异常照常
         冒泡，由调用方把「没开成」如实回给点击者。
         """
-        url = self.login_url()
-        self.logger.info("[%s] 正在打开登录窗口：%s", self.name, url)
+        # r1063 T182：**槽位**的登录页优先（H5 槽位 → m 站）。
+        # 以前这里只有 self.login_url()，而它返回的是渠道的 PC 登录页，
+        # 于是 tuniu_h5 / ctrip_h5 都登在 PC 域上（H5 域拿不到 cookie）。
+        url = (str(getattr(self, "login_url_override", "") or "")
+               or self.login_url())
+        self.logger.info("[%s] 正在打开登录窗口：%s（端=%s）", self.name, url,
+                         getattr(self, "login_surface", "") or "未标注")
         self._session_snap_ok = False
         bak = self.use_mobile
         if self.login_desktop and not self.login_mobile:
@@ -2049,6 +2308,20 @@ class BaseCrawler:
                 last_snap = 0.0
                 while not done_evt.is_set():
                     if deadline and _t.time() >= deadline:
+                        # 超时但已拿到凭证：同样按「已存待验」处理（r1063 T103）
+                        try:
+                            _st = ctx.storage_state()
+                            if _st and self._session_state_allowed(
+                                    _st, "login"):
+                                self._write_session_state(_st, keep_saved_at)
+                                self._session_snap_ok = True
+                                self._login_saved_on_close = True
+                                self.logger.info(
+                                    "[%s] 登录窗口超时，但已拿到登录凭证 → "
+                                    "记为「已存待验」", self.name)
+                                return True
+                        except Exception:
+                            pass
                         raise RuntimeError("登录窗口超时，请重新打开")
                     try:
                         closed = bool(page.is_closed())
@@ -2073,10 +2346,18 @@ class BaseCrawler:
                         except Exception:
                             pass
                         if _saved:
+                            # r1063 T103：**关窗但已拿到登录凭证 = 成功**。
+                            # 用户的自然动作就是登完关窗；以前这里一律抛错，
+                            # 于是界面显示"登录无效"，而 cookie 其实已经落盘。
+                            # 标记"已存待验"，由 _verify_login_slot 真核验一次。
+                            self._login_saved_on_close = True
                             self.logger.info(
-                                "[%s] 登录窗口已关闭，cookie 快照已落盘"
-                                "（未确认，不判定登录成功）", self.name)
-                        raise RuntimeError("登录窗口已关闭，尚未确认完成")
+                                "[%s] 登录窗口已关闭，已拿到登录凭证 → 记为"
+                                "「已存待验」，随后自动核验", self.name)
+                            return True
+                        raise RuntimeError(
+                            "登录窗口已关闭，且未检测到登录凭证"
+                            "（请确认已登录后再关闭窗口）")
                     now = _t.time()
                     if now - last_snap >= 5:
                         try:

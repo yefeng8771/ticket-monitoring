@@ -71,14 +71,16 @@ def probe():
                 pg.goto(BASE + "/", wait_until="domcontentloaded")
                 pg.wait_for_timeout(2600)
                 pg.evaluate("switchView('cfg')")
-                pg.wait_for_timeout(1400)
+                pg.wait_for_selector('#cfgnav .cnav[data-p="login"]', timeout=15000)
                 pg.evaluate("""()=>{const b=document.querySelector('#cfgnav .cnav[data-p="login"]');
                     if(b)b.click();}""")
-                pg.wait_for_selector('#cfgChannelLinks .chband', timeout=20000)
-                pg.wait_for_timeout(800)
+                # 渠道入口由登录态 + 入口接口串行取回后才渲染；CI 慢机固定
+                # 等待会量到「加载中…」空盒（r837 1280 实测 0 条）。
+                pg.wait_for_function(
+                    "()=>document.querySelectorAll("
+                    "'#cfgChannelLinks .chband:not([data-channel^=\"app_\"])'"
+                    ").length>=5", timeout=20000)
                 out[w] = pg.evaluate(JS)
-                if not out[w]:
-                    pytest.skip("演示环境未渲染旧渠道卡（r1056/r1102 已替代旧渠道带门禁）")
                 pg.close()
             br.close()
         yield out

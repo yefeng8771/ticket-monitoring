@@ -290,6 +290,11 @@ def handle_finish(registry, plat: str, verify=None,
 def dispatch(registry, method: str, path: str, query: dict,
              body: Optional[dict], ctx: dict):
     """统一入口，供 webui 路由处一行接入。"""
+    global _LAST_REGISTRY
+    try:
+        _LAST_REGISTRY = registry
+    except Exception:
+        pass
     plat = (query.get("plat") or [""])[0] if query else ""
     if not plat and isinstance(body, dict):
         plat = str(body.get("plat") or "")
@@ -337,3 +342,31 @@ def parse_body(raw: bytes) -> dict:
     except (ValueError, UnicodeDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+#: 最近一次被 dispatch 的会话登记表（供采集侧"让位"判断用，r1063 T167）。
+_LAST_REGISTRY = None
+
+
+def set_registry(registry) -> None:
+    """登记会话表（webui 侧建表时调用；采集侧只读）。"""
+    global _LAST_REGISTRY
+    _LAST_REGISTRY = registry
+
+
+def active_plat() -> str:
+    """当前有**活着的**登录会话的渠道名；没有返回空串。
+
+    采集侧用它判断"用户正在 App 里登录"，从而本轮让位——否则定时轮次会把
+    App 切走，登录会话当场作废（用户看到的就是"点开后画面没了"）。
+    """
+    reg = _LAST_REGISTRY
+    if reg is None:
+        return ""
+    try:
+        for p in reg.plats():
+            sess = reg.get(p)
+            if sess is not None and sess.alive():
+                return str(p)
+    except Exception:
+        return ""
+    return ""

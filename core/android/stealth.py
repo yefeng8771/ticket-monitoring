@@ -590,12 +590,50 @@ def prepare(dev, config: dict = None, logger=None, *, packages=None,
 _ID_PATTERN = "utdid|umid|deviceId|device_id|guid|android_id|oaid|imei"
 
 
+# 真正"存设备 ID"的文件长这样：`*id*.xml`、`*guid*`、`*utdid*`…；
+# 而业务配置（chat_config.xml）与库（*.so）只是**内容里偶尔出现**这些子串。
+_ID_NAME_HINT = ("utdid", "umid", "deviceid", "device_id", "guid", "android_id",
+                 "oaid", "imei", "id_")
+_ID_SAFE_MAX_BYTES = 262144          # 真 ID 文件都很小；大文件一律不碰
+
+
 def _id_files(dev, pkg: str) -> list:
-    out = _text(as_root(
-        dev, "grep -rlE '%s' /data/data/%s/shared_prefs "
-             "/data/data/%s/files 2>/dev/null | head -40 || true"
-             % (_ID_PATTERN, pkg, pkg)))
-    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+    """列出**该删的**设备 ID 文件（r1063 T74 收紧）。
+
+    三道闸（都是这次误删换来的）：
+      1. 只看 `shared_prefs/`，**不碰 `files/`**（那里放的是解包出的 .so、缓存）；
+      2. 文件名要像 ID 容器（`*utdid*` `*guid*` `*deviceid*` …），
+         或内容里出现 `key=值` 形态的命中；光是 grep 命中不算；
+      3. 大小 > 256KB 的跳过（`ctrip_package_pkg_sp` 那种 4MB 文件不是 ID 文件）。
+    """
+    base = "/data/data/%s/shared_prefs" % pkg
+    # ① 文件名直判（最可靠，不依赖内容）
+    by_name = _text(as_root(
+        dev, "ls %s 2>/dev/null | grep -iE '%s' | head -40 || true"
+             % (base, "|".join(_ID_NAME_HINT))))
+    picked = []
+    for ln in by_name.splitlines():
+        n = ln.strip()
+        if n:
+            picked.append("%s/%s" % (base, n))
+    # ② 内容判：只收 shared_prefs 下、体积小的 xml
+    by_body = _text(as_root(
+        dev, "grep -rlE '%s' %s 2>/dev/null | head -40 || true"
+             % (_ID_PATTERN, base)))
+    for ln in by_body.splitlines():
+        p = ln.strip()
+        if not p or p in picked or not p.endswith(".xml"):
+            continue
+        try:
+            sz = int(_text(as_root(dev, "stat -c %%s '%s' 2>/dev/null || echo 0"
+                                   % p)).strip() or 0)
+        except (TypeError, ValueError):
+            sz = 0
+        if sz and sz <= _ID_SAFE_MAX_BYTES:
+            picked.append(p)
+    # ③ 兜底：绝不返回库/可执行/大文件
+    return [p for p in picked
+            if not p.endswith((".so", ".dex", ".jar", ".apk", ".oat", ".vdex"))]
 
 
 def clear_app_identity(dev, packages=None, config: dict = None,

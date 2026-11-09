@@ -8,10 +8,10 @@
 「功能坏了」。所以 chip 的 title 除了列「谁没有」，还要说清「可用范围」。
 
 判据（渲染层，全部走真浏览器）：
-  1. chip title 含「暂无往返数据」；国内航线只剩飞猪不覆盖，携程/同程/
-     去哪儿不得再出现在「暂无」名单；
-  2. chip title 含「可用范围」，点名「携程」「飞猪仅国际」「途牛仅国内」
-     「同程仅国内」「去哪儿仅国内」；
+  1. chip title 含「暂无往返数据」；国内航线只剩飞猪不覆盖，携程/同程
+     不得再出现在「暂无」名单；去哪儿网页版已停服，必须在「暂无」名单；
+  2. chip title 含「可用范围」，点名「携程」「飞猪仅国际」等；去哪儿
+     网页版不再出现在可用范围；
   3. 无 pageerror。
 
 时序说明：`loadChannelDims()` 末尾必须重绘一次表单（实测：去掉那一行，
@@ -130,10 +130,12 @@ def test_chip_lists_channels_without_round_trip(titles):
             continue
         part = head.split("暂无往返数据", 1)[1].split("｜")[0].lstrip("：")
         names = {x.strip() for x in part.split("、") if x.strip()}
-        for name in ("携程", "同程", "去哪儿"):
+        for name in ("携程", "同程"):
             assert name not in names, (
                 "%s 国内往返已接通，不得再出现在「暂无」名单：%s"
                 % (name, names))
+            assert "去哪儿" in names, (
+                "去哪儿网页版已停服，应出现在「暂无往返」名单：%s" % names)
 
 
 def test_chip_states_the_scope_of_each_supported_channel(titles):
@@ -147,7 +149,8 @@ def test_chip_states_the_scope_of_each_supported_channel(titles):
     assert "同程" in j, "同程国内/国际往返均已接通，应出现在可用范围"
     assert "同程仅国内" not in j, (
         "同程国际往返 2026-11-03 已接通，不应再写「同程仅国内」")
-    assert "去哪儿仅国内" in j, "没说明去哪儿网页的往返只在国内"
+    assert "去哪儿仅国内" not in j, (
+        "去哪儿网页版已停服，不应再写「仅国内」可用范围")
 
 
 def test_no_page_error(titles):

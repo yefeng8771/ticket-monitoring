@@ -407,10 +407,10 @@ def test_login_window_close_saves_but_does_not_claim_success(tmp_path,
     c._write_session_state = lambda state, ts: snaps.append((state, ts))
     c.browser = _fake_browser
     c.new_page = lambda ctx: _ClosePage()
-    with pytest.raises(RuntimeError, match="关闭"):
-        c._login_window(threading.Event(), timeout_s=1)
+    # r1063 T103：用户登完直接关窗是自然动作；拿到凭证则记「已存待验」，
+    # 不再抛错。仍必须沿用旧 saved_at，不能把关窗伪装成刚刚保存。
+    assert c._login_window(threading.Event(), timeout_s=1) is True
     assert snaps and snaps[-1][0]["cookies"]
-    # 未确认关窗只落 cookie 快照，不能把 saved_at 推到"现在"
     assert snaps[-1][1] == 0
     assert c.use_mobile is False  # 桌面渠道默认仍用桌面身份
 

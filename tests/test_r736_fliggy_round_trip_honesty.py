@@ -36,7 +36,20 @@ def _src():
 
 
 def _fetch_body():
+    """取"真正干活的那个函数体"。
+
+    r1063 T151 起 `fetch` 只是薄壳（`_fetch_core` + 周历兜底），
+    往返守卫在 `_fetch_core` 里，所以这里优先取 `_fetch_core`。
+    """
     src = _src()
+    for name in ("    def _fetch_core(self", "    def fetch(self"):
+        i = src.find(name)
+        if i < 0:
+            continue
+        j = src.find("\n    def ", i + 10)
+        body = src[i:j if j > 0 else len(src)]
+        if "国内往返暂不支持" in body or "for date in dates" in body:
+            return body
     i = src.index("    def fetch(self")
     j = src.find("\n    def ", i + 10)
     return src[i:j if j > 0 else len(src)]

@@ -132,6 +132,25 @@ def _num(pid: str, plat: str, cfg: dict, key: str, default):
         return int(default)
 
 
+def is_service_closed(kind: str) -> bool:
+    """这条通路的服务是不是**已经下线**（r1063 T67）。
+
+    与"被拦"完全不同：被拦是对方不让你进，停服是**门没有了**。
+    前者等一会儿可能好，后者只能换通路。
+    """
+    k = str(kind or "").strip().lower()
+    return k in ("service_closed", "closed", "offline")
+
+
+def is_switch_worthy(kind: str) -> bool:
+    """值不值得换道（r1063 T67）：行为型被拦 + **服务下线** 都算。
+
+    行为型：同一份指纹继续用只会越用越黑 → 换 App 通路；
+    服务下线：浏览器通路彻底没有 → App 是唯一通路，更该换。
+    """
+    return bool(is_behavior_block(kind) or is_service_closed(kind))
+
+
 def plan_switch(plat: str, kind: str, cfg: dict = None, *,
                 user_data_dir: str = "user_data", now: float = None,
                 running=(), ready=None) -> tuple:
@@ -300,3 +319,104 @@ def note_switch(plat: str, app: str = "", *, ok: bool = True,
     rec["last_ok"] = bool(ok)
     data[plat] = rec
     _save(path, data)
+
+def browser_counterpart(app: str) -> str:
+    """某 App 渠道对应的**浏览器**渠道 id（反补用）；没有就返回空串。
+
+    与 `app_counterpart()` 互为反函数，同样从注册表派生，不写死映射表。
+    """
+    p = str(app or "").strip()
+    if not p.startswith("app_"):
+        return ""
+    want = p[len("app_"):]
+    try:
+        from crawlers import REGISTRY
+        if want in REGISTRY and not str(want).startswith("app_"):
+            return want
+    except Exception:
+        pass
+    return ""
+
+
+def _app_blocked(app: str, user_data_dir: str = "user_data") -> tuple:
+    """该 App 渠道现在是不是"根本跑不动"（登录墙 / 设备掉了 / 崩溃）。
+
+    返回 `(blocked, 原因)`。读的是采集侧同一份状态（`login_wall` 服务状态 +
+    `app_gone` 熔断），不另建口径——否则"面板说能跑、兜底说不跑"。
+    """
+    import os as _os
+    root = str(user_data_dir or "user_data")
+    try:
+        from core import service_state as _ss
+        if _ss.until(root, app, "login_wall") > 0:
+            return True, "登录墙未解"
+        if _ss.until(root, app, "app_gone") > 0:
+            return True, "App 不在前台/崩溃"
+    except Exception:
+        pass
+    try:
+        p = _os.path.join(root, app, "login_wall.json")
+        if _os.path.isfile(p):
+            return True, "登录墙未解"
+    except Exception:
+        pass
+    return False, ""
+
+
+def plan_backstop(app: str, cfg: dict = None, *, user_data_dir: str = "user_data",
+                  now: float = None, running=(), blocked=None) -> tuple:
+    """要不要让 `app` 这一轮由**同名浏览器渠道**反补。返回 `(browser, 原因)`。
+
+    判据（任一不满足就不补）：
+      1. 它有浏览器孪生，且孪生**不在**本轮已在跑的渠道里；
+      2. 它现在确实跑不动（登录墙 / app_gone）；
+      3. 开关开着（`app_fallback.enabled`，可按渠道覆盖）；
+      4. 今日反补次数 < `daily_switches`（沿用同一预算，防把浏览器路打爆）；
+      5. 不在冷却里（防来回横跳）。
+    """
+    now = float(now if now is not None else time.time())
+    app = str(app or "").strip()
+    if not app.startswith("app_"):
+        return "", "不是 App 渠道"
+    browser = browser_counterpart(app)
+    if not browser:
+        return "", "这家没有浏览器通路"
+    # r1063 T203：**目标必须还活着**。真机第一炮反补到了 qunar（永久停服），
+    # 请求进黑洞还要占额度。
+    try:
+        from core.advise import is_retired as _ret
+        if _ret(browser):
+            return "", "目标渠道已停服（%s），不反补" % browser
+    except Exception:
+        pass
+    if browser in tuple(str(x) for x in (running or ())):
+        return "", "浏览器通路本轮已在跑（不重复采）"
+    # blocked 优先用调用方注入的事实（来自 pacing 快照的"0 成功率且样本够"），
+    # 因为它比读文件更接近真相：携程 App 是"首页有会员、**搜索时**弹手机
+    # 验证码登录"，文件里根本没有墙。
+    if blocked is None:
+        blocked, why = _app_blocked(app, user_data_dir)
+    else:
+        blocked, why = True, "通路 0 成功率（调用方注入）"
+    if not blocked:
+        return "", "App 通路尚可用（不需要反补）"
+    if not _enabled(app, cfg):
+        return "", "换道开关已关（app_fallback.enabled=false）"
+    path = ledger_path(user_data_dir)
+    data = _load(path)
+    rec = data.get("backstop:" + app)
+    rec = rec if isinstance(rec, dict) else {}
+    day = time.strftime("%Y%m%d", time.localtime(now))
+    used = int(rec.get("day_used") or 0) if rec.get("day") == day else 0
+    cap = 6
+    try:
+        from core.strategy_params import resolve as _r
+        cap = int(_r("app_fallback.daily_switches", plat=app).value or 6)
+    except Exception:
+        pass
+    if used >= max(1, cap):
+        return "", "今日反补次数已用完（%d/%d）" % (used, cap)
+    last = float(rec.get("last_at") or 0)
+    if last and now - last < 20 * 60:
+        return "", "反补冷却中（%d 分钟）" % int((20 * 60 - (now - last)) / 60)
+    return browser, "%s → %s（%s）" % (app, browser, why)

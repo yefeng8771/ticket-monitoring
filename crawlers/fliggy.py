@@ -23,6 +23,7 @@ import httpx
 from core import net as _net
 
 from .base import (BaseCrawler, iata2, profile_headers, scoped_id)
+from .week_calendar import WeekCalendarMixin
 from .challenge import classify_text
 from .qunar import QunarCrawler as _Q
 from core.intl import airport_city_code, is_intl_route
@@ -48,7 +49,7 @@ class FliggyH5Login(BaseCrawler):
 _FLIGGY_H5_PATH = "H5"
 
 
-class FliggyCrawler(BaseCrawler):
+class FliggyCrawler(WeekCalendarMixin, BaseCrawler):
     name = "fliggy"
     use_mobile = False  # 桌面 UA（PC SSR 页面）
     # 预热入口（L3）：PC 首页让 baxia 风控下发 cookie；H5 通道走自己的槽位
@@ -209,8 +210,72 @@ class FliggyCrawler(BaseCrawler):
         return "https://www.fliggy.com/"
 
     # ==================== 主流程 ====================
+    def _week_calendar_enabled(self) -> bool:
+        """周历兜底开关：`crawler.fliggy_week_calendar`（默认 true）。"""
+        try:
+            v = (self.config or {}).get("fliggy_week_calendar")
+            # 默认关闭（r1063 T154）：兜底会真的开一次浏览器，
+            # 单元测试里不该联网；生产由 config.yaml 显式打开。
+            return False if v is None else bool(v)
+        except Exception:
+            return True
+
+    def _fill_week(self, from_city: str, to_city: str, dates: List[str],
+                   rows: List[FlightPrice], ret_date: str = ""
+                   ) -> List[FlightPrice]:
+        """国际缺日 → 跨日期低价条兜底（r1063 T151）。国内页无此结构，跳过。"""
+        if ret_date or not dates:
+            return rows
+        try:
+            if not self._week_calendar_enabled():
+                return rows
+            # r1063 T153：周历是**独立通路**，同样受链路闸门管（可单独停用）
+            _dim = ("round_trip" if ret_date else
+                    ("intl" if is_intl_route(from_city, to_city) else "domestic"))
+            if not self.path_gate("PC·周历", _dim):
+                return rows
+            if not is_intl_route(from_city, to_city):
+                return rows          # 飞猪国内列表页没有"周X ￥N"形态，实测抽不到
+            have = {str(getattr(r, "depart_date", "")) for r in rows}
+            missing = [d for d in dates if d not in have]
+            if not missing:
+                return rows
+            fc = airport_city_code(from_city.upper())
+            tc = airport_city_code(to_city.upper())
+            url = self.INTL_URL_TPL.format(fc=fc, tc=tc, d=missing[0])
+            cal = self.fetch_week_calendar(url, missing[0])
+            hit = 0
+            for d in missing:
+                p = cal.get(d)
+                if not p:
+                    continue
+                rows.append(FlightPrice(
+                    platform=self.name, from_city=from_city, to_city=to_city,
+                    depart_date=d, price=float(p), airline="", flight_no="",
+                    depart_time="", arrive_time="",
+                    extra=json.dumps({"source": "pc_week_calendar",
+                                      "price": p}, ensure_ascii=False)))
+                self.path_note("PC·周历", "ok", date=d, rows=1,
+                               detail="跨日期低价条 ￥%d（票面口径，未拆税）" % p)
+                hit += 1
+            if hit:
+                self.logger.info("[fliggy] 周历兜底：%d 日有价", hit)
+            else:
+                self.path_note("PC·周历", "empty", date=missing[0],
+                               detail="跨日期低价条也没取到价")
+        except Exception as e:
+            self.logger.warning("[fliggy] 周历兜底异常：%s", str(e)[:90])
+        return rows
+
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        """对外入口：核心采集 + 周历兜底（r1063 T151）。"""
+        rows = self._fetch_core(from_city, to_city, dates, ret_date)
+        return self._fill_week(from_city, to_city, dates, rows,
+                              ret_date=ret_date)
+
+    def _fetch_core(self, from_city: str, to_city: str, dates: List[str],
+                    ret_date: str = "") -> List[FlightPrice]:
         self.path_reset()
         # 国内往返诚实（r736）：飞猪的往返总价只在**国际**低价日历
         # （`cheapestCalendar` 的 tripType=1 + backDate）里有；国内的列表页

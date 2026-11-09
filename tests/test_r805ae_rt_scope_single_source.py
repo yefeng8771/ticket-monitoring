@@ -49,7 +49,7 @@ def test_partial_round_trip_channels_declare_scope_and_note():
     partial = {p for p, cells in CHANNEL_DIMENSIONS.items()
                if cells.get("round_trip") == "y"
                and (p, "round_trip") in DIMENSION_SCOPE}
-    assert partial == {"fliggy", "qunar", "app_qunar",
+    assert partial == {"fliggy", "app_qunar",
                       "app_tongcheng", "app_fliggy"}, (
         "「只覆盖一端」的往返渠道集合变了：%s（改声明时同步改本判据）"
         % sorted(partial))

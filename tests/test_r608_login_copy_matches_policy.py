@@ -34,8 +34,15 @@ def test_login_req_table_is_all_required():
     w = _w()
     i = w.index("const reqs={ctrip:")
     seg = w[i:i + 300]
-    assert seg.count("'必须登录'") == 6, (
-        "LOGIN_REQ 不是 6 个槽位全「必须登录」：%s" % seg[:160])
+    # r1063 T177：所有浏览器渠道统一双端 → 键从 6 个变成 9 个
+    # （ctrip/ctrip_h5/qunar/fliggy/fliggy_h5/tongcheng/tongcheng_h5/
+    #   tuniu/tuniu_h5）。断言"每个键都是必须登录"，不写死具体数量，
+    # 免得下次加槽位又要改数字。
+    import re as _re
+    keys = _re.findall(r"(\w+):'必须登录'", seg)
+    assert len(keys) >= 9, "槽位必须登录表少于 9 项：%s" % seg[:200]
+    assert "ctrip_h5" in keys and "tongcheng_h5" in keys and "tuniu_h5" in keys, (
+        "双端槽位没进「必须登录」表：%s" % keys)
     for bad in ("建议登录", "可匿名"):
         assert bad not in seg, "LOGIN_REQ 里仍有旧档位：%s" % bad
 
@@ -100,8 +107,8 @@ def test_rendered_login_page_has_no_suggestion_wording():
                  见 r608b）；这里判「每张卡都写了必须登录」。 */
               const cards=[...document.querySelectorAll('#loginRows .lgcard')];
               return {n:cards.length,
-                      allRequired:cards.every(c=>c.innerText.indexOf('必须登录')>=0),
-                      hasReq:cards.every(c=>!!c.querySelector('.lgreq')),
+                      allRequired:cards.filter(c=>c.innerText.indexOf('网页停服')<0).every(c=>c.innerText.indexOf('必须登录')>=0),
+                      hasReq:cards.filter(c=>c.innerText.indexOf('网页停服')<0).every(c=>!!c.querySelector('.lgreq')),
                       suggest:/建议/.test(txt),
                       head:txt.slice(0,60)}}""")
             b.close()
@@ -133,7 +140,8 @@ def test_dual_slot_reuses_the_shared_slot_body():
     seg = w[i:i + 900]
     # 半格走同一份 slotBody 的紧凑模式：仍复用同一函数（不会再次丢掉
     # requirement），只是省掉重复的账号段以保住五行等高（r608b）。
-    assert "[pc,h5].filter(Boolean).map(s=>slotBody(s,1))" in seg, (
+    # r1063 T177：双端分支已泛化为"任一双端卡"，不再只有飞猪那两个常量
+    assert "g.slots.map(s=>slotBody(s,1))" in seg, (
         "双端分支没有复用 slotBody（会再次丢掉 requirement）")
     assert "lgShortStatus(pc)" not in seg, (
         "双端分支仍在用自带的状态渲染（不走统一口径）")
@@ -188,7 +196,7 @@ def test_rendered_fliggy_slots_say_required():
               const cards=[...document.querySelectorAll('#loginRows .lgcard')];
               const txt=cards.map(c=>c.innerText.replace(/\s+/g,' '));
               return {n:cards.length, slots:txt,
-                missing:txt.filter(s=>s.indexOf('必须登录')<0)}}""")
+                missing:txt.filter(s=>s.indexOf('必须登录')<0&&s.indexOf('网页停服')<0)}}""")
             b.close()
     finally:
         srv.terminate()

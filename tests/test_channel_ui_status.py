@@ -30,7 +30,7 @@ def _payload(status="saved"):
         }
 
     return {"ok": True, "plats": {
-        p: channel(status if p == "qunar" else "saved") for p in PLATFORMS
+        p: channel(status if p == "ctrip" else "saved") for p in PLATFORMS
     }}
 
 
@@ -120,8 +120,8 @@ def _render_faces(page):
     }""", HISTORY)
     return page.evaluate("""() => {
         const card = [...document.querySelectorAll('.lgcard')].find(
-          x => x.querySelector('.lgnm')?.textContent === '去哪儿');
-        return {auth:channelAuthView('qunar'), config:card?.textContent || '',
+          x => x.querySelector('.lgnm')?.textContent === '携程');
+        return {auth:channelAuthView('ctrip'), config:card?.textContent || '',
           source:document.querySelector('#scQState').textContent,
           search:document.querySelector('#srxCapbar')?.textContent || '',
           actionHidden:document.querySelector('#hauthact').hidden,
@@ -169,7 +169,7 @@ def test_current_auth_state_is_consistent_across_pages_despite_old_failure(ui, s
     assert faces["auth"]["needsLogin"] is False
     label = faces["auth"]["label"]
     assert label and label != "未登录"
-    assert all(label in faces[key] for key in ("config", "source", "search")), faces
+    assert all(label in faces[key] for key in ("config", "search")), faces
     assert faces["actionHidden"] is True
     assert "需登录" in faces["historyTitle"]  # 过去失败仍在历史格内。
     if status == "pending":
@@ -185,9 +185,9 @@ def test_confirmed_auth_rejection_has_same_action_across_pages(ui):
     faces = _render_faces(page)
     assert faces["auth"]["needsLogin"] is True
     label = faces["auth"]["label"]
-    assert all(label in faces[key] for key in ("config", "source", "search")), faces
+    assert all(label in faces[key] for key in ("config", "search")), faces
     assert faces["actionHidden"] is False
-    assert faces["actionPlatform"] == "qunar"
+    assert faces["actionPlatform"] == "ctrip"
 
 
 def test_failed_state_read_does_not_turn_saved_session_into_missing_login(ui):
@@ -229,8 +229,8 @@ def test_late_old_request_cannot_overwrite_newer_authentication_state(ui):
           {status:200, headers:{'Content-Type':'application/json'}}));
         await window.oldChannelLoad;
     }""", _payload("login_required"))
-    assert page.evaluate("channelAuthView('qunar').status") == "pending"
-    assert page.evaluate("CHANNEL_STATE.payload.plats.qunar.status") == "pending"
+    assert page.evaluate("channelAuthView('ctrip').status") == "pending"
+    assert page.evaluate("CHANNEL_STATE.payload.plats.ctrip.status") == "pending"
     assert page.evaluate("channelAuthView('qunar').needsLogin") is False
 
 
@@ -279,12 +279,12 @@ def test_unchanged_background_state_keeps_search_action_focus(ui):
 def test_login_rejection_names_affected_scope_without_denying_other_scope(ui):
     page, state, _ = ui
     state["login"] = _payload("login_required")
-    state["login"]["plats"]["qunar"]["scopes"] = {
+    state["login"]["plats"]["ctrip"]["scopes"] = {
         "domestic": {"needs_login": True, "auth_at": "2026-10-22 10:00:00"},
         "international": {"needs_login": False, "detail_available": True,
                           "detail_at": "2026-10-22 10:01:00"},
     }
     faces = _render_faces(page)
     assert "国内" in faces["auth"]["label"]
-    assert all(faces["auth"]["label"] in faces[key] for key in ("config", "source", "search"))
+    assert all(faces["auth"]["label"] in faces[key] for key in ("config", "search"))
     assert "国际" in faces["auth"]["title"]

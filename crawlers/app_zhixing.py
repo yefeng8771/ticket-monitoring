@@ -80,10 +80,13 @@ class AppZhixingCrawler(AppCrawler):
               ret_date: str = "") -> List[FlightPrice]:
         # 日期超出 App 视野就直接交浏览器（能力边界，记 unsupported）：
         # App 日历只支持近未来，远期日期每条白耗 100–150 秒设备时间。
+        if self.early_skip(dates):      # 停服/需登录：不发请求
+            return []
         if self.reject_far_dates(dates):
             return []
         rt = self.runtime()
-        ok, why = rt.ensure_ready()
+        with self.timed("耗时·运行时"):
+            ok, why = rt.ensure_ready()
         if not ok:
             # 设备/运行时不可用：明确入账，绝不伪装成"没航班"
             self.path_note("android-runtime", "unsupported",
@@ -122,7 +125,8 @@ class AppZhixingCrawler(AppCrawler):
         # 它已 try/except 并记 `app-error`（含本段抛出的一切）。此处再包一层
         # 只是重复防御，且会抢在 safe_fetch 的去重判断之前多记一条。
         with rt.device_lock(owner=self.name):
-            self.prepare_device(dev)
+            with self.timed("耗时·前置"):
+                self.prepare_device(dev)
             if ret_date:
                 return self._fetch_round_trip_locked(
                     dev, from_city, to_city, dates, ret_date)
@@ -285,7 +289,8 @@ class AppZhixingCrawler(AppCrawler):
             self.logger.info("[%s] 航线未变（%s→%s），跳过重设",
                              self.name, from_city, to_city)
         else:
-            ok, detail = self._set_route(dev, from_city, to_city, dates)
+            with self.timed("耗时·导航"):
+                ok, detail = self._set_route(dev, from_city, to_city, dates)
             if not ok:
                 # 导航失败不是「已确认验证码」：blocked 会被 pacing 归
                 # captcha 并熔断 300s；真验证码由 _clear_blockers 另记。
@@ -316,19 +321,40 @@ class AppZhixingCrawler(AppCrawler):
                 self.logger.warning("[%s] 日历前页面被拦截：%s（%s）",
                                     self.name, pblock.kind, pblock.detail)
                 return []
-        long_xml = self._try_long_calendar(dev, keep_open=True)
+        # r1063 T216：**日历限频**。整窗一次覆盖 60+ 天，刷一次够当天用；
+        # 每轮都刷会把设备配额烧光，连带明细也拿不到（真机连续 5 次"有格子无价"）。
         cal_rows = []
-        if long_xml:
-            cal_rows = self._emit_from_dialog_by_xml(
-                long_xml, from_city, to_city, dates,
-                int((time.time() - started) * 1000))
+        _cal_due = True
+        try:
+            _cal_due = self._calendar_due()
+        except Exception:
+            _cal_due = True
+        if _cal_due:
+            long_xml = ""
+            with self.timed("耗时·日历"):
+                # 必须 keep_open=True：明细第一步（first=True）依赖弹层还开着
+                long_xml = self._try_long_calendar(dev, keep_open=True)
+            if long_xml:
+                cal_rows = self._emit_from_dialog_by_xml(
+                    long_xml, from_city, to_city, dates,
+                    int((time.time() - started) * 1000))
+                try:
+                    self._mark_calendar()      # 成功刷过一次就盖时间戳
+                except Exception:
+                    pass
+        else:
+            # 跳过日历但**不跳过明细**：明细是稀缺数据，不能被日历连累。
+            self.path_note("日历", "paced",
+                           detail="日历未到间隔（%d 秒），本轮只做明细"
+                                  % self._calendar_min_gap_s())
 
         # 日历价只是「每天一条最低价」，没有航班号/时刻，不能当作明细。
         # 目标日在首页 8 天条之外时，_set_route 里选不上日期，必须在这里
         # 用长窗口把日期选上（_pick_date 已按 resource-id 定位），再点
         # 「机票查询」进列表页——实测 11-05 这样能拿到 6 条真实明细。
-        detail, blocked = self._enter_detail_and_parse(
-            dev, from_city, to_city, dates)
+        with self.timed("耗时·明细"):
+            detail, blocked = self._enter_detail_and_parse(
+                dev, from_city, to_city, dates)
         if blocked:
             # 已经按拦截入账：不回退日历价，否则用户看到「有价」而
             # 实际是被人机验证挡住，问题被数据掩盖。登录归因由
@@ -337,7 +363,8 @@ class AppZhixingCrawler(AppCrawler):
             self._close_calendar(dev)
             return []
         if detail:
-            self._park_at_home(dev)
+            with self.timed("耗时·收尾"):
+                self._park_at_home(dev)
             return detail
         if cal_rows:
             self._close_calendar(dev)
@@ -425,6 +452,21 @@ class AppZhixingCrawler(AppCrawler):
             # （用户手动切到「酒店」Tab，页面是「酒店查询 / 国内·港澳台」）时
             # BACK 不触发应用内导航，只会退 App。
             xml = dev.dump() or ""
+            # r1063 T78 单次 BACK 快路径：从「航班明细」列表页回首页只需一次返回。
+            # 实测收尾原本 8–10s（Tab 切换轮询 8×(2.5s+dump)），这里先试一次
+            # BACK + 一次 dump ≈ 2.5s；回不去就原样走下面的既有梯子。
+            if "机票查询" not in xml:
+                try:
+                    dev.keyevent("KEYCODE_BACK")
+                    time.sleep(1.0)
+                    _x1 = dev.dump() or ""
+                    if "机票查询" in _x1 and "Search_Calendar_Dialog" not in _x1:
+                        self.logger.info("[%s] 收尾：一次 BACK 已回首页", self.name)
+                        return True
+                    if _x1:
+                        xml = _x1
+                except Exception:
+                    pass
             if "机票查询" not in xml:
                 tab = find(nodes(xml), "机票")
                 if tab is not None and dev.tap(tab.cx, tab.cy):
@@ -461,6 +503,31 @@ class AppZhixingCrawler(AppCrawler):
             self.path_note("日历", "parse_error",
                            detail="日历弹层未解析出格子", ms=ms)
             return []
+        # r1063 T213：**格子有、价格 0** 是最费解的一类（同一弹层 16:04 有 53 天有价，
+        # 16:20 却 63 格全无价）。落一份现场 dump，下次不用猜。
+        if not any(r.get("price") for r in rows):
+            try:
+                import os as _os
+                import time as _t
+                _d = _os.path.join(
+                    str(getattr(self, "user_data_root", "user_data")), self.name)
+                _os.makedirs(_d, exist_ok=True)
+                _fn = _os.path.join(
+                    _d, "app_cal_noprice_%s.xml" % _t.strftime("%Y%m%d_%H%M%S"))
+                with open(_fn, "w", encoding="utf-8") as _f:
+                    _f.write(xml or "")
+                _all = sorted(x for x in _os.listdir(_d)
+                              if x.startswith("app_cal_noprice_"))
+                for _old in _all[:-4]:
+                    try:
+                        _os.remove(_os.path.join(_d, _old))
+                    except Exception:
+                        pass
+                self.logger.warning(
+                    "[%s] 日历 %d 格但 0 价，现场已存 %s",
+                    self.name, len(rows), _os.path.basename(_fn))
+            except Exception:
+                pass
         return self._emit_from_dialog(rows, from_city, to_city, dates, ms)
 
     def _try_long_calendar(self, dev, keep_open: bool = False) -> str:
@@ -476,22 +543,95 @@ class AppZhixingCrawler(AppCrawler):
         try:
             from .app_zhixing_calendar import parse_date_dialog
             from .app_zhixing_nav import close_date_dialog, open_date_dialog
-            ok, detail = open_date_dialog(dev, log=self.logger)
+            _cal0 = time.time()
+            with self.timed("耗时·日历·打开"):
+                ok, detail = open_date_dialog(dev, log=self.logger)
             if not ok:
                 self.logger.info("[%s] 长窗口日历未打开：%s",
                                  self.name, detail)
                 return ""
             xml = ""
             deadline = time.time() + 15
-            while time.time() < deadline:
-                xml = dev.dump()
-                if not xml:
+            # r1063 T78：这段要能报出「dump 了几次、花了几秒」——这台设备
+            # dump 一次约 0.8–1.2s，轮询 15s 里可能全花在取树上。
+            _dumps = 0
+            _dump_s = 0.0
+            _seg0 = time.time()
+            with self.timed("耗时·日历·等价"):
+                while time.time() < deadline:
+                    _t0 = time.time()
+                    xml = dev.dump()
+                    _dump_s += time.time() - _t0
+                    _dumps += 1
+                    if not xml:
+                        time.sleep(1)
+                        continue
+                    rows = parse_date_dialog(xml)
+                    if rows and any(r.get("price") for r in rows):
+                        break
                     time.sleep(1)
-                    continue
-                rows = parse_date_dialog(xml)
-                if rows and any(r.get("price") for r in rows):
-                    break
-                time.sleep(1)
+            # r1063 T214：**有格子但一个价都没有** → 再等 6s 重取一次。
+            # 证据：app_cal_noprice_20261109_162218.xml 里 63 格全无 ¥，
+            # 既没登录墙也没错页，就是价格还没渲染。
+            try:
+                _rows_now = parse_date_dialog(xml) if xml else []
+                if _rows_now and not any(r.get("price") for r in _rows_now):
+                    time.sleep(6)
+                    xml2 = dev.dump() or ""
+                    _rows2 = parse_date_dialog(xml2) if xml2 else []
+                    if _rows2 and any(r.get("price") for r in _rows2):
+                        xml = xml2
+                        _dumps += 1
+                        self.logger.info(
+                            "[%s] 日历 0 价 → 再等 6s 后取到 %d 格有价",
+                            self.name,
+                            len([r for r in _rows2 if r.get("price")]))
+                    else:
+                        # r1063 T215：还是 0 价 → **先真搜一次**再回来读。
+                        # 成功的两次都紧跟真实查询之后；冷启动直接开日历则全空。
+                        self.logger.warning(
+                            "[%s] 日历仍 0 价（%d 格）→ 先真搜一次再读",
+                            self.name, len(_rows2 or _rows_now))
+                        try:
+                            from .app_zhixing_nav import (close_date_dialog,
+                                                          find, nodes)
+                            close_date_dialog(dev)
+                            xml_l = dev.dump() or ""
+                            btn = find(nodes(xml_l), "机票查询")
+                            if btn is not None and dev.tap(btn.cx, btn.cy):
+                                time.sleep(6)
+                                dev.dump()            # 等列表页把价拿到
+                                time.sleep(2)
+                            ok2, _d2 = open_date_dialog(dev, log=self.logger)
+                            if ok2:
+                                xml3 = ""
+                                _dl = time.time() + 12
+                                while time.time() < _dl:
+                                    xml3 = dev.dump() or ""
+                                    _r3 = parse_date_dialog(xml3) if xml3 else []
+                                    if _r3 and any(x.get("price") for x in _r3):
+                                        break
+                                    time.sleep(1.5)
+                                _r3 = parse_date_dialog(xml3) if xml3 else []
+                                if _r3 and any(x.get("price") for x in _r3):
+                                    xml = xml3
+                                    _dumps += 1
+                                    self.logger.info(
+                                        "[%s] 搜一次后日历取到 %d 格有价",
+                                        self.name,
+                                        len([x for x in _r3 if x.get("price")]))
+                        except Exception as _e2:
+                            self.logger.info(
+                                "[%s] 0 价兜底失败：%s", self.name,
+                                type(_e2).__name__)
+            except Exception:
+                pass
+            self.logger.info("[%s] 日历等价：dump %d 次共 %.1fs（本段 %.1fs）",
+                             self.name, _dumps, _dump_s, time.time() - _seg0)
+            self.logger.info(
+                "[%s] _try_long_calendar 实耗 %.1fs（打开 %.1fs + 等价 %.1fs 已各记账）",
+                self.name, time.time() - _cal0,
+                0.0, time.time() - _seg0)
             if not keep_open:
                 close_date_dialog(dev)   # 关掉，别把状态留给下一轮
             return xml
@@ -508,29 +648,67 @@ class AppZhixingCrawler(AppCrawler):
         差别只在覆盖长度（弹层跨月，首页约 8 天）。
         """
         wanted = set(dates or [])
-        out: List[FlightPrice] = []
+        # r1063 T210：**整窗收割**。实测弹层一次渲染 61 格、其中 53 格有价，
+        # 而旧逻辑只留订阅的那 1 天，其余全丢——同一屏已经拿到的数据，
+        # 多收不增加任何请求与风控暴露。
+        _cfg = self.config or {}
+        _harvest = bool(_cfg.get("app_calendar_harvest_all", True))
+        try:
+            _cap = int(_cfg.get("app_calendar_harvest_cap", 62) or 62)
+        except (TypeError, ValueError):
+            _cap = 62
+        _out_wanted: List[FlightPrice] = []
+        _out_extra: List[FlightPrice] = []
+        _extra_days = 0
         for row in dialog_rows:
             ymd = row["date"]
-            if wanted and ymd not in wanted:
-                continue
+            _is_wanted = (not wanted) or (ymd in wanted)
             price = row.get("price")
             if price is None:
+                continue          # 无价格子既不算"收了"，也不算"另含"
+            if not _is_wanted and not _harvest:
                 continue
-            out.append(FlightPrice(
+            _fp = FlightPrice(
                 platform=self.name,
                 from_city=from_city, to_city=to_city,
                 depart_date=ymd, price=float(price),
                 extra=_cal_extra(price, ymd),
                 prov=f"app:{_APP_PKG}:calendar-dialog",
-            ))
+            )
+            if _is_wanted:
+                _out_wanted.append(_fp)
+            elif len(_out_wanted) + len(_out_extra) < _cap:
+                _out_extra.append(_fp)
+                _extra_days += 1
+        # **订阅日期优先**：调用方默认第一行就是"要的那天"（契约，用了很久）。
+        out = _out_wanted + _out_extra[:max(0, _cap - len(_out_wanted))]
 
         priced = [r for r in dialog_rows if r.get("price")]
         covered = {r["date"] for r in dialog_rows}
         outside = len([d for d in wanted if d and d not in covered])
         detail = f"长窗口日历 {len(out)} 天 / 已渲染 {len(covered)} 格" \
                  f"（有价 {len(priced)}）"
+        if _extra_days:
+            detail += f" · 另含 {_extra_days} 格非订阅日期（日历价，非明细）"
         if outside:
             detail += f" · {outside} 个目标日期未渲染"
+        # r1063 T217：**国际档日历不渲染价格**（实测：国际 59–63 格全无 ¥，
+        # 国内同一弹层 53–62 格有价）。这是能力边界，如实记 unsupported，
+        # 免得每轮白开一次弹层还误伤"日历"这条通路的成功率。
+        _intl = False
+        try:
+            from core.intl import is_intl_route
+            _intl = bool(is_intl_route(from_city, to_city))
+        except Exception:
+            _intl = False
+        if _intl and not out:
+            self.path_note("日历", "unsupported",
+                           rows=0, date=(dates[0] if dates else ""),
+                           detail="智行国际日历不渲染价格（%s 格全无价），交浏览器"
+                                  % len(priced), ms=ms,
+                           url=f"android://{_APP_PKG}?view=calendar")
+            self.logger.info("[%s] 国际航线日历无价，按能力边界记账", self.name)
+            return out
         self.path_note("日历", "calendar", rows=len(out),
                        date=(dates[0] if dates else ""), detail=detail, ms=ms,
                        url=f"android://{_APP_PKG}?view=calendar")
@@ -625,8 +803,9 @@ class AppZhixingCrawler(AppCrawler):
                 return [], block
             if "Search_Calendar_Dialog" not in xml:
                 return [], None
-            ok, detail = _pick_date(dev, nodes(xml), target,
-                                    log=self.logger, xml=xml)
+            with self.timed("耗时·明细·选日"):
+                ok, detail = _pick_date(dev, nodes(xml), target,
+                                        log=self.logger, xml=xml)
             if not ok:
                 self.logger.info("[%s] 明细前置选日期失败：%s",
                                  self.name, detail)
@@ -639,19 +818,27 @@ class AppZhixingCrawler(AppCrawler):
             if not dev.tap(btn.cx, btn.cy):
                 return [], None
             deadline = time.time() + 30
-            while time.time() < deadline:
-                xml = dev.dump() or ""
-                if not xml:
-                    time.sleep(2)
-                    continue
-                xml, block = self._clear_blockers(dev, xml)
-                if block.blocking:
-                    return [], block
-                if detect_state(xml) == "ok":
-                    rows = parse_flight_rows(xml)
-                    if any(r.get("price") for r in rows):
-                        return rows, None
-                time.sleep(2)
+            # 自适应轮询（r1063 T79）：列表页常 2–3s 出价，固定 sleep(2)
+            # 只能"到点才能看"。改成 0.5→0.8→1.2→1.6→2.0 递增，
+            # 快就早发现（省 1–2s），慢也不比原来差。
+            _waits = [0.5, 0.8, 1.2, 1.6, 2.0]
+            _k = 0
+            with self.timed("耗时·明细·等列表"):
+                while time.time() < deadline:
+                    xml = dev.dump() or ""
+                    if not xml:
+                        time.sleep(_waits[min(_k, len(_waits) - 1)])
+                        _k += 1
+                        continue
+                    xml, block = self._clear_blockers(dev, xml)
+                    if block.blocking:
+                        return [], block
+                    if detect_state(xml) == "ok":
+                        rows = parse_flight_rows(xml)
+                        if any(r.get("price") for r in rows):
+                            return rows, None
+                    time.sleep(_waits[min(_k, len(_waits) - 1)])
+                    _k += 1
             return [], None
         except Exception as e:
             self.logger.info("[%s] 明细路径异常：%s", self.name,

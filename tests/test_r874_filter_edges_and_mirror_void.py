@@ -90,7 +90,7 @@ SNAP = r"""() => {
   const g = document.getElementById('srxGrid');
   const list = document.querySelector('#srxGrid > .srx-list');
   const mir = document.querySelector('#srxGrid .srx-mirror');
-  const fb = document.querySelector('#srxGrid .srx-mirror .srx-foldbtn');
+  const fb = document.querySelector('#srxMirrorFold');
   const gr = R(g), lr = R(list);
   return {cols: getComputedStyle(g).gridTemplateColumns,
           gapRight: +(gr.r - lr.r).toFixed(1),
@@ -168,13 +168,13 @@ def ui():
                 pg.wait_for_timeout(1900)
                 before = pg.evaluate(SNAP)
                 pg.evaluate("""() => {
-                  const b = document.querySelector('#srxGrid .srx-foldbtn[data-foldtarget="srxMirror"]');
+                  const b = document.getElementById('srxMirrorFold');
                   if (b) b.click();
                 }""")
                 pg.wait_for_timeout(700)
                 folded = pg.evaluate(SNAP)
                 pg.evaluate("""() => {
-                  const b = document.querySelector('#srxGrid .srx-foldbtn[data-foldtarget="srxMirror"]');
+                  const b = document.getElementById('srxMirrorFold');
                   if (b) b.click();
                 }""")
                 pg.wait_for_timeout(700)

@@ -197,8 +197,14 @@ def test_workspace_focus_float_input_and_browser_isolation():
                 pg.wait_for_timeout(250)
                 bm = _rect(pg, "#lgModal")
                 assert bm and 500 <= bm["w"] <= 560, bm
+                # r1063 T195：双端开窗已泛化为 lgOpenDual(plat)，kind 统一
+                # 记 'dual'，由 dataset.plat 标明是哪一家（原来只记 'fliggy'）。
+                # 判据同步加强：kind 必须是 dual，且 plat 必须是 fliggy。
                 assert pg.evaluate(
-                    "()=>document.getElementById('lgModal').dataset.kind") == "fliggy"
+                    "()=>document.getElementById('lgModal').dataset.kind") == "dual"
+                assert pg.evaluate(
+                    "()=>document.getElementById('lgModal').dataset.plat"
+                ) == "fliggy"
                 pg.click("#lgModal .x")
                 pg.wait_for_timeout(150)
 

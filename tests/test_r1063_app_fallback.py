@@ -21,8 +21,10 @@ from core import failover as fo
 def _clean():
     from core import strategy_params as sp
     sp.invalidate()
+    sp.set_config({})
     yield
     sp.invalidate()
+    sp.set_config({})
 
 
 def test_app_counterpart_is_derived_not_hardcoded():
@@ -63,11 +65,10 @@ def test_plan_switch_respects_switch_off(tmp_path):
 
 
 def test_daily_cap_and_cooldown_prevent_thrashing(tmp_path):
-    from core import strategy_params as _sp
-    _sp.invalidate()          # 隔离上一用例留下的全局参数覆盖
-    _sp.set_config({})
     d = str(tmp_path)
-    now = 1_700_000_000.0
+    # 取 UTC 正午，避免 `now+7200` 在 UTC 跨过零点、把“每日上限”
+    # 读成新的一天（本地 +8 时区不跨，CI 的 UTC 会跨）。
+    now = 1_700_050_400.0
     # ① 默认参数：第一次可以换；换完立刻再问就被冷却挡住（不许 PC→App→PC 横跳）
     app, _ = fo.plan_switch("ctrip", "captcha", {}, user_data_dir=d, now=now)
     assert app == "app_ctrip"
@@ -86,10 +87,8 @@ def test_daily_cap_and_cooldown_prevent_thrashing(tmp_path):
     a1, _ = fo.plan_switch("ctrip", "captcha", {}, user_data_dir=d2, now=now)
     assert a1 == "app_ctrip"
     fo.note_switch("ctrip", "app_ctrip", ok=True, user_data_dir=d2, now=now)
-    # 用 +60s 而不是 +2h：1.7e9 在 UTC 是 22:13，+2h 会跨日把「今日次数」清零，
-    # 在 CI（UTC）上恒假失败；cooldown_s=0 时 +60s 已足够验证上限。
     a2, why3 = fo.plan_switch("ctrip", "captcha", {}, user_data_dir=d2,
-                              now=now + 60)
+                              now=now + 7200)
     assert a2 == "" and "上限" in why3, why3
 
 

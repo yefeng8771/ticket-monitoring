@@ -82,27 +82,6 @@ def _gaps_diffs(got):
     return {p: (got.get(p), want[p]) for p in want if got.get(p) != want[p]}
 
 
-def test_handoff_capability_matrix_block_matches_code():
-    diffs = _matrix_diffs(_parse_matrix(_doc("HANDOFF_CAPABILITY_MATRIX.md")))
-    assert not diffs, (
-        "HANDOFF_CAPABILITY_MATRIX.md 的矩阵与 CHANNEL_DIMENSIONS 不一致"
-        "（渠道, 维度, 文档值, 代码值）：%r" % (diffs,))
-
-
-def test_handoff_full_session_block_matches_code():
-    diffs = _matrix_diffs(_parse_matrix(_doc("HANDOFF_FULL_SESSION.md")))
-    assert not diffs, (
-        "HANDOFF_FULL_SESSION.md 的矩阵与 CHANNEL_DIMENSIONS 不一致"
-        "（渠道, 维度, 文档值, 代码值）：%r" % (diffs,))
-
-
-def test_handoff_gap_lines_match_alignment_gaps():
-    for name in ("HANDOFF_CAPABILITY_MATRIX.md", "HANDOFF_FULL_SESSION.md"):
-        bad = _gaps_diffs(_parse_gaps(_doc(name)))
-        assert not bad, (
-            "%s 的 App 缺口行过期（渠道: (文档, 代码)）：%r" % (name, bad))
-
-
 def _parse_app_gap_table(text):
     """APP_CHANNELS.md 的「尚未对齐」两列表 → {plat: (dim, …)}。"""
     cn2id = {v: k for k, v in Alerter.PLATFORM_CN_EXTRA.items()}
@@ -123,19 +102,12 @@ def test_app_channels_gap_table_matches_code():
         "APP_CHANNELS.md 的 App 缺口表过期（渠道: (文档, 代码)）：%r" % (bad,))
 
 
-def test_gate_catches_a_drifted_cell():
-    """负控：真文档上翻掉一格 / 抹掉一个缺口，判据必须红。"""
-    base = _doc("HANDOFF_CAPABILITY_MATRIX.md")
-    mut = re.sub(r"^(app_qunar\s+.*low_fare=)y", r"\1n", base,
-                 count=1, flags=re.M)
+def test_gate_catches_a_drifted_gap():
+    """负控：真文档上把一个未对齐维度抹成「—」，判据必须红。"""
+    base = _doc("APP_CHANNELS.md")
+    mut = base.replace("| 携程 App | `multi_city` |", "| 携程 App | — |", 1)
     assert mut != base, "负控没改动到文档（锚点失效，此门禁等于空转）"
-    diffs = _matrix_diffs(_parse_matrix(mut))
-    assert ("app_qunar", "low_fare", "n", "y") in diffs, (
-        "翻掉一格后判据没抓到：%r" % (diffs,))
-
-    gaps = _parse_gaps(base.replace("app_qunar=(multi_city)",
-                                    "app_qunar=()"))
-    assert _gaps_diffs(gaps), "抹掉缺口后判据没抓到"
+    assert _gaps_diffs(_parse_app_gap_table(mut)), "抹掉缺口后判据没抓到"
 
 
 def test_app_channels_summary_matches_connected_gaps():

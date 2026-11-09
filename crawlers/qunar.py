@@ -378,6 +378,10 @@ class QunarCrawler(BaseCrawler):
     # _q 是 qmark SDK 读取的 uname（登录后才有），用作采集态回写判据。
     AUTH_COOKIES = ("_q",)
 
+    # 网页版停服记忆（r1063 T67）：命中一次就记住，窗口期内不再白跑一秒
+    SERVICE_CLOSED_FILE = "service_closed.json"
+    SERVICE_PROBE_S = 6 * 3600
+
     def _open_wait_backoff(self, kind: str = "intl") -> int:
         """预算用尽后**开启/拉长**退避窗口，返回窗口秒数（r1063 T59）。
 
@@ -608,6 +612,10 @@ class QunarCrawler(BaseCrawler):
         # **本轮等待预算的计时起点**：`fetch()` 是"每条航线一次"，而等待预算
         # 要按"一整轮"算，所以用类级累计 + 时间窗（窗口 = 一轮的量级）。
         self._reset_wait_budget_if_stale()
+        # 网页版停服记忆（r1063 T67）：窗口期内零请求直接让位——一次查询
+        # 百秒级，明知停服还去跑是纯浪费；到期自动重探一次（万一恢复）。
+        if self.service_closed_skip(dates):
+            return []
         if _is_intl and self._intl_quiet_until > _t.time():
             # **配额让位要轮转，不能永远饿死后面的航线**（2026-11-04）。
             #
@@ -3398,9 +3406,29 @@ class QunarCrawler(BaseCrawler):
                 _scene = self.save_parse_scene(
                     bodies, tag="intl_%s" % str(date)[-5:],
                     anchors=("transCity", "flight", "price", "class="))
-                self.path_note("H5", "error", date=date,
-                               detail="国际列表有响应但未解析出价格｜"
-                                      + self.scene_sig(_scene))
+                # r1063 T67：**网页版停服**要单独识别——它不是"解析没对上"，
+                # 而是"这条通路已经不存在了"，重试再多次也不会好。
+                # 现场实证见 `user_data/qunar/parse_fail/`：errorMsg 里写着
+                # 「去哪儿旅行网页版机票查询及预订服务已停止提供，请前往…App」。
+                from crawlers.base import is_service_closed_body
+                _is_closed, _closed = is_service_closed_body(bodies)
+                if _is_closed:
+                    self.last_scene["service_closed"] = True
+                    # 用户确认：去哪儿网页版机票查询是**永久**停服（PC 更早就停了）
+                    self.mark_service_closed(_closed, permanent=True)
+                    self.path_note(
+                        "H5", "unsupported", date=date,
+                        detail="去哪儿网页版已停服（请走 App）：" + _closed[:80])
+                    try:
+                        from core import degraded as _dg
+                        _dg.note("service_closed", self.name,
+                                 "网页版停服：%s" % _closed[:80])
+                    except Exception:
+                        pass
+                else:
+                    self.path_note("H5", "error", date=date,
+                                   detail="国际列表有响应但未解析出价格｜"
+                                          + self.scene_sig(_scene))
                 # 连续两次解析失败 → 记"疑似改版"（健康页降级那行会说）
                 if not _scene.get("anchors", {}).get("class="):
                     try:
@@ -3431,7 +3459,6 @@ class QunarCrawler(BaseCrawler):
         return obj
 
     def _save_token(self, snap: dict):
-        os.makedirs(os.path.dirname(self._token_path), exist_ok=True)
         data = {
             "headers": snap["headers"],
             "body_template": snap["body_template"],
@@ -3439,6 +3466,7 @@ class QunarCrawler(BaseCrawler):
             "updated_at": time.time(),
         }
         try:
+            os.makedirs(os.path.dirname(self._token_path), exist_ok=True)
             with open(self._token_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -3448,10 +3476,10 @@ class QunarCrawler(BaseCrawler):
         """保存原始响应文本到 debug 目录，用于排查价格异常。"""
         if not self.debug or not text:
             return
-        os.makedirs(self.debug_dir, exist_ok=True)
-        safe_tag = re.sub(r'[^\w]', '_', tag)
-        path = os.path.join(self.debug_dir, f"qunar_raw_{safe_tag}.txt")
         try:
+            os.makedirs(self.debug_dir, exist_ok=True)
+            safe_tag = re.sub(r'[^\w]', '_', tag)
+            path = os.path.join(self.debug_dir, f"qunar_raw_{safe_tag}.txt")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
             self.logger.info("[qunar] 已保存响应: %s (len=%d)", path, len(text))

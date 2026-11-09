@@ -45,16 +45,24 @@ def _ticket(plat="ctrip", task_id="t1", leg=0):
 
 
 def test_takeover_urls_for_five_channels():
+    """接管/挑战窗口打开的是**该端登录入口**，不是"查看详情"深链。
+
+    r1063 T70：旧实现优先用 `Alerter._build_view_url`（那是给推送里的
+    "查看详情"用的），它给 ctrip/qunar/tongcheng/tuniu 的都是 `m.*` 移动域——
+    于是 PC 端弹窗弹成 H5，用户读作"弹错端"。现在统一走
+    `channel_links.login_entry_url(plat, "pc")`，PC 就给 PC 页。
+    """
     import webui
+    from core.channel_links import login_entry_url
     args = ("SHA", "PEK", "上海", "北京", "2026-10-26")
     urls = {p: webui._probe_takeover_url(p, *args)
             for p in ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu")}
-    assert "m.ctrip.com" in urls["ctrip"]
-    assert "m.flight.qunar.com" in urls["qunar"]
-    assert "sjipiao.fliggy.com" in urls["fliggy"]
-    assert "m.ly.com" in urls["tongcheng"]
-    assert "m.tuniu.com" in urls["tuniu"]
-    assert all(u.startswith("https://") for u in urls.values())
+    for plat, got in urls.items():
+        assert got.startswith("https://"), (plat, got)
+        # 单一真源：与登录入口表逐字一致
+        assert got == login_entry_url(plat, "pc"), (plat, got)
+        # PC 入口不得是移动域（这正是用户报的那个 bug）
+        assert "://m." not in got, (plat, got)
 
 
 def test_ticket_created_for_blocked_path_and_visible_in_task():
@@ -112,6 +120,10 @@ def test_open_challenge_window_and_skip(monkeypatch):
     assert r["ok"] is True
     assert t["status"] == "window_open"
     assert t["expires_at"] > time.time()
+    # 开窗在后台线程里：等它把 url 落到 events（否则偶发读到 None）
+    _dl = time.time() + 3
+    while not events.get("url") and time.time() < _dl:
+        time.sleep(0.02)
     assert events.get("url") == t["url"]
     r2 = webui._probe_skip_challenge(t["id"])
     assert r2["ok"] is True and t["status"] == "skipped"

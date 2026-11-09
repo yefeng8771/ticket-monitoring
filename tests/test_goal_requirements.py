@@ -25,7 +25,9 @@ def _p():
 def test_goal_a_all_vendors_require_login():
     """统一「必须登录」，废弃「建议登录」。"""
     from core.login_slots import LOGIN_SLOTS, LOGIN_SLOT_ORDER
-    assert len(LOGIN_SLOT_ORDER) == 6
+    # r1063 T82：四家浏览器渠道各 PC/H5 两格 + 去哪儿停服说明位 = 9。
+    # 停服位（qunar）保留 requirement 文案但界面标「已停服」，不劝人登录。
+    assert len(LOGIN_SLOT_ORDER) == 9
     assert all(LOGIN_SLOTS[k].get("requirement") == "必须登录"
                for k in LOGIN_SLOT_ORDER)
     w = _w()

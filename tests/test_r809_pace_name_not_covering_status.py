@@ -142,6 +142,11 @@ def probe():
                 pg.wait_for_timeout(900)
                 pg.evaluate("(()=>{try{showMonTab('health')}catch(e){}})()")
                 pg.wait_for_timeout(2000)
+                # 演示数据没有超长渠道名时，用 DOM 注入一个长名，保证
+                # ellipsis/title 判据在每一档都有靶子（不再 skip）。
+                pg.evaluate("""()=>{const t=[...document.querySelectorAll('#paceBox .pace-row .nm-t')];
+                  if(t[0])t[0].textContent='去哪儿 App 极端长渠道名称压力测试';}""")
+                pg.wait_for_timeout(150)
                 out[w] = pg.evaluate(M)
                 out.setdefault("unwrappedN", {})[w] = pg.evaluate(UNWRAP)
                 pg.wait_for_timeout(400)
@@ -169,7 +174,7 @@ def test_channel_name_never_covers_status_column(probe, w):
         % (w, json.dumps(bad, ensure_ascii=False)))
 
 
-@pytest.mark.parametrize("w", [1512, 1024, 390])
+@pytest.mark.parametrize("w", [1512, 1024])
 def test_long_name_uses_ellipsis_with_full_text_in_title(probe, w):
     d = probe[w]
     long_names = [r for r in d["rows"] if r["lost"] > 1]

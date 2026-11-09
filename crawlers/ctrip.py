@@ -21,6 +21,7 @@ from core.flightnorm import AIRPORT_NAME_CN
 from core.intl import (INTL_CITY_NAME, airport_city_code, is_intl_route,
                        tz_offset_min)
 from .base import BaseCrawler, iata2, iata3
+from .week_calendar import WeekCalendarMixin
 from .challenge import classify_text
 
 _LOG = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ _RE_PID_CARRY_A = re.compile(r"^carryOnLuggageMaxAmount_(\d+)$")
 _PLANEAGE_COARSE = "5"
 
 
-class CtripCrawler(BaseCrawler):
+class CtripCrawler(WeekCalendarMixin, BaseCrawler):
     name = "ctrip"
     use_mobile = True  # 移动端 H5
 
@@ -144,8 +145,72 @@ class CtripCrawler(BaseCrawler):
         from core.login_slots import CTRIP_LOGIN_URL
         return CTRIP_LOGIN_URL
 
+    def _week_calendar_enabled(self) -> bool:
+        """周历兜底开关：`crawler.ctrip_week_calendar`（默认 true）。"""
+        try:
+            v = (self.config or {}).get("ctrip_week_calendar")
+            # 默认关闭（r1063 T154）：兜底会真的开一次浏览器，
+            # 单元测试里不该联网；生产由 config.yaml 显式打开。
+            return False if v is None else bool(v)
+        except Exception:
+            return True
+
+    def _fill_week(self, from_city: str, to_city: str, dates: List[str],
+                   rows: List[FlightPrice], ret_date: str = ""
+                   ) -> List[FlightPrice]:
+        """把"列表/接口没拿到"的日期，用跨日期低价条补上（r1063 T150）。"""
+        if ret_date or not dates:
+            return rows
+        try:
+            if not self._week_calendar_enabled():
+                return rows
+            # r1063 T153：周历是**独立通路**，同样受链路闸门管（可单独停用）
+            _dim = ("round_trip" if ret_date else
+                    ("intl" if is_intl_route(from_city, to_city) else "domestic"))
+            if not self.path_gate("PC·周历", _dim):
+                return rows
+            have = {str(getattr(r, "depart_date", "")) for r in rows}
+            missing = [d for d in dates if d not in have]
+            if not missing:
+                return rows
+            fc = airport_city_code(from_city.upper())
+            tc = airport_city_code(to_city.upper())
+            tpl = (self.URL_LIST_INTL if is_intl_route(from_city, to_city)
+                   else self.URL_LIST_DOM)
+            url = tpl.format(from_city=fc, to_city=tc, date=missing[0])
+            cal = self.fetch_week_calendar(url, missing[0])
+            hit = 0
+            for d in missing:
+                p = cal.get(d)
+                if not p:
+                    continue
+                rows.append(FlightPrice(
+                    platform=self.name, from_city=from_city, to_city=to_city,
+                    depart_date=d, price=float(p), airline="", flight_no="",
+                    depart_time="", arrive_time="",
+                    extra=json.dumps({"source": "pc_week_calendar",
+                                      "price": p}, ensure_ascii=False)))
+                self.path_note("PC·周历", "ok", date=d, rows=1,
+                               detail="跨日期低价条 ￥%d（票面口径，未拆税）" % p)
+                hit += 1
+            if hit:
+                self.logger.info("[ctrip] 周历兜底：%d 日有价", hit)
+            else:
+                self.path_note("PC·周历", "empty", date=missing[0],
+                               detail="跨日期低价条也没取到价")
+        except Exception as e:
+            self.logger.warning("[ctrip] 周历兜底异常：%s", str(e)[:90])
+        return rows
+
     def fetch(self, from_city: str, to_city: str, dates: List[str],
               ret_date: str = "") -> List[FlightPrice]:
+        """对外入口：核心采集 + 周历兜底（r1063 T150）。"""
+        rows = self._fetch_core(from_city, to_city, dates, ret_date)
+        return self._fill_week(from_city, to_city, dates, rows,
+                              ret_date=ret_date)
+
+    def _fetch_core(self, from_city: str, to_city: str, dates: List[str],
+                    ret_date: str = "") -> List[FlightPrice]:
         self.path_reset()
         # 往返（r815i）：PC `round-...&containstax=1` 列表页在受信
         # profile 下直出「¥N起 / 产品往返总价标签 / 选为去程」卡片，价格是

@@ -40,6 +40,8 @@ def test_login_guide_urls_map():
     # （登录控件 0 个）——用户点「弹窗登录」看到的是拦截页，读作「登不了」。
     # 改到 passport 登录页，且必须与登录卡同源（两处各写一份会再漂移）。
     from core.login_slots import LOGIN_SLOTS
+    # 槽位入口 = passport 登录表单（实测能渲染账密/验证码）；
+    # "PC 页"由 channel_links.LOGIN_ENTRY 承担（接管窗口打开 flight.tuniu.com）。
     assert TuniuCrawler({}, lg).login_url() == "https://passport.tuniu.com/login"
     assert (TuniuCrawler({}, lg).login_url()
             == LOGIN_SLOTS["tuniu"]["login_url"]), \

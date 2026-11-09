@@ -2,7 +2,7 @@
 
 > 日期：2026-10-29
 > 状态：待用户评审
-> 前置实测：`docs/MOBILE_RUNTIME_VERIFICATION.md`、`docs/MOBILE_ZHIXING_A12_RESULT.md`、`docs/MOBILE_MUMU_ACCEPTANCE.md`
+> 前置实测：docs/MOBILE_RUNTIME_VERIFICATION.md（已删除，历史引用）、docs/MOBILE_ZHIXING_A12_RESULT.md（已删除，历史引用）、docs/MOBILE_MUMU_ACCEPTANCE.md（已删除，历史引用）
 
 ## 1. 目标与边界
 

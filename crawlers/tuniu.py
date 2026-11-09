@@ -216,6 +216,13 @@ class TuniuCrawler(BaseCrawler):
 
     PC_URL_TPL = ("https://flight.tuniu.com/domestic/list/"
                   "{fc}_{tc}_ST_1_0_0/?start={date}")
+    # r1063 T146：国际 PC 列表页（用户实测可出价，与 domestic 对称）。
+    # 单程 type=1；往返 type=2 需要 arrvDate。
+    INTL_PC_URL_TPL = ("https://flight.tuniu.com/intl/list/"
+                       "{fc}_{tc}_1_0_0?deptDate={date}&type=1&cabinClass=0")
+    INTL_PC_URL_TPL_RT = ("https://flight.tuniu.com/intl/list/"
+                          "{fc}_{tc}_1_0_0?deptDate={date}&type=2"
+                          "&cabinClass=0&arrvDate={ret}")
     # 途牛 PC 对远期日期更容易触发软风控（2026-11-02 用户实测）；PC 只查
     # 近 30 天，远日期交给 H5/API，避免用一次高风险请求换空结果。
     PC_MAX_AHEAD_DAYS = 30
@@ -573,6 +580,226 @@ class TuniuCrawler(BaseCrawler):
             k = (r["code"], r["depTime"], r["arrTime"], r["price"])
             uniq.setdefault(k, r)
         return list(uniq.values())
+
+    # 通用抽取：不猜具体 class，只要求"元素在 flight 容器里且文案带 ¥"。
+    # 结构未知时比"写死选择器"可靠；解析仍在 Python 侧做（好测）。
+    INTL_PC_ITEMS_JS = r"""
+    () => {
+      const out = [];
+      const nodes = document.querySelectorAll(
+        '[class*="flight"], [class*="Flight"], .J-flightlist li');
+      nodes.forEach(el => {
+        const t = (el.innerText || el.textContent || '')
+          .replace(/\s+/g, ' ').trim();
+        if (!t || t.length < 6 || t.length > 400) return;
+        if (!/¥|￥/.test(t)) return;
+        if (!/\d{2}:\d{2}/.test(t)) return;
+        out.push(t);
+      });
+      const uniq = [];
+      const seen = new Set();
+      for (const t of out) { if (!seen.has(t)) { seen.add(t); uniq.push(t); } }
+      return uniq.slice(0, 200);
+    }
+    """
+
+    @classmethod
+    def intl_pc_url(cls, fc: str, tc: str, date: str, ret_date: str = "") -> str:
+        """国际 PC 列表页 URL 单源（往返带 arrvDate）。"""
+        if ret_date:
+            return cls.INTL_PC_URL_TPL_RT.format(fc=fc, tc=tc, date=date,
+                                                 ret=ret_date)
+        return cls.INTL_PC_URL_TPL.format(fc=fc, tc=tc, date=date)
+
+    def _intl_pc_enabled(self) -> bool:
+        """国际 PC 通路开关：`crawler.tuniu_intl_pc`（默认 true）。"""
+        try:
+            from core import strategy_params as _sp
+            return bool(float(_sp.resolve("tuniu_intl_pc", plat=self.name).value))
+        except Exception:
+            pass
+        try:
+            v = (self.config or {}).get("tuniu_intl_pc")
+            return True if v is None else bool(v)
+        except Exception:
+            return True
+
+    # 顶部周低价日历：形如 "11-13 周五 ￥470"。不依赖具体 class，只认文本形态。
+    PC_WEEK_JS = r"""
+    () => {
+      const out = [];
+      document.querySelectorAll('li, div, a, span').forEach(el => {
+        const t = (el.innerText || el.textContent || '')
+          .replace(/\s+/g, ' ').trim();
+        if (!t || t.length > 40) return;
+        const m = t.match(/(\d{2})-(\d{2})\s*周[一二三四五六日]\s*[¥￥]\s*(\d{2,6})/);
+        if (m) out.push([m[1] + '-' + m[2], parseInt(m[3], 10)]);
+      });
+      const map = {};
+      for (const [d, p] of out) {
+        if (!(d in map) || p < map[d]) map[d] = p;
+      }
+      return Object.entries(map).map(([d, p]) => [d, p]);
+    }
+    """
+
+    @staticmethod
+    def _week_to_dates(anchor_date: str, pairs) -> dict:
+        """把周历的 `MM-DD → 价` 补成 `YYYY-MM-DD → 价`（含跨年）。
+
+        12 月锚点看到次年 1 月时补一年；非法项直接跳过（**不能抛**，
+        否则一条脏数据会让整周兜底失效）。
+        """
+        out = {}
+        try:
+            year = str(anchor_date)[:4]
+            anchor_mm = int(str(anchor_date)[5:7])
+        except Exception:
+            return out
+        for md, price in (pairs or []):
+            try:
+                mm = int(str(md).split("-")[0])
+                val = int(price)
+            except Exception:
+                continue
+            y = str(int(year) + 1) if (anchor_mm >= 11 and mm <= 2) else year
+            key = "%s-%s" % (y, md)
+            if key not in out or val < out[key]:
+                out[key] = val
+        return out
+
+    def _week_calendar_enabled(self) -> bool:
+        """周历兜底开关：`crawler.tuniu_week_calendar`（默认 true）。"""
+        try:
+            v = (self.config or {}).get("tuniu_week_calendar")
+            # 默认关闭（r1063 T154，同 ctrip/fliggy）：兜底会真的开浏览器
+            return False if v is None else bool(v)
+        except Exception:
+            return True
+
+    def _fetch_week_calendar(self, fc: str, tc: str, anchor_date: str,
+                             headless=None) -> dict:
+        """打开国内列表页，只抓顶部周历（r1063 T149）。返回 {"YYYY-MM-DD": 价}。
+
+        与列表通路解耦：列表被风控/无航班时，周历往往仍有价。
+        """
+        out = {}
+        bak = self.use_mobile
+        self.use_mobile = False
+        try:
+            url = self.PC_URL_TPL.format(fc=fc, tc=tc, date=anchor_date)
+            with self.browser(headless=headless) as ctx:
+                page = self.new_page(ctx)
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_timeout(5000)
+                pairs = page.evaluate(self.PC_WEEK_JS) or []
+            out = self._week_to_dates(anchor_date, pairs)
+        except Exception as e:
+            try:
+                self.logger.warning("[tuniu] 周历抓取失败：%s", str(e)[:90])
+            except Exception:
+                pass
+        finally:
+            self.use_mobile = bak
+        return out
+
+    def _parse_intl_pc_items(self, items, date: str) -> list:
+        """把通用抽取出来的文本行解析成**国内同构的 dict 行**（缺字段诚实留空）。
+
+        与 `_parse_pc_items` 保持同一形状（price/code/name/depTime/arrTime/
+        depDate），这样上层转换成 FlightPrice 的逻辑可以共用一份。
+        """
+        out = []
+        for txt in items or []:
+            s = str(txt or "")
+            m_price = re.search(r"[¥￥]\s*(\d{2,6})", s)
+            m_time = re.findall(r"(\d{2}:\d{2})", s)
+            if not m_price or len(m_time) < 2:
+                continue
+            airline = ""
+            for kw in ("国航", "东航", "南航", "春秋", "吉祥", "海航", "厦航",
+                       "川航", "山航", "深航", "上航", "澳门", "香港", "国泰",
+                       "全日空", "日本航空", "大韩", "韩亚", "新航", "酷航"):
+                if kw in s:
+                    airline = kw
+                    break
+            out.append({
+                "price": int(m_price.group(1)),
+                "code": "",
+                "name": airline,
+                "depTime": m_time[0],
+                "arrTime": m_time[1],
+                "depDate": date,
+                "totalDuration": "",
+                "raw": s[:180],
+            })
+        return out
+
+    def _fetch_intl_pc(self, from_city: str, to_city: str, dates: List[str],
+                       ret_date: str = "") -> List[FlightPrice]:
+        """国际 PC 列表页采集（r1063 T146）。返回 FlightPrice 列表。"""
+        rows_by_date = {}
+        prices: List[FlightPrice] = []
+        fc = airport_city_code(from_city.upper())
+        tc = airport_city_code(to_city.upper())
+        bak = self.use_mobile
+        self.use_mobile = False
+        try:
+            with self.browser(headless=None) as ctx:
+                page = self.new_page(ctx)
+                for date in dates:
+                    url = self.intl_pc_url(fc, tc, date, ret_date)
+                    try:
+                        # r1063 T147：国际页也会间歇性整页空白（国内实测
+                        # 同一 URL 连续 5 次里 3 次正常）。空页就重载一次，
+                        # 否则一次抽风就白丢一天的数据。
+                        items = []
+                        for _attempt in range(2):
+                            page.goto(url, wait_until="domcontentloaded",
+                                      timeout=45000)
+                            try:
+                                page.wait_for_selector(".J-flightlist",
+                                                       state="attached",
+                                                       timeout=15000)
+                            except Exception:
+                                # 国际页结构可能不同：不硬等，交给通用抽取
+                                page.wait_for_timeout(4000)
+                            items = page.evaluate(self.INTL_PC_ITEMS_JS) or []
+                            if items:
+                                break
+                            if _attempt == 0:
+                                self.logger.info(
+                                    "[tuniu][intl] %s PC 页空，重载重试", date)
+                                page.wait_for_timeout(2000)
+                        rows = self._parse_intl_pc_items(items, date)
+                        rows_by_date[date] = rows
+                        self.path_note(
+                            "PC·国际", "ok" if rows else "empty", date=date,
+                            rows=len(rows),
+                            detail=("国际 PC 页 %d 条" % len(rows)) if rows
+                                   else "国际 PC 页无可用行（DOM 结构或风控）")
+                        if rows:
+                            best = min(rows, key=lambda f: f["price"])
+                            prices.append(FlightPrice(
+                                platform=self.name,
+                                from_city=from_city, to_city=to_city,
+                                depart_date=date,
+                                price=float(best["price"]),
+                                airline=str(best.get("name", ""))[:20],
+                                flight_no=str(best.get("code", "")),
+                                depart_time=str(best.get("depTime", "")),
+                                arrive_time=str(best.get("arrTime", "")),
+                                extra=json.dumps(rows, ensure_ascii=False)))
+                    except Exception as e:
+                        rows_by_date[date] = []
+                        self.path_note("PC·国际", "error", date=date,
+                                       detail=str(e)[:110])
+        finally:
+            self.use_mobile = bak
+        if prices:
+            self.last_path = "PC·国际"
+            self.logger.info("[tuniu][intl] PC 页出数 %d 日", len(prices))
+        return prices
 
     def _fetch_pc_dom(self, fc: str, tc: str, dates: List[str],
                       headless=None, path_label: str = "PC") -> dict:
@@ -1167,11 +1394,13 @@ class TuniuCrawler(BaseCrawler):
         # 时如实返回空（本轮这一天不采），不伪造行、不记失败。
         if not self.path_gate("H5/API", "intl"):
             return results
+        # r1063 T144：国际走 H5 面，优先用 H5 槽位自己的会话（双端登录才有效）
         for date in dates:
             t_h5 = time.time()
             self._last_challenge_intl = None
             self._last_intl_failure = None
-            raw = self._hoop_intl(fc, tc, date)
+            with self.using_surface("h5"):
+                raw = self._hoop_intl(fc, tc, date)
             self._dump_raw(raw, f"tuniu_intl_{date}")
             if raw is None or isinstance(raw, IntlFailure):
                 self.logger.warning("[tuniu][intl] %s 未拿到真实价格", date)
@@ -1460,8 +1689,28 @@ class TuniuCrawler(BaseCrawler):
         if ret_date and is_intl_route(from_city, to_city):
             return self._fetch_intl_rt(from_city, to_city, dates, ret_date)
         if is_intl_route(from_city, to_city):
-            return self._fetch_intl(from_city, to_city, dates,
-                                    ret_date=ret_date)
+            # r1063 T146：国际先走 **PC 页**（独立通路，用户实测可出价），
+            # 没拿到行的日期再交 H5/API 接口（后者常吃 710114 登录门）。
+            got: List[FlightPrice] = []
+            remain = list(dates)
+            if self._intl_pc_enabled():
+                try:
+                    pc_rows = self._fetch_intl_pc(from_city, to_city, dates,
+                                                  ret_date=ret_date)
+                    got.extend(pc_rows)
+                    done = {str(getattr(p, "depart_date", "")) for p in pc_rows}
+                    remain = [d for d in dates if d not in done]
+                    if remain:
+                        self.logger.info(
+                            "[tuniu][intl] PC 页缺 %d 日，回退 H5/API", len(remain))
+                except Exception as e:
+                    self.logger.warning(
+                        "[tuniu][intl] PC 页异常，全量回退 H5/API：%s", e)
+                    remain = list(dates)
+            if remain:
+                got.extend(self._fetch_intl(from_city, to_city, remain,
+                                            ret_date=ret_date))
+            return got
         results: List[FlightPrice] = []
         # 途牛国内列表/接口使用城市码（北京=BJS），机场码 PEK 会落空；
         # 与飞猪/携程国内同律先归并城市码，FlightPrice 仍保留原航线。
@@ -1618,6 +1867,36 @@ class TuniuCrawler(BaseCrawler):
                                detail="接口有响应但未解析出价格",
                                ms=int((time.time() - t_h5) * 1000))
             self._sleep()
+        # r1063 T149：列表与接口都没数的日期，用顶部「周低价日历」兜底
+        _have = {str(getattr(r, "depart_date", "")) for r in results}
+        _still = [d for d in dates if d not in _have]
+        if _still and self._week_calendar_enabled():
+            try:
+                cal = self._fetch_week_calendar(fc, tc, _still[0])
+                _hit = 0
+                for d in _still:
+                    p = cal.get(d)
+                    if not p:
+                        continue
+                    results.append(FlightPrice(
+                        platform=self.name, from_city=from_city,
+                        to_city=to_city, depart_date=d, price=float(p),
+                        airline="", flight_no="", depart_time="",
+                        arrive_time="",
+                        extra=json.dumps({"source": "pc_week_calendar",
+                                          "price": p}, ensure_ascii=False)))
+                    self.path_note(
+                        "PC·周历", "ok", date=d, rows=1,
+                        detail="周低价日历 ￥%d（票面口径，未拆税）" % p)
+                    _hit += 1
+                if not _hit:
+                    self.path_note("PC·周历", "empty", date=_still[0],
+                                   detail="周历也没取到价")
+                else:
+                    self.last_path = "PC·周历"
+                    self.logger.info("[tuniu] 周历兜底：%d 日有价", _hit)
+            except Exception as e:
+                self.logger.warning("[tuniu] 周历兜底异常：%s", str(e)[:90])
         return results
 
     def calendar(self, from_city: str, to_city: str,

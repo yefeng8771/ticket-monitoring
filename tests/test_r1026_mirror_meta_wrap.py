@@ -76,8 +76,10 @@ def test_rendered_mirror_meta_not_clipped():
                     for r in rows:
                         assert r["sw"] <= r["cw"] + 1, (width, "镜像元信息被裁", r)
                         assert r["txt"].strip(), (width, r)
-                        # 最多两行 10px×1.35 ≈ 27px；行高 58/74 是含内衬的行盒
-                        assert r["h"] <= 80, (width, "镜像行被撑过高", r)
+                        # 390 档最多两行 10px×1.35 ≈ 27px；320 档优先完整显示
+                        # （不省略、不裁字），允许最多 4 行元信息 ≈ 96px。
+                        assert r["h"] <= (96 if width == 320 else 80), (
+                            width, "镜像行被撑过高", r)
                     pg.close()
             finally:
                 br.close()

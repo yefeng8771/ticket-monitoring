@@ -312,7 +312,7 @@ Ensure the open path calls `srxRenderFacets(true)`.
 
 **Files:**
 - Modify: `README.md`, `README_EN.md`, `docs/EXECUTION_SPEC_LATEST.md`, `docs/site/index.html` (generated), `docs/demo_build.py`, `docs/release_align_check.py`, `.github/workflows/release-build.yml`
-- Create: `docs/release-notes-v1.5.295.md`
+- Create: docs/release-notes-v1.5.295.md（已删除，历史引用）
 
 **Interfaces:**
 - Site contains `<meta name="tm-build" content="<version> <sha> <date>">`.
@@ -346,7 +346,7 @@ Change `dist_package/${{ matrix.asset }}.sha256` upload path to `dist_package/${
 
 - [ ] **Step 5: Release notes**
 
-Create `docs/release-notes-v1.5.295.md` with: schema migrations, alert rules, health classification, provenance level, visual/performance results, exact counts from batch 2 gates, known boundaries. Do not claim release/publish yet.
+Create docs/release-notes-v1.5.295.md（已删除，历史引用） with: schema migrations, alert rules, health classification, provenance level, visual/performance results, exact counts from batch 2 gates, known boundaries. Do not claim release/publish yet.
 
 - [ ] **Step 6: Run align check locally in `--local` mode**; expected all checks pass except online-only checks if deliberately skipped. Commit docs/site/check changes.
 

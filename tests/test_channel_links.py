@@ -66,13 +66,17 @@ def test_entry_notes_are_uniform_per_column_and_behavior():
     """
     from core.channel_links import channel_links
     c = _cells(channel_links())
-    plats = ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu")
+    plats = ("ctrip", "fliggy", "tongcheng", "tuniu")
     for p in plats:
         assert c[(p, "pc", "domestic")]["note"] == "PC 机票搜索", p
         assert c[(p, "h5", "domestic")]["note"] == "H5 机票搜索", p
         assert c[(p, "pc", "intl")]["note"] == "PC 机票搜索（国际）", p
         assert c[(p, "h5", "intl")]["note"] == \
             "H5 机票搜索（与国内同页，页内切国际）", p
+    # 去哪儿网页版已停服：四个入口统一写停服事实，不再冒充可搜索入口。
+    for sfc in ("pc", "h5"):
+        for sc in ("domestic", "intl"):
+            assert "网页版已停服" in c[("qunar", sfc, sc)]["note"], sfc
     for x in c.values():
         assert "淘宝登录" not in x["note"], x
         assert "官网" not in x["note"], x
@@ -171,9 +175,10 @@ def test_channel_login_metadata_separates_session_and_page():
     assert set(APP_CHANNELS) <= set(ch), "App 渠道没有入口条目：%s" % (
         set(APP_CHANNELS) - set(ch))
     # 五家全部 required
-    for p in ("ctrip", "qunar", "fliggy", "tongcheng", "tuniu"):
+    for p in ("ctrip", "fliggy", "tongcheng", "tuniu"):
         assert ch[p]["session"] == "required", (p, ch[p]["session"])
         assert "必须登录" in ch[p]["session_label"], (p, ch[p]["session_label"])
+    assert "网页已停服" in ch["qunar"]["session_label"], ch["qunar"]
     assert "双端登录" in ch["fliggy"]["login_note"]
     assert "会话不共享" in ch["fliggy"]["login_note"]
 
@@ -187,7 +192,7 @@ def test_channel_login_metadata_separates_session_and_page():
     assert c[("tongcheng", "pc", "intl")]["login_required"] is True
     assert c[("tuniu", "pc", "intl")]["login"] == "登录"
     assert c[("tuniu", "pc", "intl")]["login_required"] is True
-    assert c[("qunar", "h5", "domestic")]["login"] == "登录后出价"
+    assert c[("qunar", "h5", "domestic")]["login"] == "网页已停服"
 
     sp = {(x["plat"], x["surface"]): x for x in r["specials"]}
     assert sp[("fliggy", "h5")]["login"] == "淘宝账号"
@@ -208,7 +213,10 @@ def test_channel_board_renderer_replaces_flat_grid():
     from core.channel_links import SESSION_REQUIREMENT
     for _p, (_lv, _lb) in SESSION_REQUIREMENT.items():
         assert _lv == "required", (_p, _lv)
-        assert "必须登录" in _lb, (_p, _lb)
+        if _p == "qunar":
+            assert "网页已停服" in _lb, (_p, _lb)
+        else:
+            assert "必须登录" in _lb, (_p, _lb)
     assert "会话不共享" in links_src
     # 这两条禁的是「用户可见文案」：曾把采集口径写成「采集免登 / 采集必须」
     # 与登录要求打架。注释里出现同字（如「探针与定时采集必须拿到同一份

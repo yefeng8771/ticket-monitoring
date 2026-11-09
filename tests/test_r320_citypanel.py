@@ -179,8 +179,6 @@ def test_pick_fills_input_and_closes(page):
     inp.click()
     page.wait_for_selector("#citypanel", state="visible")
     page.fill("#cpq", "连云港")
-    page.wait_for_selector('#cpbody .cp-city[data-n="连云港"]',
-                           state="visible", timeout=10000)
     page.click('#cpbody .cp-city[data-n="连云港"]')
     assert page.evaluate(
         "document.getElementById('citypanel').style.display") == "none"

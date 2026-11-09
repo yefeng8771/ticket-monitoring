@@ -60,6 +60,13 @@ def test_rendered_users_toolbar_separator():
                         "typeof S!=='undefined'&&S&&S.users", timeout=30000)
                     pg.evaluate("()=>{switchView('cfg');showCfgPanel('users')}")
                     pg.wait_for_timeout(800)
+                    # 并行负载下用户面板可能还没渲染出工具条；固定 800ms
+                    # 会让 seg/st 为 null，读取 rect 抛 TypeError。
+                    pg.wait_for_function(
+                        "()=>{const s=document.querySelector('#cfgScopeBar .cfgseg');"
+                        "const t=document.getElementById('cfgStatusSel');"
+                        "return !!(s&&t&&t.getBoundingClientRect().height>1)}",
+                        timeout=12000)
                     d = pg.evaluate(r"""()=>{
                       const sep=document.querySelector('#cfgScopeBar .cbsp');
                       const seg=document.querySelector('#cfgScopeBar .cfgseg');

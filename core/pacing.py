@@ -1429,6 +1429,9 @@ class Pacing:
     def __init__(self, cfg=None, clock=time.time):
         self._clock = clock
         self._lock = threading.RLock()
+        # 原始配置留一份：`self.cfg` 是 parse_pacing 之后的**节流参数**，
+        # 开关类的原始键（path_auto_retire 等）不在里面（r1063 T206 实测）。
+        self._raw_cfg = dict(cfg) if isinstance(cfg, dict) else {}
         self.cfg = parse_pacing(cfg or {})
         self._breaker = ChannelBreaker(
             self.cfg["breaker_base_s"], self.cfg["breaker_cap_s"],
@@ -1445,6 +1448,8 @@ class Pacing:
         # 连续失败越多，越不该按正常节奏去戳它。
         self._fail_streak = {}
         self._health_all = {}
+        # r1063 T206：自动退役的"下次复检时间"（key = health scope key）
+        self._auto_retire_next = {}
         # 兼容视图（见 `_health` property）：老代码只读，不写。
         # 人工停手读点（r1063 T18）：由调用方注入，未注入即「没有停手」。
         self._halt_reader = None
@@ -1739,6 +1744,10 @@ class Pacing:
             return False, 0.0, (
                 "%s：path_fallback.enabled=false（%s）——只停这一条链路，"
                 "同渠道其它链路照常" % (PATH_DISABLED, scope))
+        # 自动退役（r1063 T206）：死链路别再白花一次完整抓取。
+        _ar = self._auto_retire_why(plat, dim, path)
+        if _ar:
+            return False, 0.0, _ar
         ok, remain = self.allow(plat, path=path, dim=dim)
         if not ok:
             return False, float(remain), (
@@ -1954,7 +1963,88 @@ class Pacing:
             return "", {}
         return str(key), dict(rec or {})
 
-    def set_health(self, plat, rate, attempts, dim="", path=""):
+    AUTO_RETIRE_S = 24 * 3600
+
+    def _health_for_path(self, plat, dim="", path=""):
+        """按（渠道, 链路）取健康记录——**不依赖维度命名**。
+
+        实测分歧：健康账按 `dim_of_path(path)` 写（如 `detail`），
+        爬虫问闸门按业务维度写（如 `domestic`），精确键必然对不上，
+        于是"自动退役"永远读不到记录、一条都不退役。
+        聚合口径：同 (渠道, 链路) 下取**样本最多**的那条（成功率取最低），
+        宁可保守判"该停"，也不要因为命名漂移而永不生效。
+        """
+        exact = self._health_all.get(self._health_scope_key(plat, dim, path))
+        if isinstance(exact, dict) and int(exact.get("attempts") or 0) > 0:
+            return exact
+        best = {}
+        try:
+            for k, v in list(self._health_all.items()):
+                if not isinstance(v, dict) or len(k) != 3:
+                    continue
+                if k[0] != plat or k[2] != path:
+                    continue
+                if int(v.get("attempts") or 0) > int(best.get("attempts") or 0):
+                    best = v
+        except Exception:
+            return exact or {}
+        return best or (exact or {})
+
+    def _auto_retire_enabled(self) -> bool:
+        """自动退役开关（默认开）。原始配置优先，也接受 `crawler.` 前缀。"""
+        raw = getattr(self, "_raw_cfg", {}) or {}
+        for src in (raw, (raw.get("crawler") if isinstance(raw, dict) else None)):
+            if isinstance(src, dict) and "path_auto_retire" in src:
+                return bool(src.get("path_auto_retire"))
+        return True
+
+    def _auto_retire_why(self, plat, dim="", path=""):
+        """这条链路是否该被**自动退役**（返回原因串；空串=不退役）。
+
+        判据（全部满足才停）：
+          1. 开关 `crawler.path_auto_retire`（默认 True，可整机关掉）；
+          2. 窗口内样本 >= 10 且成功率 == 0（样本少不下结论）；
+          3. 最后原因命中**能力边界**词（不查/不支持/停服…）——
+             被风控拦出来的 0% 不在此列（那归熔断/换道处理）；
+          4. 距上次放行已过 24 小时（到期自动探一次，仍 0% 再停 24h）。
+        """
+        try:
+            if not self._auto_retire_enabled():
+                return ""
+            key = self._health_scope_key(plat, dim, path)
+            rec = self._health_for_path(plat, dim, path)
+            n = int(rec.get("attempts") or 0)
+            rate = float(rec.get("rate") or 0.0)
+            if n < 10 or rate > 0.0:
+                return ""
+            why = str(rec.get("why") or rec.get("last_why") or "")
+            try:
+                from core.advise import _is_boundary
+                if not _is_boundary(why):
+                    return ""
+            except Exception:
+                return ""
+            now = float(self._clock() if callable(getattr(self, "_clock", None))
+                        else time.time())
+            # 「是否设过」必须看 key 在不在：用 `x or 0` 会把 0.0（=已到期）
+            # 当成"没设过"，于是到期又被停 24h——可自愈变成永久拉黑。
+            if key not in self._auto_retire_next:
+                self._auto_retire_next[key] = now + self.AUTO_RETIRE_S
+                return ("自动退役：%s 近窗口 %d 次全部 0 成功，原因是能力边界"
+                        "（%s）——先停 24h，到期自动复检一次"
+                        % (path or plat, n, why[:40]))
+            nxt = float(self._auto_retire_next.get(key) or 0)
+            if now < nxt:
+                left_h = int((nxt - now) / 3600) + 1
+                return ("自动退役中：%s 次全 0（%s），约 %d 小时后复检"
+                        % (n, why[:24], left_h))
+            # 到期：放行一次做复检，并预约下一次
+            self._auto_retire_next[key] = now + self.AUTO_RETIRE_S
+            return ""
+        except Exception:
+            return ""
+
+    def set_health(self, plat, rate, attempts, dim="", path="", why=""):
         """按近 24h 成功率自动加罚（成功率保护，不是熔断）。
 
         熔断只管"对方明确拒绝"；持续解析失败/空结果不会触发它，却同样
@@ -1977,7 +2067,8 @@ class Pacing:
         if not _pen_on:
             with self._lock:
                 self._health_all[key] = {"rate": round(r, 3), "attempts": n,
-                                         "penalty": 1.0, "disabled": True}
+                                     "penalty": 1.0, "disabled": True,
+                                         "why": str(why or "")[:120]}
             return
         # 五个阈值按作用域求值（r1063 T62）：渠道/维度/链路可以各自定
         # "多低算差、罚几倍、多少样本才判"——以前只读全局，界面上的格子是装饰。
@@ -2001,7 +2092,8 @@ class Pacing:
                                                       3.0)))
         with self._lock:
             self._health_all[key] = {"rate": round(r, 3), "attempts": n,
-                                     "penalty": penalty}
+                                     "penalty": penalty,
+                                     "why": str(why or "")[:120]}
 
     def _health_at(self, key, need):
         """某作用域的记录，样本够才算数（内联用，调用方已持锁）。"""

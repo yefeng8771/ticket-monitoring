@@ -82,6 +82,6 @@ def test_low_fare_writes_a_separate_calendar_path():
 
 def test_terminal_legend_distinguishes_product_from_collection():
     src = io.open(os.path.join(ROOT, "webui.py"), encoding="utf-8").read()
-    assert "产品支持但采集端未实现或当前风控未出数" in src, (
-        "矩阵图例仍把未验证读成渠道不支持")
-    assert "渠道无此能力/停服" in src, src[:200]
+    assert "已实现 · 当前风控/设备/IP/账号受限" in src, (
+        "矩阵图例没有区分「已实现但当前受限」与「采集端未实现」")
+    assert "采集端未实现" in src and "渠道停服" in src, src[:200]

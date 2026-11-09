@@ -102,6 +102,15 @@ def _open(pg):
     pg.wait_for_timeout(1500)
     pg.evaluate("()=>{switchView('mon');showMonTab('health')}")
     pg.wait_for_timeout(2600)
+    # 节流面板的 10 行是异步二次渲染；固定等待在 xdist 并发下会量到 0 行。
+    pg.wait_for_function(
+        "()=>document.querySelectorAll('#paceBox .pace-row').length>=10",
+        timeout=12000)
+    # 并行负载下「行已入 DOM」早于切换动画/面板可见；不等到真实高度会把
+    # 桌面误读成 0 行。仍不可见则照常判红。
+    pg.wait_for_function(
+        "()=>{const r=document.querySelector('#paceBox .pace-ch .pace-row');"
+        "return r&&r.getBoundingClientRect().height>1}", timeout=12000)
 
 
 def _assert_box_stable(a, b, stage):

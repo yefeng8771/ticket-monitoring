@@ -34,7 +34,7 @@ Rules:
 2. **Concurrent audits**: at least the five fixed areas — configuration cards/settings rails, filter/table workbench, overlays (modals/popovers/savebar/toasts), global text clipping/overflow, buttons/actions/touch. For cross-page work add product semantics, watch/trend, filter consistency, official assets, first-paint state and performance. Each audit must return viewport, selector, rects and file:line; the main agent owns final integration.
 3. **Implement** the P0/P1 findings; do not add new decorative scope. Keep one canonical action per job and one page identity. Shared defects must be fixed at the common component or root cause, not as per-page CSS patches.
 4. **Add a gate for every fixed defect**, at the viewport where it was found (320/390/671/768/1024/1280/1360/1512/1920). A fix without a gate is not done.
-5. **Bake docs**: regenerate `docs/screenshots`, rebuild `docs/site/index.html`, update README/EN feature counts and alt text, and add `docs/release-notes-v<version>.md`.
+5. **Bake docs**: regenerate `docs/screenshots`, rebuild `docs/site/index.html`, update README/EN feature counts and alt text. Version history lives in the single Release body; no per-version release-notes files are added.
 6. **Verify pixels**: Playwright light/dark at the affected widths, zero pageerror, no horizontal overflow, no text/button intersections. Check 100%/125%/200% zoom in a real browser or equivalent layout condition, not only via device scale factor. Compare the rendered page against the screenshot/initial intro standard.
 7. **Keep the working tree coherent**: do not commit partial parallel-session work; do not rewrite unrelated history. Process commits are local working history only — the public history is converged at delivery (§3).
 
@@ -67,7 +67,7 @@ Release cadence:
      release report instead of letting it hide inside a green summary.
 3. **Back up** the complete Git history, uncommitted work and necessary audit evidence outside the repository; verify restore. Backups must never enter the public repository or packages.
 4. **Converge history**: inventory public branches, tags, Releases and deployments; reduce the final source to a single root initialization commit. Before and after the rewrite, compare the source tree and assert that no verified feature is lost except explicit public-material and distribution cleanup. Check for new remote commits before updating; use operations with expected-state protection. Record the operation in the release notes.
-5. **Bump and bake**: only after gates pass, bump the version in `main.py`, its version gate and `docs/release-notes-v<version>.md`; update README/EN counts, screenshots and site. CN/EN README, Release and site keep the full first-release introduction with one chapter order, one screenshot order, one set of facts and one capability boundary. Public material must not accumulate internal rounds, duplicated release prose or development logs.
+5. **Bump and bake**: only after gates pass, bump the version in `main.py` and its version gate; update README/EN counts, screenshots and site. CN/EN README, Release and site keep the full first-release introduction with one chapter order, one screenshot order, one set of facts and one capability boundary. Public material must not accumulate internal rounds, duplicated release prose or development logs.
 6. **Rebuild assets**: the history rewrite creates a new SHA; the final packages must be built from that new initialization commit. Trigger `.github/workflows/release-build.yml` (`workflow_dispatch`) on the exact pushed SHA and reject artifacts whose run `head_sha` differs.
 7. **Verify packages**: package root layout, no config/data/logs/user_data/ghtoken, packaged executable `--version` equals the release version, all required offline assets present, and SHA256 values. Four platforms must be checked.
 8. **Replace the asset set**: one upload per Release under the constant `v1.0` tag — four zips plus one `SHA256SUMS.txt`. Replace the previous set only after the new set is verified with `python tools/verify_release_assets.py --dir dist_package` (exact five files, package roots, no config/data/logs/credentials, SHA256SUMS hashes match). `dist_package/` keeps only those five files; intermediate folders, old packages, check folders and duplicate sha files are removed after checking absolute paths.
@@ -90,7 +90,7 @@ Do not push, retag, publish or rewrite shared history without explicit user auth
 ## 5. Artifact & history hygiene
 
 - `dist_package/` is a delivery surface, not a workshop: keep only `ticket-monitoring-win64.zip`, `ticket-monitoring-linux-x64.zip`, `ticket-monitoring-macos-arm64.zip`, `ticket-monitoring-macos-x64.zip` and `SHA256SUMS.txt`. Delete `_check*`, `_ci`, `release_*`, `_r*_dist`, `_rel_*` and ad-hoc `.sha256` files as soon as they are superseded.
-- Release notes live in `docs/` and are tracked; `.gitignore`'s root-only `/RELEASE-*.md` rule must never swallow `docs/release-notes-*.md`.
+- Version history is published only in the single Release body; do not accumulate per-version notes or development logs in the repository.
 - Public history is a single initialization commit. Working commits and fixups are temporary and must be converged before publication; never expose the development train as the public story.
 - One GitHub Release, one Pages deployment, one asset set. Do not upload intermediate builds or re-bake identical screenshots just to create a new commit.
 - A history rewrite must be explicit: freeze writers, create a backup branch outside the public line, verify pre/post tree equality, then re-point `main` and `v1.0` with expected-state protection and rebuild assets from the new SHA.
@@ -118,7 +118,7 @@ Do not push, retag, publish or rewrite shared history without explicit user auth
 ### 6.2 在线对账器与预跑清单（2026-11-02 实测）
 
 - **`git ls-files` 必须用 `-z`**：默认 quotePath 把中文测试名（`tests/test_r643_干预覆盖每个可见渠道.py`）包成引号转义，`startswith("tests/test_")` 过滤掉它 → tracked 计数少 2（HEAD 真实 5445、旧 README 5443；发布应 5885）。普查/计数一律 NUL 分隔，并在提交树上算。
-- **GitHub API / SHA256SUMS 走 curl/Schannel**：本机 Python/OpenSSL 无 CA bundle（`C:\Program Files\Common Files\SSL/cert.pem` 不存在），`api.github.com` 报 `unable to get issuer certificate`；curl（Windows 证书库）正常。`_curl` 用 `--config -` 从 stdin 读 token，**不关 TLS 校验**；Pages/ghcr 仍用 urllib。不要给资产 URL 加多轮 retry——代理 502 时重试会把一次失败放大成 60s 挂起。
+- **GitHub API / SHA256SUMS 走 curl/Schannel**：本机 Python/OpenSSL 无 CA bundle，`api.github.com` 报 `unable to get issuer certificate`；curl（Windows 证书库）正常。`_curl` 用 `--config -` 从 stdin 读 token，**不关 TLS 校验**；Pages/ghcr 仍用 urllib。不要给资产 URL 加多轮 retry——代理 502 时重试会把一次失败放大成 60s 挂起。
 - **资产 502 的回退**：`SHA256SUMS` 下载失败时，用 release API 的 `digest` 对正文 SHA 做**明确标注**的回退校验；不静默跳过，也不把代理 502 当产品失败。
 - **预跑实测（29/46）**：线上正文 intro/version 仍 1.5.306、**正文 SHA 只与 win64 当前资产一致（另 3 个 zip 的 API digest 不在正文）**、Pages 部署 **11 个**、站点戳 `2a326e3c` 旧树、source/tag/CI/release-build/ghcr 不同源；live 8765 1.5.307 通过。发版须重建正文+四资产（同一组 SHA）、`prune_deployments.py` 到 1、重烘站点、CI/release-build 绿、ghcr 新 SHA，再在线对账全绿。
 - **计数以冻结后的 tracked 为准**：并行会话与日期参数会让计数漂移；发布前冻结写者、重跑 4w、`git ls-files -z tests` 重新 collect 并同步 README/EN/UI，再做 root commit。

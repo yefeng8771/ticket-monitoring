@@ -149,7 +149,25 @@ class AndroidRuntime:
 
     # ---------- 编排 ----------
     def ensure_ready(self) -> Tuple[bool, str]:
-        """确保「实例在跑 + adb 已连」。返回 (ok, reason)。"""
+        """确保「实例在跑 + adb 已连」。返回 (ok, reason)。
+
+        r1063 T88：**成功结果在 TTL 内缓存**。实测这一步每次 4 秒左右
+        （MuMuManager info + adb 探测 + 硬化自检），而同一进程几十秒内
+        这些条件几乎不会变。只缓存成功——失败必须立刻重探。
+        """
+        try:
+            import time as _t
+            # 从**原始** android: 段读（`normalize` 会丢弃未知字段）
+            _raw_ttl = None
+            if isinstance(getattr(self, "raw", None), dict):
+                _raw_ttl = self.raw.get("ready_cache_s")
+            _ttl = float(60 if _raw_ttl is None else (_raw_ttl or 0))
+            _at = getattr(self, "_ready_ok_at", 0.0)
+            if _ttl > 0 and _at and (_t.time() - _at) < _ttl:
+                self._state = "ready(cached)"
+                return True, "ready-cached"
+        except Exception:
+            pass
         if not self.cfg.enabled:
             self._state = "disabled"
             return False, "disabled"
@@ -225,6 +243,11 @@ class AndroidRuntime:
         self._state = "ready"
         self.last_error = ""
         self._harden(dev)
+        try:
+            import time as _t2
+            self._ready_ok_at = _t2.time()      # 只记成功时刻（失败不缓存）
+        except Exception:
+            pass
         return True, "ready"
 
     # ---------- 设备硬化（身份 + root/模拟器隐藏）----------

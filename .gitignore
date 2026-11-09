@@ -250,6 +250,7 @@ dist_package/
 # 内部交割/设计文档与内部审计脚本（开源仓库不公开，本地保留维护）
 HANDOFF.md
 .impeccable.md
+!.impeccable.md
 audit_norm_15.py
 
 # WorkBuddy 本地工作区记忆（不入库）
@@ -268,6 +269,21 @@ _*.ps1
 # scripts/ 默认是本地调试脚本；被测试与操作员文档引用的 CLI 显式入库
 scripts/*
 !scripts/display_spoof.py
+!scripts/abi_preflight.py
+!scripts/app_channel_probe.py
+!scripts/app_ctrip_probe.py
+!scripts/build_ctrip_dict.py
+!scripts/build_mumu_cloak.py
+!scripts/buildid_stage.py
+!scripts/ctrip_login.py
+!scripts/device_hardening.py
+!scripts/fetch_packages.py
+!scripts/fliggy_app_reset.py
+!scripts/identity_boot_module.py
+!scripts/magisk_bootstrap.py
+!scripts/setup_device.py
+!scripts/yield_report.py
+!scripts/yield_timeline.py
 audit_shots/
 audit_report.json
 uitest_*.js
@@ -304,3 +320,14 @@ build/
 packages/*.zip
 packages/apks/*.apk
 
+# ---- 运行期产物与临时工作目录（r1063 T97）----
+# 临时工作目录：调试/脚本的一次性输出，永远不该进库
+.tmp_*/
+# 配置备份：每次改配置自动生成的 config.yaml.bak_<原因>_<时间>
+config.yaml.bak_*
+# 采集库与本地工具产物
+prices.db
+prices.db-journal
+.pytest_crawler_files.txt
+# MuMu 实例备份（体积大、机器相关）
+_mumu_backup_*/

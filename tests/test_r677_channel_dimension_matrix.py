@@ -82,9 +82,11 @@ def test_unsupported_dims_is_derived_not_handwritten():
         unsupported_dims("app_qunar")
     assert "round_trip" not in unsupported_dims("app_zhixing"), \
         unsupported_dims("app_zhixing")
-    # 渠道产品有往返/多程，但本仓库采集端未实现/未出数 → 未验证（""），
-    # 不是“不支持”：矩阵的 n 只留给渠道真没有的能力。
-    assert "round_trip" not in unsupported_dims("qunar")
+    # 去哪儿网页版 PC/H5 已停服（2026-11）：整行 n 是「停服」而非
+    # 「渠道没有」，矩阵会画「停」并用说明讲清数据走 app_qunar。
+    assert set(unsupported_dims("qunar")) == {
+        "domestic", "intl", "calendar", "detail",
+        "round_trip", "multi_city", "low_fare"}
     assert "multi_city" not in unsupported_dims("app_qunar")
     assert "multi_city" not in unsupported_dims("app_zhixing")
 
@@ -222,8 +224,8 @@ def test_browser_round_trip_y_or_explicit_intl_gap():
     import io
     import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for plat in ("ctrip", "qunar"):
-        assert dim_state(plat, "round_trip") == "y", plat
+    assert dim_state("ctrip", "round_trip") == "y"
+    assert dim_state("qunar", "round_trip") == "n", "去哪儿网页版已停服"
     qsrc = io.open(os.path.join(root, "crawlers", "qunar.py"),
                    encoding="utf-8", newline="").read()
     assert "国际往返暂不支持" in qsrc, \

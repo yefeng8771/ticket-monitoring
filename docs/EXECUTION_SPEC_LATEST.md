@@ -2,7 +2,7 @@
 
 最后更新：2026-11-04
 生成时间：2026-10-26
-工作目录：`D:\idea_project\ticket-monitoring`
+工作目录：本仓库根目录
 真实验收地址：`http://127.0.0.1:8765`
 公开仓库：`https://github.com/dengmeiluan/ticket-monitoring`
 
@@ -2117,7 +2117,6 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 | `test_config_partitions_documented_match_nav` | README 左侧分区枚举数/名 == `#cfgnav` 实际项；多出的面板只能是用户卡内联的 `panel-watch` |
 | `test_no_stale_watch_tab_name_in_any_doc` | 全文 md 的页签枚举不得使用已废的「关注*走势/明细」旧名（除非就近标注改名） |
 | `test_advice_hint_states_its_own_basis` | 建议条文案自报「查询成功率」口径，有退役通路时说明剔除；SPEC 同步记录 |
-| `test_handoff_mobile_verdict_not_left_at_theory` | HANDOFF 谈 App 抓包时必须指向实测记录，并写明「跑通≠已接入爬虫」 |
 | `test_playbook_penalty_basis_matches_code` | PLAYBOOK 罚速表写明读原口径 `query_rate`，且与 `main.py` 的 `set_health` 实参一致 |
 | `test_design_doc_channel_coverage_claims` | 设计稿里「N/5 渠道」「N/14 出发日」类现状断言必须带日期/当时/复核 |
 | `test_doc_symbol_anchors_exist` | 文档里「源码文件 :: 函数()」形式的锚点，符号必须在源码里真实存在 |
@@ -2135,9 +2134,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 | `test_fliggy_tax_pad_claim_matches_value` | 飞猪税垫描述须与 `FLIGGY_TAX_PAD` 实际值一致（=0 时不得写成「仅国际豁免」） |
 | `test_plan_declared_artifacts_exist` | plan「落地状态」段点名的产物路径必须存在，缺失须被标注 |
 | `test_计划文档checkbox状态须与实际一致` | 计划文档 0 勾选但产物已存在时须写明落地状态 |
-| `test_mobile_docs_sizes_match_reality` | 移动端文档的 APK 目录/MuMu 体积与磁盘实测一致（±20%） |
-| `test_tests_carry_no_machine_specific_paths` | 测试不得写死本机开发目录路径（换机假红/泄露本机信息；MuMu 安装位置按环境变量与常见位置探测，探不到就跳过） |
-| `test_mobile_runtime_status_claims_match_reality` | 文档称「未装 Android 运行时」时 adb 确实连不上设备 |
+| `test_tests_carry_no_machine_specific_paths` | 测试、随仓库交付的脚本与设计文档不得写死本机开发目录/用户目录（换机假红/泄露本机信息；产品默认探测位置与合成样例不算；含判据负控） |
 | `test_doc_gates_do_not_skip_on_missing_anchor` | 元门禁：文档存在时，契约门禁不得因锚点缺失而 skip（须 assert 失败） |
 | `test_tracked_targets_referenced_by_gates_exist` | 元门禁：门禁引用的**已入库**文件必须存在——删掉 SPEC/PLAYBOOK 等不许静默变绿 |
 | `test_snapshot_untracked_list_matches_disk` | SPEC 快照点名的未跟踪项必须真存在且真未入库（不校验穷举，并行会话会加文件） |
@@ -2145,9 +2142,6 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 | `test_style_compliance_numbers_match_measurement` | §3 的字号/间距/阴影「实测」数字必须按文档写明的口径（第一个 `<style>` 块）可复现，容差比较 |
 | `test_security_policy_claims_match_code` | SECURITY.md 的监听/凭据/图床声明须与代码一致：默认回环可改绑、config.yaml 仍被忽略、provider 有实现、熔断时长写法 |
 | `test_design_context_doc_matches_code` | `.impeccable.md` 的色值须在 webui.py 存在（或标注废弃）、主题三态齐全、走势范围不得写死 48h |
-| `test_historical_release_notes_declare_staleness` | 除当前版本外，每份 release-notes 头部必须有「时效边界」声明（当次快照 ≠ 现状） |
-| `test_zhixing_apk_abi_claim_matches_files` | 智行文档的 32/64 位包必须能按点名的本地路径逐字节复现（字节数/ABI/.so 数三项） |
-| `test_mobile_docs_conclusions_are_consistent` | 5 份移动端文档结论必须一致：MuMu 已实测不得标未实测、智行旧结论须标注推翻 |
 | `test_intl_city_count_claims_match_data` | README/EN 的「272 城 / 33 热门」必须等于 `core.intl` 实际数据（注意不是 `citydata.CITY`，那是大陆表 289 城） |
 | `test_readme_airline_examples_resolve` | README「三写法等价」示例（MU/东方航空/东航/!9C,!春秋）必须能被 core.airlines 解析 |
 | `test_readme_notification_channels_match_code` | README 声称的通知通道（钉钉/Server酱/ntfy/Bark/阿里云/邮件）必须在代码里有实现 |
@@ -2504,7 +2498,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 - r878：检索页「展开更多条件」——展开与收起**不在同一个位置**。上一版 `srxToggleMore` 展开时无条件 `scrollTo(控件区顶 − 页头 − 8)`（旧注释写的是「按控件区顶对齐」），只要控件区本来就离页头更远就强制上滚：实测 1512 档单击后触发器纵移 **−239px**（scrollY +239）；而收起时完全不归还这段滚动，同一颗按钮在「展开停一处、收起停另一处」，正是用户说的「展开和收起不在同一个位置，明显不是一个按钮多态的设计」。定案：① 展开时只做**最小必要滚动**——仅当面板底部超出视口时才滚，且只滚「刚好露出面板底部」那一点（面板 628px，950/760/640 三档视口分别滚 101/286/356，均属必要）；② 收起时把这段滚动**全额归还**（`SRX._moreScroll` 记账），三档视口 reclose Δl/t 实测全为 0.0/0.0。门禁 `test_r874…::test_more_conditions_returns_to_the_same_place`（三档视口量「收起态回到原坐标」；负控实测：删掉归还逻辑后三档全红，移动 356px），并把 `test_r869` 里「两态纵向必须相同」的断言改成「收起后 `scrollY` 回到 0」——展开态允许按需滚动，收起必须归位。
 - 本轮全站折叠触发器普查（7 类，各量两态位移 + 按钮左侧同行元素 + 按钮正下方首块间隙）：展开筛选 0/0、展开镜像 0/0、展开更多工具 0/0、展开说明 0/0、明细展开更多条件 0/0；展开概览 −1px（表头 sticky 抖动）；「展开更多条件」即上述 r878。同类「中间夹常驻元素」未复发：各触发器展开后首块间隙 3–14px（概览 14px 的 `.srx-bandnav` 是同行的日期翻页组，不是正文夹层）。
 
-- r900（7 渠道全维度一致性线）：本轮把「渠道 × 维度能力」从**只活在源码里**变成**界面可核实的单一事实**，并修掉两处诚实性缺陷。① **途牛往返静默串味**：`fetch()` 收到 `ret_date` 只用来跳过 PC/token 路，最终仍按单程采集并返回——单程价被当成往返总价落库、推送与走势据此报警。改为与 ctrip 同律：`path_note("TRIP","unsupported")` + 不发起查询 + 返回空；矩阵 `tuniu.round_trip` 从 "" 收敛为 "n"。② **low_fare 两张表互相矛盾**：`CHANNEL_DIMENSIONS.low_fare` 与 `SPECIAL_CAPABILITY.sources` 对携程/同程/途牛/去哪儿给出相反答案（雷达里 `_ctrip_deals`/`_tongcheng_deals`/`_tuniu_deals`/`_qunar_deals` 都是真源）。按实现补齐 `SRC_QUNAR`/`SRC_TONGCHENG` 并对齐矩阵，门禁 `test_r900_low_fare_single_truth.py`（两表互为镜像 + 无源必须写 note）。③ **能力矩阵上屏**：`/api/channel-dims` 此前**前端 0 处调用**，新增配置页「能力对照」卡（行＝维度、列＝渠道、三态 ✓/×/?，App 列头标同源、缺口单列），门禁 `test_r901_capability_matrix_rendered.py`（真渲染：列数/行数/三态/无 pageerror/窄档不裁字；实拍踩坑：`<th>` 继承灰底形成两条带、前端没有 `CHANNEL_CN`）。④ **拓展即漏三修**：`SRX_PLAT_ORDER.filter(...)` 当过滤集导致 App 结果永不显示 → 集合用 `Object.keys(channels)`、顺序仍用固定表；渠道覆盖分母写死 `/5` → 用 `SRX.plats.length`；文案「五渠道/五平台/四渠道」→ 「所选/全部/各渠道」。门禁 `test_r902_no_hardcoded_channel_count.py`（先剥注释，注：「四源」是视图名不在此列）。⑤ 多程如实标注：去哪儿 App 有「单程/往返/多程」三档入口但采集未接，矩阵维持 `n`、提示写明。**交接文档：`docs/HANDOFF_CAPABILITY_MATRIX.md`**（含不变式、红线判据、剩余缺口与新增渠道/维度 checklist）。
+- r900（7 渠道全维度一致性线）：本轮把「渠道 × 维度能力」从**只活在源码里**变成**界面可核实的单一事实**，并修掉两处诚实性缺陷。① **途牛往返静默串味**：`fetch()` 收到 `ret_date` 只用来跳过 PC/token 路，最终仍按单程采集并返回——单程价被当成往返总价落库、推送与走势据此报警。改为与 ctrip 同律：`path_note("TRIP","unsupported")` + 不发起查询 + 返回空；矩阵 `tuniu.round_trip` 从 "" 收敛为 "n"。② **low_fare 两张表互相矛盾**：`CHANNEL_DIMENSIONS.low_fare` 与 `SPECIAL_CAPABILITY.sources` 对携程/同程/途牛/去哪儿给出相反答案（雷达里 `_ctrip_deals`/`_tongcheng_deals`/`_tuniu_deals`/`_qunar_deals` 都是真源）。按实现补齐 `SRC_QUNAR`/`SRC_TONGCHENG` 并对齐矩阵，门禁 `test_r900_low_fare_single_truth.py`（两表互为镜像 + 无源必须写 note）。③ **能力矩阵上屏**：`/api/channel-dims` 此前**前端 0 处调用**，新增配置页「能力对照」卡（行＝维度、列＝渠道、三态 ✓/×/?，App 列头标同源、缺口单列），门禁 `test_r901_capability_matrix_rendered.py`（真渲染：列数/行数/三态/无 pageerror/窄档不裁字；实拍踩坑：`<th>` 继承灰底形成两条带、前端没有 `CHANNEL_CN`）。④ **拓展即漏三修**：`SRX_PLAT_ORDER.filter(...)` 当过滤集导致 App 结果永不显示 → 集合用 `Object.keys(channels)`、顺序仍用固定表；渠道覆盖分母写死 `/5` → 用 `SRX.plats.length`；文案「五渠道/五平台/四渠道」→ 「所选/全部/各渠道」。门禁 `test_r902_no_hardcoded_channel_count.py`（先剥注释，注：「四源」是视图名不在此列）。⑤ 多程如实标注：去哪儿 App 有「单程/往返/多程」三档入口但采集未接，矩阵维持 `n`、提示写明。**交接文档：docs/HANDOFF_CAPABILITY_MATRIX.md（已删除，历史引用）**（含不变式、红线判据、剩余缺口与新增渠道/维度 checklist）。
 
 - r879：明细筛选卡「航司」行在 1280 档折成两行——整块 32→65px，与上下相邻的 32px 行形成「上下不对齐」（用户反复报的「布局不对称、不对齐」）。根因是 12 家航司需要 **907px**，而这一行把 (卡宽−64−92) 留给芯片：1325 档尚有 935px 够用，1280 档只剩 898.6px，**差 8.4px** 就折行。三次尝试后定案：① 窄档把航司搜索框 92→**76px**（芯片是主内容、搜索框是次要控件；76px 仍够输入「东航」这类短词），1325/1280/1200 三档恢复单行；② **1101–1199** 档芯片列只剩 ~830px（<907 硬需求），改**单行横滚**（`flex-wrap:nowrap` + `overflow-x:auto`，滚动条 5px 与其它 chips-wrap 同款）而不是折行——实测 1199/1150/1101 三档块高全部 32px，scrollWidth 907 > clientWidth 834 证明是真滚动。门禁 `test_r874…::test_airline_chips_never_wrap_into_a_taller_block`（五档：单行 + 整格 ≤40px + 溢出时必须可横滚；负控实测：把 92px 与 wrap 一起加回，1280/1199/1101 三档全红）。同轮把 `test_r361` 里钉死 `width:92px` 的断言改成守意图（有宽度格 + 不溢出 + 三列结构）。
 
@@ -2512,9 +2506,9 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 - 本轮**无法验证并如实记录**的一条：demo 数据下 `#srxBandDays` 只有 0 张日期卡（296 字符是空态骨架），所以「在概览里真的点某个出发日」这条路径没有真实样本可点；②的验证用 `SRX.ctx=true` + 概览开合代替，覆盖了「收不回去」的机制（ctx 连带重算），但没有覆盖「选中某日后的价带重绘」。真实数据环境需人工复验一次。
 
 - 交接文档体系（2026-10-31 建立，三份互补，新会话按此顺序读）：
-  ① `docs/HANDOFF_FULL_SESSION.md` —— **整个长会话的完整经验书**（原始目标 12 条、六域已做之事、真实状态与 4 条外部红灯归属、9 条必须守护的不变式、10 条踩坑教训、工作方法判断树、P0–P3 下一步、关键文件速查、验证清单）；
-  ② `docs/HANDOFF_CAPABILITY_MATRIX.md` —— 10 渠道 × 7 维度能力一致性专项（诚实性缺陷的复现与修法、能力边界正确写法、新增渠道/维度 checklist）；
-  ③ `docs/HANDOFF_GUIDE.md` —— 发版七步与文档门禁体系。
+  ① docs/HANDOFF_FULL_SESSION.md（已删除，历史引用） —— **整个长会话的完整经验书**（原始目标 12 条、六域已做之事、真实状态与 4 条外部红灯归属、9 条必须守护的不变式、10 条踩坑教训、工作方法判断树、P0–P3 下一步、关键文件速查、验证清单）；
+  ② docs/HANDOFF_CAPABILITY_MATRIX.md（已删除，历史引用） —— 10 渠道 × 7 维度能力一致性专项（诚实性缺陷的复现与修法、能力边界正确写法、新增渠道/维度 checklist）；
+  ③ docs/HANDOFF_GUIDE.md（已删除，历史引用） —— 发版七步与文档门禁体系。
   三份文档的每个数字都附可复现命令；**写文档时若数字无法复现，就不写数字**。
 - r991：明细筛选卡在 **≤760 窄档同一张卡里出现两条左缘线**（用户最新一轮原话：「看看类似筛选列表中的筛选条件的不对齐的情况，类似的布局不对称、不对齐的都要修掉」）。r851c 当时为「不让 72px 标签槽把『更多日期』压到裁字」把窄档标签改回自适应宽，但这段的行其实仍与内容**同排**：实测 760/700/600/541 里「智能筛选」内容左缘 100、「属性」68，跨度 **32px**；540/430/390/375/320 亦然（行内 `.ag-wide` 的 grid 还留着 56px 标签列，网格行 100、flex 行 68）。定案：凡是「标签与内容同排」的行一律共用统一槽位（`--flt-lab`），只有真正换行到下一行的行才回行首。修后八档跨度全部 32→**0**，且实测无新增裁字、无新增行级溢出（320 档 `flt-chip` 逐项 `scrollWidth-clientWidth ≤1`）。门禁 `test_r991_narrow_filter_slot.py`（八档：取 top 相差 <8px 的同排行，量首个内容左缘跨度 ≤1px；负控=注入还原规则后各档跨度必回到 32px 才通过，否则判「判据没打到标签槽」）。
 - r987/r988 筛选面板内部左缘普查（对照复核，实测合规）：1512/1325/1280 三档 `.srf-card` 内每个块的内容左缘跨度全部 **0.0**（起降时段卡的 `.srf-tline` 与 `.srf-timebox` 同缘）；1024/900/760/430 走移动端 `show-filters` 通路，`#srxFmore` 为 `display:none`（宽高 0），桌面面板不参与该档布局，不构成断口。
@@ -2664,7 +2658,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · 连带修正两处旧期望（缺口清单从此不再「为空」）：`test_r677` 与 `test_r683` 现在都断言 `app_alignment_gaps("app_qunar") == ("calendar",)`——缺口如实出现在界面的「App 渠道相对浏览器端仍缺：日历」里。
   · 判据教训：**注释里的「由 X 门禁覆盖」也要被验证**。一句想当然的覆盖声明，让一个过度声明躲过了所有门禁；写「已覆盖」时至少要指出覆盖它的用例名并确认它真的测这一维。
 - r805ax 把「手抄进文档的矩阵」接上门禁。本轮改声明时发现文档漂了四处——同程 `round_trip`（文档 y / 代码 n）、途牛 `calendar`（y / n）、去哪儿 App `calendar`（y / n）、智行 App `low_fare`（"" / y）——而 `test_docs_code_contract` 只查「文档里有没有提到这些键」，**认字不认值**，所以过期结论一直是绿的。
-  · 修正 `docs/APP_CHANNELS.md`（状态行、缺口表、智行 `low_fare` 那段「目的地低价榜」旧结论——那是把首页「省钱攻略」推荐卡当成了「特价」档，r732 真机复核已更正为逐天最低价）、`docs/HANDOFF_CAPABILITY_MATRIX.md`（矩阵块、缺口行、往返/低价机票能力表、P2 第 1 条标记已定谳）、`docs/HANDOFF_FULL_SESSION.md`（矩阵块与缺口行）。
+  · 修正 `docs/APP_CHANNELS.md`（状态行、缺口表、智行 `low_fare` 那段「目的地低价榜」旧结论——那是把首页「省钱攻略」推荐卡当成了「特价」档，r732 真机复核已更正为逐天最低价）、docs/HANDOFF_CAPABILITY_MATRIX.md（已删除，历史引用）（矩阵块、缺口行、往返/低价机票能力表、P2 第 1 条标记已定谳）、docs/HANDOFF_FULL_SESSION.md（已删除，历史引用）（矩阵块与缺口行）。
   · 新增 `tests/test_r805ax_doc_matrix_matches_code.py`：把文档矩阵块当**数据**解析，与 `CHANNEL_DIMENSIONS` 逐格比对；两份缺口行与 `app_alignment_gaps` 比对；`APP_CHANNELS.md` 的人读缺口表同样比对。负控在真文档上翻掉一格（同程 `round_trip` n→y）并抹掉 `app_qunar` 缺口，判据必须红。
   · 判据教训：文档里「抄写」的结论要按**值**校验，不能按**关键词存在**校验——前者能抓过期，后者对「写着 y、其实代码早已改成 n」永远绿。
 - r805ay 给去哪儿 App 的失败路径补「现场」：账本只留一行 `set-city-dep`，看不到卡在哪一屏。重试机制（r805as/at）上线后生产仍失败（2026-11-01 17:31 SHA→BKK），没有现场只能继续猜。新增 `_save_fail_scene`：`set-city` 重试耗尽、`pick_date` 打不开日历或网格点不中时，把当刻屏幕的 150 条可读节点（文案/id/desc/坐标）落到 `debug/scene/qunar_app_<ts>_<tag>.txt`（真机 dump 常 200KB，不整份保存；写失败不影响采集）。门禁在 `test_r805as` 扩充：替身设备永远点不开 → 必须返回 False **且**落盘快照里含屏幕文案；选日两处失败点同样断言接线。
@@ -2707,7 +2701,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · 对外说明纠偏：README / README_EN 的「往返」行原写「飞猪、同程、智行 App、去哪儿 App 支持」——同程矩阵是 `n`（r740 实测裸打恒 444），途牛才是 `y`（仅国内）。改为「飞猪（仅国际）、途牛（仅国内）、智行 App、去哪儿 App；携程/去哪儿网页/同程不支持」。（r815h/r815i/r815j 后已推翻：同程国内、携程国内/国际、去哪儿网页国内往返均已实测出数；以本文件 r815i/j 段为准。）
   · 实测：`test_r709 + test_r696 + test_r695 + test_r900` 20 passed；`test_r813` 10 passed；`webui.py` 在并发写入下哈希钉住（编辑前后一致），智行白名单串已复核仍在。
 - r813c 概览红帽哨 `test_ov06_ovalert_sentinel_state` 假红的根因（不是产品缺陷）：`_goto` 只等 `S/users`，而红帽由 `/api/health` 的推送连败**异步**驱动；断言在健康响应回来之前读到初始 `display:none`。实测同树手动等 3s：`/api/health` 返回钉钉 `fail_streak=4`、`_ovPushStreak=4`、`display=''`，产品行为正确。修法是条件等待（等 `_ovPushStreak>0` 再断言显隐与 aria/title），数据不到就超时失败，不把「异步未完成」伪装成产品缺陷。实测：单跑 3/3 passed，整文件 12 passed。
-- r805bq 文档口径校准（「五渠道」已过期，产品实际 7 家）：这一批只改**用户可读的产品陈述**，历史发布说明/验收记录不动。① README 与 README_EN 的标语去掉「五平台/5-platform」（改「航班明细采集 / fare collection」，不写死数量，免得下次接渠道再烂一遍）；② 采集/明细/国际三段标成「浏览器五渠道」，并各补一句 App 两渠道（智行、去哪儿 App）；③ 登录段由「五个渠道都必须登录」改「全部渠道都必须登录」，补 App 内嵌画面登录 + 快照恢复 + 快照过期标「登录态失效」；④ 架构目录树补 `app_base + app_zhixing + app_qunar`；⑤ 测试计数按 `pytest tests/ --collect-only` 实测 **5439（跟踪口径，2026-11-01）** 更新（原写 5243）；⑥ EN 侧有一句**现在是错的**必须改：原文写「没有 Web 面的渠道不在范围内：智行只有 App……驱动真机不属于默认部署」——智行/去哪儿 App 早已接入，改为「走可选 App 通路（MuMu + adb，默认关闭），美团因人脸核验不自动」。⑦ `docs/INTL_DESIGN.md`、`docs/CHANNEL_SESSION.md`、`docs/MOBILE_CHANNEL_OPTIONS.md` 的「五渠道」按真实范围改「浏览器五渠道」；MOBILE_CHANNEL_OPTIONS 的 §0 结论（「真正缺的是智行、美团」）加日期注记：智行已接入、美团仍挂起。⑧ `docs/RELEASE_PROCESS.md` / `docs/HANDOFF_GUIDE.md` 里作为**发布文案模板**的旧标语与 README 同步。
+- r805bq 文档口径校准（「五渠道」已过期，产品实际 7 家）：这一批只改**用户可读的产品陈述**，历史发布说明/验收记录不动。① README 与 README_EN 的标语去掉「五平台/5-platform」（改「航班明细采集 / fare collection」，不写死数量，免得下次接渠道再烂一遍）；② 采集/明细/国际三段标成「浏览器五渠道」，并各补一句 App 两渠道（智行、去哪儿 App）；③ 登录段由「五个渠道都必须登录」改「全部渠道都必须登录」，补 App 内嵌画面登录 + 快照恢复 + 快照过期标「登录态失效」；④ 架构目录树补 `app_base + app_zhixing + app_qunar`；⑤ 测试计数按 `pytest tests/ --collect-only` 实测 **5439（跟踪口径，2026-11-01）** 更新（原写 5243）；⑥ EN 侧有一句**现在是错的**必须改：原文写「没有 Web 面的渠道不在范围内：智行只有 App……驱动真机不属于默认部署」——智行/去哪儿 App 早已接入，改为「走可选 App 通路（MuMu + adb，默认关闭），美团因人脸核验不自动」。⑦ `docs/INTL_DESIGN.md`、`docs/CHANNEL_SESSION.md`、docs/MOBILE_CHANNEL_OPTIONS.md（已删除，历史引用） 的「五渠道」按真实范围改「浏览器五渠道」；MOBILE_CHANNEL_OPTIONS 的 §0 结论（「真正缺的是智行、美团」）加日期注记：智行已接入、美团仍挂起。⑧ `docs/RELEASE_PROCESS.md` / docs/HANDOFF_GUIDE.md（已删除，历史引用） 里作为**发布文案模板**的旧标语与 README 同步。
   · 顺带修掉一个静默缺陷：`docs/demo_build.py` 的 SEO 头是用**字面量** `page.replace('<meta name="description" content="自托管多渠道机票价格监控：五渠道明细…">', …)` 注入的，而 webui 的 meta 早已改成「多渠道明细」——替换静默不生效，演示站会带着 app 自己的 meta 上线。左值已按 webui 实际串对齐，并在烘焙后 `assert og:title 已注入`，以后 webui 再改 meta 会**构建失败**而不是悄悄少一段。
   · 门禁：`test_docs_code_contract`（含中英特性矩阵对账，CN 行改名后 FAMILY/CN_FAMILY 两向映射同步补「浏览器五渠道明细 / browser five-channel detail」）、`test_r805ax`、`test_r902`、`test_eol_consistency`、`test_v160`、`test_r681`、`test_r323`：**115 passed**；`docs/site/index.html` 属发布树烘焙产物，按既有约定下次发布重烘，本轮不动。
 - r805br 去哪儿 App「设城市」第四层真因（这次是**选错档位**，不是点不中/时序）：现场轨迹 `set-city(dep) 轨迹 city,city` + 70~115 秒只走 2 帧，读代码才看清——`intl` 是**航线**口径（`is_intl_route`），却被拿来给**两端**选城市页档位。SHA→BKK / SHA→LHR 的出发地「上海」是国内城市，代码把城市页切到「国际」档，列表里只有东京/首尔，`_pick_city_row` 永远选不中；随后搜索框展开又被转场打断，最后停回首页记 `set-city-dep`。修法四条：① 调用方按**这一端城市**传 `tab_intl=is_intl_city(from_city/to_city)`（航线口径只留作其它用途）；② 循环顺序改为**先选后切档**（点档位可能直接回首页并带出上次的城市，先切会白花一次转场）；③ 切档后若离开了城市页，**必须核对城市位真的变成目标**才返回 True（原来「离开城市页」就算成功，会把「还是北京」当设置成功，整轮搜错航线还查不出）；④ 慢机（单帧 10–20s）下把点后轮询从 8 帧 / 6 帧收到 3 帧 / 2 帧——取满会把整个窗口耗在等帧上。
@@ -2761,7 +2755,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · 6/8 张前瞻：6 张按 3+3（≥1360 一行 6），8 张按 4+4，≤700 单列；卡头/登录行沿用 7 张地板。门禁用**合成 .hdiag 容器**克隆真实卡，只测列数规则，不受健康轮询重绘。
   · 门禁：r813d+r1041+r813i+r901 **26 passed**；App 采集器 r691/r694×2/r720 **23 passed**（r720 旧 1600 字符窗按 `_find_search_placeholder` 调用改写，未改并行会话的采集代码）。
 - r805bv 去哪儿 App 的往返只覆盖国内（现场定谳，不是解析没做）：22:59 在设备空载时跑往返探针（`_scratch/probe_rt_intl.py`，SHA→LHR 去 11-23 / 返 11-30）：`_set_round_trip_form` 成功（78s），随后**按键返回首页复核表单**——城市 上海→伦敦、去程 `11月23日`、**返程 `11月30日`、`ll_back_date` 在树里**，确实是往返档；但点搜索后 60 秒取到的稳定页面是**单程国际列表**（25 张 `QunarFlightInterList` 卡、9 个 `|ItemPrice`，`ScrollView_go/back` 与「往返价格」页脚**一个都没有**）。结论：这版 App 的国际档不给往返结果页，与我们的解析无关；国内往返（2026-10-31 真机，左右双列 + 页脚总价）仍然成立。
-  · 声明按「一端覆盖」处理：`DIMENSION_SCOPE[("app_qunar","round_trip")] = "仅国内"`，`DIMENSION_NOTES` 写明「国内真机跑通、国际档设了返程日仍出单程列表」；`docs/APP_CHANNELS.md` 抬头/缺口表/往返段与 `docs/HANDOFF_CAPABILITY_MATRIX.md` 的「往返」行同步改成「去哪儿 App（仅国内）」。
+  · 声明按「一端覆盖」处理：`DIMENSION_SCOPE[("app_qunar","round_trip")] = "仅国内"`，`DIMENSION_NOTES` 写明「国内真机跑通、国际档设了返程日仍出单程列表」；`docs/APP_CHANNELS.md` 抬头/缺口表/往返段与 docs/HANDOFF_CAPABILITY_MATRIX.md（已删除，历史引用） 的「往返」行同步改成「去哪儿 App（仅国内）」。
   · 顺手改掉一条**已过期**的单元格说明：`DIMENSION_NOTES[("app_qunar","intl")]` 原写「国际目前只有日历价，无航班级明细」——22:46 起同一渠道国际列表已产出 CA847/MU213/BA168 三条带航班号/时刻/价格的明细，改为「国际列表卡带航班号/时刻/价格；国际没有独立日历通路」。
   · 运行时候选也不再空等：`_fetch_round_trip_locked` 等不到往返结果页且航线是国际时，记 `TRIP/unsupported`（说明里带「2026-11-01 SHA→LHR 实测」），日期级仍如实记 `no-list-page`——账本不再只剩「页面没打开」这一句。
   · 门禁：`test_r805ae` 的「只覆盖一端」集合与渲染期望（国内 scope 出现「去哪儿 App仅国内」、国际 miss 出现「去哪儿 App」）、`test_r701` 新增一条国际往返记 unsupported 的用例（8 passed）。复跑 `test_r805ae + test_r805ax + test_eol_consistency + test_r793 + test_r901` **43 passed**；`python -m core.channel_contract --strict` 仍 **7×11 无缺口**。
@@ -2781,7 +2775,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
 - r813p 最终全量 pytest（哈希 `c8773dd`，`tools/test_all.py --no-ui --workers 8`）：**5840 passed / 16 skipped / 2 failed（549.9s）**。两红均为 `test_r660_pacing_reading_not_clipped` 在固定 900ms 后量 `.e2`——7 张诊断卡 + xdist 并发下节流读数尚未填好，`clientWidth=0`；负控同样量不到。改为条件等待（智行行 `.e2` 有宽且有文字）后单文件 **4 passed**。产品无回归；全量复跑留到发版窗口的冻结树（预期 5842/0）。并行会话另有一个 5 红的全量运行（目录 231402），不属本轮结果。
 - r813q 剩余可见面真渲染审计（demo，7 渠道行）：检索台行内展开的「来源与证据」对去哪儿 App 行显示「渠道 去哪儿 App」（非裸 id），采集入口/采集时刻/原始行/落地页齐全（demo 无入口时如实「未记录」）；`srxExport()` 导出 CSV **91 行、其中 26 条 App 行**，渠道列只有「智行 App / 去哪儿 App」，无 `app_zhixing`/`app_qunar` 裸 id；零 pageerror。关注台图例/渠道条静态核对走 `SRX_PLAT_KEYS`/`SRX_PLATS`（7 家）。任务 #4 的登录/节流/矩阵/诊断卡/探针/6-8/导出/溯源已覆盖。
 - r813r 全量 pytest 第三次（哈希 `c8773dd`，`tools/test_all.py --no-ui --workers 8`）：**5839 passed / 16 skipped / 3 errors（466.5s）**。3 个 error 全是 `test_r851_filter_rows_one_line[1512/1280/900]` 的 setup `Page.goto: net::ERR_CONNECTION_REFUSED at 127.0.0.1:65278`（并发负载下演示服未起来），**无产品断言失败**；r660 两红已随条件等待消失。工具同时报「跑测期间产品代码被改写」→ 本轮按纪律作废。全量绿证留到发版冻结窗口（无并行写、无设备并发）。UI 全量自检 670/670 仍是最新有效 UI 证据。
-- 公开发版说明 `docs/release-notes-v1.5.307.md` 新增「7 渠道平台能力对齐（2026-11-01）」一节：11 轴契约、智行雷达、探针 App、7/6/8 卡布局、全链路名称图标、两项诚实性修复（不含内部轮次号）。
+- 公开发版说明 docs/release-notes-v1.5.307.md（已删除，历史引用） 新增「7 渠道平台能力对齐（2026-11-01）」一节：11 轴契约、智行雷达、探针 App、7/6/8 卡布局、全链路名称图标、两项诚实性修复（不含内部轮次号）。
 - r805bz 飞猪 H5 端面真跑 + 途牛「国内有账号、切国际要重登」的定谳：
   · **飞猪 H5 跨月选日修好**（原来 90 天外的日期根本选不了）：真机复跑 `SHA→HAK 2027-01-30` 得到 `H5 日期选择未匹配`。探针读日历 DOM：所有月份**排在一条纵向列表**里，每月一个 `.month-header-text`（文案 `YYYY-MM`，2026-11 → 2027-06 依次排下来），而原实现只点「当前可见月里文字等于 day 的第一个元素」——目标 1 月 30 日时点到的是 11 月的 30 日。改为按 `YYYY-MM` 找到月标题 → `scrollIntoView` → **只在该月标题与下个月标题之间的区段**里点日。
   · 顺带抓到一个更危险的口径错：原来的月份校验是**子串**——`"1 月" in "11 月 30 日"` 为真，等于「选错月也算成功」。改成带边界正则 `(?<!\d)1\s*月\s*30\s*日`。用例 `test_r794::test_select_date_reaches_far_month_and_never_accepts_wrong_month`（正向带 `ym=2027-01`、负控 `11 月 30 日` 必须 False、月标题不存在直接失败）11 passed。
@@ -3430,7 +3424,7 @@ PCHART.placeTipAxis(host, tip, cx, topY)            // DOM 浮窗：取 placeAxi
   · 存量 4 行 ¥20 历史数据未删（共享生产库，未授权写）；本轮只阻止继续落库与推送假价。
 
 - r937 live 8765 切换复核（2026-11-03 09:20）：
-  · 实测 PID **47952**，cwd `D:\idea_project\_release_ab04`，启动 08:58:06；`webui.py` sha12 `6c85a00f14c1`；`/api/channel-dims` **10 家**；`enabled_platforms` 6、诊断卡 7；config 与主树 diff=0。
+  · 实测 PID **47952**，cwd 为发布构建树（仓库外），启动 08:58:06；`webui.py` sha12 `6c85a00f14c1`；`/api/channel-dims` **10 家**；`enabled_platforms` 6、诊断卡 7；config 与主树 diff=0。
   · Release `v1.0` → `ab04c22`，正文 10 渠道，四资产 digest 4/4（见 r936）。
   · 线上 390 真渲染（只读）：矩阵 **10 列 / 10 行**、滚到最右首列 `left=28`=容器左缘（冻结生效）、滑动提示可见、10 个探针 chip、零 pageerror。
   · live 树**不含** r933–r935（多程数据层/`Route.segments`/实际渠道错峰）；旧 `_release_final_72d` 保留作回滚。

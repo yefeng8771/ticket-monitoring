@@ -19,7 +19,9 @@ SKIP_DIRS = {"_scratch", "build", "_build", "_build_check", "dist", "dist_packag
              # `_vendor/`：`pip install --target` 装的可选解码后端（ddddocr 等），
              # 已在 .gitignore 里。第三方发行物自己混用 CRLF/LF，
              # 我们既不拥有也不该改（重装即失效），所以扫换行符时跳过。
-             "_vendor"}
+             "_vendor",
+             # Android NDK/工具链是第三方发行物，不归本项目维护。
+             "_tools"}
 
 CRLF = b"\r\n"
 LF = b"\n"

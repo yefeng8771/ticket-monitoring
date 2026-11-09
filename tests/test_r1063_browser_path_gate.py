@@ -306,12 +306,36 @@ def test_enabled_h5_api_still_takes_over_the_dates_pc_missed():
         % c._hoop.call_count)
 
 
+def _disable_scopes(*keys):
+    """一次写多条停用项。
+
+    `_disable_scope` 走 `strategy_params.set_config`，**整体替换**
+    `strategy_overrides`——连调两次会把前一条冲掉（本轮踩到：先停 H5 再停
+    周历，结果 H5 又开了浏览器）。
+    """
+    from core import strategy_params as sp
+    sp.set_config({"crawler": {
+        "rate": {"min_gap_s": 0, "per_minute": 0},
+        "strategy_overrides": {k: {"path_fallback.enabled": False}
+                               for k in keys}}})
+
+
+def _reset_overrides():
+    """策略覆盖是全局状态，用例之间必须复位。"""
+    from core import strategy_params as sp
+    sp.set_config({"crawler": {"rate": {"min_gap_s": 0, "per_minute": 0},
+                               "strategy_overrides": {}}})
+
+
 def test_disabled_h5_path_does_not_even_open_a_browser():
     """(i) 被闸掉的 H5 不许白占一个 `CHANNEL_GATE` 浏览器名额（ctrip）。
 
     全局同时只放 `CHANNEL_GATE` 个渠道浏览器；闸门判在 `with self.browser()`
     **之前**，所以被停用的通路连上下文都不进——否则一个被用户关掉的通路
     会让别的渠道干等。
+
+    r1063 T153：`PC·周历` 是**独立通路**，它有**自己的**闸门。所以这条用例
+    要同时停掉周历，否则"周历兜底"会合法地开一个浏览器（见下一条用例）。
     """
     from unittest import mock
 
@@ -323,10 +347,13 @@ def test_disabled_h5_path_does_not_even_open_a_browser():
     c.browser = mock.MagicMock(
         side_effect=AssertionError("被链路闸门停用的 H5 仍开了浏览器"))
     c._fetch_intl_list = mock.MagicMock(return_value=[])
-    _disable_scope("ctrip/domestic/H5")
+    _reset_overrides()
+    _disable_scopes("ctrip/domestic/H5", "ctrip/domestic/PC·周历")
 
     rows = c.fetch("上海", "北京", ["2026-11-20"])
 
     assert rows == []
     assert c.browser.call_count == 0, "被闸掉的通路开了浏览器"
     assert c._fetch_intl_list.called, "H5 被跳过时 PC 列表补采必须照跑"
+
+

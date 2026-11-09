@@ -175,14 +175,14 @@ UI 自检脚本中途抛异常（元素脱附/超时/浏览器崩溃）走 excep
 飞猪 PC 是不含税展示价（与含税渠道差 50-130）——渠道接入第一天就确认计价口径并写进 docstring，否则比价长期偏优误导决策。
 
 ### 7. 「移动端」不是缺口：先分清 H5（移动 Web）与 App（2026-10-27 实测）
-> 完整实测表与三条方案对比见 `docs/MOBILE_CHANNEL_OPTIONS.md`（同日独立实测，结论一致：美团仅日历可用、列表接口 `paramError`、WSA 已弃用、App 自动化需常驻设备）。本节只留判据，数字以那份文档为准，避免两处各自漂移。
+> 三条方案对比的结论：美团仅日历可用、列表接口 `paramError`、WSA 已弃用、App 自动化需常驻设备。本节只留判据。
 用户提「只支持 PC/H5，能否支持移动端」时先对齐术语：本项目 5 渠道的 H5 就是移动 Web（`use_mobile=True` → 390×844 视口 + 移动 UA + `is_mobile/has_touch` 指纹），移动端早已覆盖；缺的是**没有 Web 面的渠道**（智行、美团）。实测结论：
 - **智行**：Web 面整体不存在。`zhixing.com`/`zx12306.com`/`flight.suanya.com`/`air.suanya.com` 全部 `ERR_CONNECTION_CLOSED|ABORTED`；`m.suanya.com` 存活但只有火车票（`#/flight` 不路由、`#/plane` 超时）；`market.suanya.com` 机票活动页 404 且页脚为 ctrip 版权 ⇒ 机票数据只经 App 暴露。
 - **美团**：H5 存在但只坏了一半。列表页 `hfe-dianping-flight/list` 自身带 `_token` 发请求，`getflightwiththreecode` 仍恒回 `{"msg":"paramError"},apicode 10006`（前端 0.1.46 与后端失配），页面因此只显示「查不到相关航班信息」；参数名、三字码、`adtnum/cabin` 类必填、clientType/渠道路径、`h5_source`/`h5=1` 开关、日期格式全试过均无效。**仅 `getLowPriceCalendar` 可用**（国内航线 61 天真实价、国际空）。入口页 `hfe-i-flight` 是空壳：DOM 无 input，搜索按钮是火车票样式。
 - **App 自动化的真实代价**：真机/模拟器共用 adb 接口，代码可互换；`uiautomator2` 6.7MB + platform-tools 17MB ≈ 安装包 +24MB（当前 win zip 60MB）；模拟器重资产不入包。30 分钟一轮的调度要求**设备常驻**，单次查询从 15–45s 涨到分钟级、UI 改版即失效。
   - **2026-10-27 实测补充（两处此前结论被推翻）**：
-    ① **MuMu 路线成立**：装完即 `adb connect 127.0.0.1:16384` 免点任何界面，实例可命令行控制，与 Hyper-V/VBS 共存；占用 3.6 GB（详见 `docs/MOBILE_MUMU_ACCEPTANCE.md`）。
-    ② **智行有 64 位包且已跑通**：应用宝同页挂了两个 APK，第一个 88.5 MB 是 `armeabi`（32 位，装上去各种受限），第二个 104.0 MB 才是 `arm64-v8a`；装 64 位版后机票列表可完整读出。**只抓页面第一个下载链接 = 随机取样**（详见 `docs/MOBILE_ZHIXING_A12_RESULT.md`）。
+    ① **MuMu 路线成立**：装完即 `adb connect 127.0.0.1:16384` 免点任何界面，实例可命令行控制，与 Hyper-V/VBS 共存；占用 3.6 GB。
+    ② **智行有 64 位包且已跑通**：应用宝同页挂了两个 APK，第一个 88.5 MB 是 `armeabi`（32 位，装上去各种受限），第二个 104.0 MB 才是 `arm64-v8a`；装 64 位版后机票列表可完整读出。**只抓页面第一个下载链接 = 随机取样**。
     ⇒ 结论修正：智行/美团走 App 自动化**技术上可行且已实测**；剩下的只是常驻成本，不是可行性问题。WSA 已不可用（2025-03-05 停支持、2025-07 移除）。
 通用律：**评估「再加一个渠道」时，先分「有没有 Web 面」再谈端**——有 H5 就只是接一个 crawler；只有 App 就是硬件+稳定性成本，且必须让设备在扫描时刻在线（调度频率决定「常驻」是硬要求，不是选项）。顺带核渠道时以**它自己的 JS 有没有发出合法请求**为判据：页面自带的 `_token` 也换来 `paramError`，说明是前后端失配而非我们缺参数——别在参数上继续打转。
 

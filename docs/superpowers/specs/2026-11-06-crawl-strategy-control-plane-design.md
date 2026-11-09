@@ -247,7 +247,7 @@ POST 在一处集中钳制后写回 yaml），页面保存 → 热重载 → 下
 ## 7. 历轮要求的承载（融入，不是并存）
 
 **做法**：把 `docs/EXECUTION_SPEC_LATEST.md`、`docs/RATE_LIMIT_PLAYBOOK.md`、
-`docs/HANDOFF_CAPABILITY_MATRIX.md`、`docs/HANDOFF_FULL_SESSION.md`、`HANDOFF.md`、
+docs/HANDOFF_CAPABILITY_MATRIX.md（已删除，历史引用）、docs/HANDOFF_FULL_SESSION.md（已删除，历史引用）、`HANDOFF.md`、
 `docs/YIELD_AND_SESSION_STRATEGY.md` 里**此前提过的相关要求逐条挖出来**（共 86 条，
 按 A–H 分组，全文见**附录 A**），逐条指到「哪一层 + 哪个判据 + 哪个门禁」。
 本设计不新增要求口径，只宣布它们由谁承载。
@@ -292,7 +292,7 @@ POST 在一处集中钳制后写回 yaml），页面保存 → 热重载 → 下
 | Q3 | 「24 条」与 §4 枚举的 ~47 项对不上 | 定死 **28 条**，id 表见**附录 B**。合并规则：`fast/slow TTL` 合为 `ttl_tier`；`near_ratio/near_days` 合为 `near_window`；`UA / 移动 UA / TLS` 合为 `identity_headers`；`slider` 的 auto/single_shot 与 daily_cap/max_fails 拆成 `slider_attempt`、`slider_guard` 两条（语义不同：试不试 vs 试几次）。验收数字随之改为「10 家 × 28 条」。 |
 | Q4 | `strategy_*` 入台账会顶掉 `intervention_effect` 的「最近一次人工干预」分界，并污染干预成功率 | 采用**第三类前缀**：`auto_*`（系统自动）/ `strategy_*`（策略变更与停手）/ 其余（人工动作）。`intervention_effect` 与 `intervention_success_rate` 的 SQL 分界同时排除 `substr(action,1,5)='auto_'` 与 `substr(action,1,9)='strategy_'`。`scope` 继续只用既有渠道/分域词表（**不用** `strategy:<id>`：`test_r654_every_scope_has_a_label` 用 `[a-z_]+` 扫 `scope` 字面量并要求 `_ivScope` 中文标签，冒号会被静默漏过）；策略 id 写 `note` 前缀 `[<id>]`，前端据此显示「策略变更」。新增门禁 `test_r1063_strategy_ledger_class.py`（含负控：把 `strategy_` 从排除里去掉 → 红）。 |
 | Q5 | `halt` 存哪、优先级多高、会不会与 `policy_state.json` / `reset` 打架 | 独立文件 `user_data/<profile>/strategy_halt.json`，**不动** `policy_state.json` 结构（§8.3 仍成立）。`decide()` **最前**读 halt → `state="blocked"`、`allow=False`、`reasons=["人工停手 N 分钟：…"]`；到期自动失效（有上限，符合 I6 与「可中断但不可永久判死」）。`/api/pacing/reset` **不碰** halt，界面文案分别写清「解除自动熔断」与「恢复人工停手」。本轮 halt 只支持**渠道级**；维度/链路级停手在矩阵记 `na` 并写明「待 B6」。 |
-| Q6 | 「换身份 / 重登」的一键执行本轮做不做？ | **不做**。§10 非目标已定「不动设备身份」（`SESSION_EXPERIENCE_GUIDE_2026-11-06.md` §4：改动会让阿里系与携程会话全失效）。身份族在矩阵里 `可干预=na`，理由写「只建议、不执行」；策略行给「建议换身份」+ 指向 `docs/DEVICE_IDENTITY_PLAYBOOK.md` 的链接，**不给假按钮**（撞反目标）。重登仍走既有 `srxGoLogin()`，不新增执行路由。 |
+| Q6 | 「换身份 / 重登」的一键执行本轮做不做？ | **不做**。§10 非目标已定「不动设备身份」（`SESSION_EXPERIENCE_GUIDE_2026-11-06.md` §4：改动会让阿里系与携程会话全失效）。身份族在矩阵里 `可干预=na`，理由写「只建议、不执行」；策略行给「建议换身份」+ 指向 docs/DEVICE_IDENTITY_PLAYBOOK.md（已删除，历史引用） 的链接，**不给假按钮**（撞反目标）。重登仍走既有 `srxGoLogin()`，不新增执行路由。 |
 | Q7 | 数据驱动渲染下「删一个控件 → 报 n」的负控怎么成立？ | 三层判据：(a) 登记表 id 必须被**生产代码读**（静态：扫 `glb` 读点/参数解析器）；(b) 每条**数值型**策略必须在 `GLB_RANGES` 或 `GLB_RANGES_DYN` 有边界登记；(c) **渲染级**证据：`uitest` 断言 28 条策略行在页面上真的存在、可改、保存后回读（`SPEC:2148` 明确禁止「代码里有这行」当作可见）。负控两处：删后端读点 → 静态 audit 报 `n`；删渲染器 `data-strategy` 输出 → uitest 红。前端**不写 28 条字面量**：渲染器从 `GET /api/strategy` 目录驱动、模板统一输出 `data-strategy="<id>"`——既不写第二份声明，也保留可证伪。 |
 | Q8 | 参数编辑走哪条写路径？（`/api/strategy/set` 与 `/api/strategy/toggle` （建议名·未实现，已取消，改走 /api/config）） 与整表 `POST /api/config` 会不会互相覆盖？ | **参数编辑只走既有 `POST /api/config`**（`glb` 整表 + `strategy_overrides`，进脏状态与 savebar，r649 的保存互斥继续有效）。`/api/strategy/*` 只做**运行期干预**（halt/resume）与只读。由此语义定死：**「开/关」= 配置（savebar，可回读）；「停/恢复」= 干预（即时，不写 yaml）**。取消原稿的 `/api/strategy/set`、`/api/strategy/toggle`。 |
 
@@ -391,7 +391,7 @@ POST 在一处集中钳制后写回 yaml），页面保存 → 热重载 → 下
 
 > 摘录自既有文档，行号指向当时版本；实现前用 `grep` 复核。末列是本设计的承载点。
 > `SPEC`=`docs/EXECUTION_SPEC_LATEST.md`、`RLP`=`docs/RATE_LIMIT_PLAYBOOK.md`、
-> `HCM`=`docs/HANDOFF_CAPABILITY_MATRIX.md`、`HFS`=`docs/HANDOFF_FULL_SESSION.md`、
+> `HCM`=docs/HANDOFF_CAPABILITY_MATRIX.md（已删除，历史引用）、`HFS`=docs/HANDOFF_FULL_SESSION.md（已删除，历史引用）、
 > `HO`=`HANDOFF.md`、`YIELD`=`docs/YIELD_AND_SESSION_STRATEGY.md`。
 
 ### A 配置页必须可配置 / 不许只读展示 / 范围校验 / 回读（13）

@@ -32,7 +32,8 @@ def test_dump_returns_xml(monkeypatch):
         return R(out=b"UI hierchary dumped to: /sdcard/ui.xml")
 
     monkeypatch.setattr(subprocess, "run", fake)
-    out = _dev().dump()
+    dev = _dev(); dev.dump_u2 = lambda: ""
+    out = dev.dump()
     assert "<hierarchy" in out
     assert any("cat" in c for c in calls)
 
@@ -203,7 +204,8 @@ def test_dump_writes_to_shell_writable_path(monkeypatch):
         return R(out=b"UI hierchary dumped to: /data/local/tmp/tm_ui.xml")
 
     monkeypatch.setattr(subprocess, "run", fake)
-    assert "<hierarchy" in _dev().dump()
+    dev = _dev(); dev.dump_u2 = lambda: ""
+    assert "<hierarchy" in dev.dump()
     dumped = [c for c in seen if "uiautomator" in c]
     assert dumped, "没有调用 uiautomator dump"
     assert any("/data/local/tmp/" in a for a in dumped[0]), \
@@ -221,7 +223,8 @@ def test_dump_clears_previous_file_first(monkeypatch):
         return R(out=b"UI hierchary dumped to: x")
 
     monkeypatch.setattr(subprocess, "run", fake)
-    _dev().dump()
+    dev = _dev(); dev.dump_u2 = lambda: ""
+    dev.dump()
     first_cmds = [c for c in seen[:3]]
     assert any("rm" in c for c in first_cmds), \
         "dump 前没有 rm 旧文件：%s" % first_cmds
@@ -253,5 +256,6 @@ def test_dump_kills_stuck_uiautomator(monkeypatch):
         return R(out=b"UI hierchary dumped to: x")
 
     monkeypatch.setattr(subprocess, "run", fake)
-    _dev().dump(retries=1)
+    dev = _dev(); dev.dump_u2 = lambda: ""
+    dev.dump(retries=1)
     assert any("pkill" in c for c in seen), "没有尝试重启卡死的 uiautomator"

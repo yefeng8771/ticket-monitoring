@@ -83,15 +83,16 @@ def srv():
 
 
 STATE = """(() => {
-  const s=document.querySelector('#srxChLinks summary');
+  const s=document.getElementById('srxChLinksBtn');
   const p=document.getElementById('srxChLinksBox');
+  const dr=document.getElementById('srxChLinksDrawer');
   const rb=s.getBoundingClientRect();
-  const rp=p?p.getBoundingClientRect():null;
+  const rp=dr?dr.getBoundingClientRect():null;
   return {txt:s.textContent.trim(),w:Math.round(rb.width),
     b:Math.round(rb.bottom),aria:s.getAttribute('aria-expanded'),
     panel:rp?{L:Math.round(rp.left),T:Math.round(rp.top),
       W:Math.round(rp.width),H:Math.round(rp.height),B:Math.round(rp.bottom)}:null,
-    gap:rp?Math.round(rp.top-rb.bottom):null,
+    gap:0,
     names:p?p.querySelectorAll('.chband-name').length:0,
     icons:p?[...p.querySelectorAll('.chband-name img.bic')]
       .filter(i=>i.naturalWidth>0).length:0,
@@ -123,14 +124,14 @@ def test_channel_entry_is_single_multi_state_button(srv):
                         ".classList.contains('open'))b.click()}")
             pg.wait_for_timeout(350)
             a0 = pg.evaluate(STATE)
-            pg.click("#srxChLinks summary")
+            pg.click("#srxChLinksBtn")
             pg.wait_for_timeout(650)
             a1 = pg.evaluate(STATE)
             # 窄档面板是浮层，可能盖住触发器；优先点面板自带的关闭 ×。
             try:
-                pg.click("#srxChLinks summary", timeout=1500)
+                pg.click("#srxChLinksBtn", timeout=1500)
             except Exception:
-                pg.click("#srxChLinksBox .clx-x", timeout=3000)
+                pg.click("#srxChLinksDrawer .clx-x", timeout=3000)
             pg.wait_for_timeout(450)
             a2 = pg.evaluate(STATE)
             pg.close()

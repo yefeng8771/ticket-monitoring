@@ -445,85 +445,26 @@ def test_probe_open_close_keeps_trigger_and_content_adjacent():
 
 
 def test_mirror_fold_keeps_trigger_geometry():
-    """用户实报「展开位置都发生了偏移」。镜像开合曾让触发器跨屏移动
-    1428px：收起态把网格压成 1fr（右半栏 654 → 整行 1319）+ 内容
-    display:none（触发器重排到最右）+ 轨道 padding/min-height 清零
-    （纵移 9px）。
-
-    r424 的应对是「列宽不变、内容只藏可见性」——位移降到 2px，但用户随即
-    指出另一半：「能收起来，但是也给不了右边用」。占位保位只解决了按钮不动，
-    折叠本身没把空间交还。r524 定案：触发器移到轨道末尾（贴右缘），收起时
-    胶囊与视图钮真正移除、右列塌成按钮宽——实测 0px 位移 **且** 列表 +431~571px。
-    本用例守「位移」这一半；释放列宽由下面那条守。"""
+    """r1131：折叠钮移到结果卡头，两态同坐标；镜像折叠态直接隐藏。
+    旧 r424/r524 的「轨道末尾 + 绝对定位」实现已废弃。"""
     import webui
     src = webui.PAGE
-    # 折叠态必须让左列表拿走整行，右侧不留任何残留列
-    assert "#searchview .srx-grid:has(.srx-mirror.srx-folded)" \
-           "{grid-template-columns:minmax(0,1fr)}" in src, \
-        "折叠态网格没有收成单列（右侧会残留竖直空带）"
-    # 该规则必须限定在「本来就是两列」的宽度：≤1100px 网格主动收单列，
-    # 再无条件套双列会把展开态整行宽的镜像卡压成半宽。
-    i0 = src.index("@media(min-width:1101px){\n #searchview .srx-grid:has(.srx-mirror.srx-folded)")
-    assert src.index("}", i0) > src.index("minmax(0,1fr)}", i0), \
-        "网格列规则应被宽度媒体查询包住"
-    # 触发器必须排在轨道末尾，两态才都贴同一右缘（r979：视图工具组已
-    # 挪到 chrome 行；r1049e：轨道收成单行横滑，胶囊包进 .srx-mrail-tabs，
-    # 折叠钮独占行尾的 .srx-mrail-end）。
+    head = src[src.index('id="srxListHead"'):src.index('</div><!-- /srxResults -->')]
+    assert 'id="srxMirrorFold"' in head and '收起镜像' in head, head[:400]
     i = src.index("return '<div class=\"srx-mrail\"><span class=\"srx-mrail-tabs\">'+rail+")
-    seg = src[i:i + 520]
-    assert "srx-mrail-end" in seg and "srx-foldbtn" in seg, seg
-    assert seg.index("srx-mrail-end") < seg.index("srx-foldbtn"), \
-        "折叠钮不在轨道末尾，收起态会停在空带中间"
-    assert "srx-mtools" not in seg, \
-        "视图工具组又占回轨道末行，会在 10 家渠道下单独占一行"
-    # 轨道盒几何不得动：padding / min-height / 边框宽度 / overflow 都是布局盒
-    # 的一部分（border-bottom:0 少 1px 让按钮下移 1px；
-    # overflow:visible 让 sticky 失效，hidden 又会在获焦时被滚进视野）。
-    i = src.index("#searchview .srx-mirror.srx-folded .srx-mrail{")
-    seg = src[i:src.index("}", i) + 1]
-    assert "padding:0" not in seg, seg
-    assert "min-height:0" not in seg, seg
-    assert "border-bottom:0" not in seg, seg
-    assert "border-bottom-style:none" not in seg, seg
-    assert "overflow:visible" not in seg, seg
-    assert "overflow:hidden" not in seg, seg
+    seg = src[i:i+300]
+    assert 'srx-foldbtn' not in seg, seg
+    assert "#searchview .srx-mirror.srx-folded{display:none!important" in src
 
 
 def test_narrow_mirror_fold_button_is_not_covered_by_tools():
-    """工具组与折叠钮不能是两颗各自 `sticky;right:0` 的兄弟。
-
-    1512 档实测：「收起镜像」盖住「详情」18px、「四源」整 40px
-    （截图读作「列 详[收起镜像]源」），elementFromPoint 落在折叠钮上。
-    根因是两个兄弟都钉到轨道右缘的同一坐标，后绘制者获胜；r425 只把
-    ≤900 档的工具组放回流内，桌面档的同类碰撞一直在。
-    定案：右段收成**一个粘附单元**（.srx-mrail-end）包住工具组 + 折叠钮，
-    组内按 flex 顺序排开，结构上不可能再互相覆盖。"""
+    """r1131：折叠钮唯一且在结果卡头；镜像轨只剩渠道胶囊，无粘附工具组。"""
     import webui
     src = webui.PAGE
-    # r979：工具组从轨道粘附单元移到下一行 chrome（宿主/标签之后），
-    # 与折叠钮分属两行，结构上不可能再互相覆盖。
-    assert 'class="srx-mrail-end"><button type="button" class="srx-foldbtn"' in src, (
-        "折叠钮没有被收进粘附单元，会与轨道内元素在右缘叠在一起")
-    ret = src[src.index("return '<div class=\"srx-mrail\"><span class=\"srx-mrail-tabs\">'+rail+"):][:900]
-    assert 'class="srx-mchrome">' in ret and "+mtools+" in ret, (
-        "视图工具组没有落进 chrome 行")
-    assert ret.index('class="srx-mchrome">') < ret.index("+mtools+"), (
-        "视图工具组顺序异常")
-    # 旧写法：两颗兄弟各自 sticky;right:0（正是重叠的来源）
-    assert "-foldbtn,\n#searchview .srx-mrail>.srx-mtools{position:sticky" not in src, \
-        "旧的「两颗兄弟各自 sticky」规则还在，重叠会复发"
-    i = src.index("#searchview .srx-mrail>.srx-mrail-end{")
-    seg = src[i:src.index("}", i) + 1]
-    assert "position:sticky" in seg and "right:0" in seg, \
-        "粘附单元没有贴右固定：%s" % seg[:120]
-    # 窄档把粘附单元拆回流内，折叠钮独占粘附位（原 r425 定案）
-    i_split = src.index("#searchview .srx-mrail>.srx-mrail-end{display:contents}")
-    head = src.rfind("@media(max-width:700px){", 0, i_split)
-    assert head > 0 and i_split - head < 200, \
-        "拆回流内的规则没写在 max-width:700px 档里（窄档仍会被 176px 粘附单元挤掉胶囊）"
-    seg = src[i_split:i_split + 400]
-    assert "#searchview .srx-mrail-end>.srx-foldbtn{position:sticky" in seg, \
-        "窄档折叠钮失去粘附位，会被横滚带走"
+    assert src.count('id="srxMirrorFold"') == 1
+    i = src.index("return '<div class=\"srx-mrail\"><span class=\"srx-mrail-tabs\">'+rail+")
+    seg = src[i:i+300]
+    assert 'srx-mrail-end' not in seg and 'srx-foldbtn' not in seg, seg
 
 
 def test_more_tools_trigger_keeps_its_position():
@@ -1896,15 +1837,7 @@ def test_config_fold_all_never_swallows_group_headings():
 
 
 def test_every_channel_entry_label_starts_with_the_same_noun():
-    """r464：渠道入口里混进了一个不成词的「搜索」。
-
-    ENTRY 的 note 会被前端剥掉端名后当主标题：`PC 国际搜索` → 「搜索」，
-    而同排其余三个是「机票搜索」——25 个入口里只有这一格是两个字，
-    用户读起来像漏字（「按钮文案要符合操作/视觉」）。
-
-    实测修前：携程条 → 机票搜索 / 机票搜索 / **搜索** / 机票搜索（…）；
-    修后 25 个入口**全部**以「机票搜索」开头。
-    """
+    """r464 + 2026-11-08：入口文案仍统一；去哪儿网页版停服后写停服事实。"""
     from core.channel_links import ENTRY
     def head(note):
         t = str(note or "")
@@ -1915,9 +1848,11 @@ def test_every_channel_entry_label_starts_with_the_same_noun():
     for plat, table in ENTRY.items():
         for k, v in table.items():
             h = head(v[1])
+            if plat == "qunar":
+                assert "停服" in h and "App" in h, (plat, k, v[1])
+                continue
             assert h.startswith("机票搜索"), (plat, k, v[1], "→", h)
             assert h != "搜索", (plat, k)
-    # 旧的「国际搜索」写法不许复活
     import pathlib
     src = pathlib.Path("core/channel_links.py").read_text(encoding="utf-8")
     assert "国际搜索" not in src
@@ -2128,25 +2063,13 @@ def test_mirror_fold_gives_the_column_back_to_the_list():
 
 
 def test_mirror_fold_button_is_last_in_rail():
-    """r524：折叠钮必须是轨道最后一个子元素，两态才都贴右缘。
-
-    展开态按钮排在 mtools 之前时，收起后 mtools 消失、按钮仍停在原位置
-    （实测 x=452，右缘还空 140px）。挪到末尾后两态 x 相同。
-    """
+    """r1131：镜像轨不再自带折叠钮；唯一触发器在 #srxListHead。"""
     import webui
     src = webui.PAGE
     i = src.index("return '<div class=\"srx-mrail\"><span class=\"srx-mrail-tabs\">'+rail+")
-    # 只截轨道本体（r1049e：胶囊在 .srx-mrail-tabs、折叠钮在 .srx-mrail-end）；
-    # 下一行的 chrome 不属于轨道，不能算进“轨道里有没有工具组”。
-    end = src.index("class=\"srx-mchrome\"", i)
-    seg = src[i:end]
-    assert "srx-mrail-end" in seg and "srx-foldbtn" in seg, seg
-    assert seg.index("srx-mrail-end") < seg.index("srx-foldbtn"), \
-        "折叠钮又排到工具钮前面了——收起态会停在带子中间"
-    # 轨道末段只允许折叠钮这一颗按钮；视图工具组在下一行 chrome 里
-    assert "srx-mtools" not in seg, "工具组又回到了轨道里"
-    assert "style=\"margin-left:6px\"" not in seg, \
-        "折叠钮仍靠 margin-left 参与排布，收起态基准会变"
+    seg = src[i:i+300]
+    assert 'srx-mrail-end' not in seg and 'srx-foldbtn' not in seg, seg
+    assert 'id="srxMirrorFold"' in src
 
 
 def test_chart_tooltip_is_clamped_to_the_visible_window_not_content_width():

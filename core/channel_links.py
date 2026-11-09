@@ -26,7 +26,7 @@ PLAT_NAME = {"ctrip": "携程", "qunar": "去哪儿", "fliggy": "飞猪",
 #         二次登录（实测同 profile 下国际 H5 显示「退出」且出完整卡片）
 SESSION_REQUIREMENT = {
     "ctrip": ("required", "必须登录"),
-    "qunar": ("required", "必须登录"),
+    "qunar": ("required", "网页已停服 · 请用 App"),
     "fliggy": ("required", "必须登录（PC/H5 分别登录）"),
     "tongcheng": ("required", "必须登录（国内国际同一会话）"),
     "tuniu": ("required", "必须登录"),
@@ -39,11 +39,11 @@ PAGE_LOGIN = {
     ("ctrip", "pc", "intl"): "携程账号",
     ("ctrip", "h5", "domestic"): "携程账号",
     ("ctrip", "h5", "intl"): "携程账号",
-    # 去哪儿：PC 官网可查但出价需登录；H5 登录后出价
-    ("qunar", "pc", "domestic"): "去哪儿账号",
-    ("qunar", "pc", "intl"): "去哪儿账号",
-    ("qunar", "h5", "domestic"): "登录后出价",
-    ("qunar", "h5", "intl"): "登录后出价",
+    # 去哪儿：网页版 PC/H5 均已停服（2026-11 用户确认），不再引导网页登录
+    ("qunar", "pc", "domestic"): "网页已停服",
+    ("qunar", "pc", "intl"): "网页已停服",
+    ("qunar", "h5", "domestic"): "网页已停服",
+    ("qunar", "h5", "intl"): "网页已停服",
     # 飞猪：PC / H5 两个域，各自登录
     ("fliggy", "pc", "domestic"): "淘宝账号",
     ("fliggy", "pc", "intl"): "淘宝账号",
@@ -62,7 +62,6 @@ PAGE_LOGIN = {
 }
 SPECIAL_PAGE_LOGIN = {
     ("fliggy", "h5"): "淘宝账号",
-    ("qunar", "h5"): "登录后出价",
 }
 # 页面登录是否强制（2026-10-27 统一）：所有渠道出价/明细都要登录，
 # 因此凡标注了登录要求的入口一律按"必须"呈现，不再有"可选/建议"档。
@@ -71,7 +70,7 @@ SPECIAL_PAGE_LOGIN = {
 # 凡是标了登录要求的入口，就是"必须登录"（没有"可选"档）。
 PAGE_LOGIN_REQUIRED = set(PAGE_LOGIN)
 SPECIAL_LOGIN_REQUIRED = {
-    ("fliggy", "pc"), ("fliggy", "h5"), ("qunar", "h5"),
+    ("fliggy", "pc"), ("fliggy", "h5"),
     ("ctrip", "pc"), ("ctrip", "h5"), ("tongcheng", "pc"),
     ("tongcheng", "h5"), ("tuniu", "pc"), ("tuniu", "h5"),
 }
@@ -107,16 +106,16 @@ ENTRY = {
                          NOTE_H5_INTL_SAME),
     },
     "qunar": {
+        # 2026-11-08 用户确认：PC 与 H5 网页版机票查询均已停服。
+        # 入口保留为历史地址，文案明确「已停服」，数据走 app_qunar。
         ("pc", "domestic"): ("https://flight.qunar.com/site/",
-                             NOTE_PC_SEARCH),
+                             "网页版已停服 · 数据走 App"),
         ("h5", "domestic"): ("https://touch.qunar.com/h5/flight/",
-                             NOTE_H5_SEARCH),
-        # PC 国际是站内 tab（#js_inter_tab），没有独立国际 URL；
-        # 列文案仍统一为「国际」，不逐格展开页内切换细节。
+                             "网页版已停服 · 数据走 App"),
         ("pc", "intl"): ("https://flight.qunar.com/site/",
-                         NOTE_PC_INTL),
+                         "网页版已停服 · 数据走 App"),
         ("h5", "intl"): ("https://touch.qunar.com/h5/flight/",
-                         NOTE_H5_INTL_SAME),
+                         "网页版已停服 · 数据走 App"),
     },
     "fliggy": {
         ("pc", "domestic"): ("https://www.fliggy.com/jipiao/",
@@ -166,9 +165,9 @@ SPECIAL_ENTRY = {
         "h5": ("https://m.ctrip.com/html5/flight/home", "H5 特价机票"),
     },
     "qunar": {
-        "pc": ("", "PC 特价页不供，请用 H5 低价榜"),
+        "pc": ("", "网页版已停服 · 数据走 App"),
         "h5": ("https://touch.qunar.com/lowFlight/index"
-               "?cat=touchjpgg&from=touchjpgg", "H5 低价榜单"),
+               "?cat=touchjpgg&from=touchjpgg", "网页版已停服（存档）"),
     },
     "fliggy": {
         "pc": ("https://www.fliggy.com/jipiao/",
@@ -284,6 +283,51 @@ def _route_url(plat, surface, scope, fc, tc, fn, tn, date):
         except Exception:
             return None
     return None
+
+
+# 按端的**登录入口**（r1063 T70）：弹窗该在哪个域登录。
+# 与"查看详情"的深链是两件事——后者可以直接指到列表页，前者必须是
+# 该端**能登录**的门。用户实测：途牛 PC 弹窗弹成了 m.tuniu.com（H5）。
+#
+# 真源顺序（`login_entry_url` 实现）：
+#   ① 本表的**按端覆盖**（同一渠道两端入口不同的）；
+#   ② `core.login_slots.LOGIN_SLOTS` 的 `login_url`（全渠道统一真源）；
+#   ③ 空串 → 调用方退回旧逻辑（`Alerter._build_view_url`）。
+LOGIN_ENTRY = {
+    # 途牛：PC 与 H5 是两个域（用户实测：PC 弹成 m.tuniu.com 是错的）
+    "tuniu": {"pc": "https://flight.tuniu.com/",
+              "h5": "https://m.tuniu.com/flight/"},
+}
+
+
+def login_entry_url(plat: str, surface: str = "pc") -> str:
+    """该渠道在该端的**登录入口**（不是"查看详情"深链）。
+
+    顺序：按端覆盖表 → `LOGIN_SLOTS` 的 login_url → 空串（调用方兜底）。
+    端不明给 PC：登录表单在 PC 上最完整，H5 常常只给验证码/扫码。
+    """
+    plat = str(plat or "")
+    key = str(surface or "pc").lower()
+    rows = LOGIN_ENTRY.get(plat) or {}
+    if key in rows:
+        return rows[key]
+    if rows.get("pc") and key in ("", "pc"):
+        return rows["pc"]
+    # 全渠道统一真源：登录槽位里登记的 login_url
+    try:
+        from core.login_slots import LOGIN_SLOTS
+        # 同渠道可能有多槽（飞猪 PC/H5）：优先端匹配的那一格
+        cand = [m for m in LOGIN_SLOTS.values()
+                if str(m.get("plat") or "") == plat]
+        for m in cand:
+            if str(m.get("surface") or "").lower() == key:
+                return str(m.get("login_url") or "")
+        for m in cand:
+            if not m.get("surface"):
+                return str(m.get("login_url") or "")
+    except Exception:
+        pass
+    return ""
 
 
 def channel_links(fc="", tc="", date="", fn="", tn=""):

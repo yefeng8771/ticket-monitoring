@@ -185,7 +185,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.list:
-        print("设备侧模块包清单（与 docs/DEVICE_PACKAGES.md 同源）")
+        print("设备侧模块包清单（PACKAGES 表即唯一事实来源）")
         for name, m in PACKAGES.items():
             print("\n%s" % name)
             print("  版本/大小 : %d 字节" % m["size"])

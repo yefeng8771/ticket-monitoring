@@ -89,8 +89,11 @@ CHANNEL_DIMENSIONS = {
     #               还没收敛），与矩阵取值自相矛盾。
     "ctrip":     {"domestic": "y", "intl": "y", "calendar": "y", "detail": "y",
                   "round_trip": "y", "multi_city": "y", "low_fare": "y"},
-    "qunar":     {"domestic": "y", "intl": "y", "calendar": "y", "detail": "y",
-                  "round_trip": "y", "multi_city": "", "low_fare": "y"},
+    # 2026-11-08 用户确认：去哪儿网页版机票查询（PC + H5）均已停服，
+    # 网页通路不再出数；去哪儿数据由独立渠道 app_qunar 承担。
+    # 这里全部记 n（停服），矩阵显示「停」，不再画成可用。
+    "qunar":     {"domestic": "n", "intl": "n", "calendar": "n", "detail": "n",
+                  "round_trip": "n", "multi_city": "n", "low_fare": "n"},
     "fliggy":    {"domestic": "y", "intl": "y", "calendar": "y", "detail": "y",
                   "round_trip": "y", "multi_city": "", "low_fare": "y"},
     "tongcheng": {"domestic": "y", "intl": "y", "calendar": "y", "detail": "y",
@@ -274,12 +277,19 @@ def dim_state(plat: str, dim: str) -> str:
 # 只对**浏览器渠道**有意义：App 渠道没有 PC/H5 端面之分。
 CHANNEL_SURFACES = {
     "ctrip":     {"pc": "y", "h5": "y"},
-    "qunar":     {"pc": "n", "h5": "y"},
+    "qunar":     {"pc": "n", "h5": "n"},   # PC/H5 网页版均已停服（2026-11）
     "fliggy":    {"pc": "y", "h5": ""},
     "tongcheng": {"pc": "y",  "h5": "y"},
     "tuniu":     {"pc": "",  "h5": "y"},
 }
 SURFACES = ("pc", "h5")
+
+# 已实现、但当前账本没有 ok 的端面（风控/设备/IP/账号限制）。
+# 矩阵里显示「! 已实现·当前受限」，不再与「未实现」共用问号。
+SURFACE_IMPLEMENTED = {
+    ("fliggy", "h5"): True,   # 探针真实出数，生产账本受 RGV587 限流
+    ("tuniu", "pc"): True,    # _fetch_pc_dom 已实现，生产两次均被滑块拦
+}
 
 # 端面格子的**人话说明**（悬停用）。声明是 y/n/"" 三态，但读者要能分清
 # 「这个端根本没做」和「做了但被风控挡住/没验证过」——两者在格子里都不是
@@ -288,7 +298,7 @@ SURFACE_NOTES = {
     ("ctrip", "pc"): "H5 页的 XHR 拦截，桌面试口",
     ("ctrip", "h5"): "H5 页的 XHR 拦截，移动视口",
     ("qunar", "pc"): "PC 版单程列表 2026-10-10 起已停服（302 回促销聚合），只留显式复活探测",
-    ("qunar", "h5"): "m.flight 列表页，登录态出全量明细",
+    ("qunar", "h5"): "H5 机票查询服务已停服（2026-11）；数据走 app_qunar",
     ("fliggy", "pc"): "sjipiao.fliggy.com SSR 直读",
     ("fliggy", "h5"): "淘宝 H5 会话（market.m.taobao.com）走 mtop listingsearch；"
                       "2026-11-02 00:45 直接调用 H5 采集器真实出数"
@@ -334,6 +344,15 @@ def surface_state(plat: str, surface: str) -> str:
 # source=tc_window_calendar；app_qunar 国际样本 0 行），所以 intl 记 y
 # （确实有国际报价）但要点明「仅日历价，无航班号/机型」。
 DIMENSION_NOTES = {
+    # 去哪儿网页版 PC/H5 均已停服：七个维度统一说明停服事实，矩阵「停」
+    # 不是「渠道没有」，而是整条网页通路退役；数据由 app_qunar 承担。
+    ("qunar", "domestic"): "去哪儿网页版 PC/H5 机票查询均已停服（2026-11）；数据走 app_qunar",
+    ("qunar", "intl"): "去哪儿网页版 PC/H5 机票查询均已停服（2026-11）；数据走 app_qunar",
+    ("qunar", "calendar"): "去哪儿网页版 PC/H5 机票查询均已停服（2026-11）；数据走 app_qunar",
+    ("qunar", "detail"): "去哪儿网页版 PC/H5 机票查询均已停服（2026-11）；数据走 app_qunar",
+    ("qunar", "round_trip"): "去哪儿网页版 PC/H5 机票查询均已停服（2026-11）；数据走 app_qunar",
+    ("qunar", "multi_city"): "去哪儿网页版 PC/H5 机票查询均已停服（2026-11）；数据走 app_qunar",
+    ("qunar", "low_fare"): "去哪儿网页版 PC/H5 机票查询均已停服（2026-11）；数据走 app_qunar",
     ("tongcheng", "intl"): "国际只走「窗历」（日历族）：出的是逐日最低价，"
                            "没有航班号/机型/时刻（日历本身不含航班级信息）",
     ("tuniu", "intl"): "国际走 H5/API（`m.tuniu.com/flight/` 页内切国际）："
@@ -356,14 +375,6 @@ DIMENSION_NOTES = {
                              "上海→北京 6 条 ¥1002…¥1049）。只采渠道自己的"
                              "往返组合总价，未做两段单程相加；H5 `adate` "
                              "结果页仍只有去程一列，不走那条",
-    ("qunar", "round_trip"): "国内 touch 往返页去程卡直接给产品「往返"
-                             "总价 ¥N 起」（2026-11-02 实测 北京→上海 "
-                             "¥808…¥2546，71 条）；返程卡的「补 ¥N」是"
-                             "加价，不落；国际往返匿名请求返回 1999 软拒"
-                             "（2026-11-03，touchDoubleInnerList data=null、"
-                             "页面 ¥0 空栏），带产品档案走同一 H5 双列表"
-                             "也未解析到往返总价（26s），仍显式拒绝，"
-                             "矩阵 y 指国内。未做两段单程相加",
     ("tongcheng", "round_trip"): "国内往返走 frbook1 的 book1/roundtrips"
                                  "（atp 组合总价，2026-11-02 真报文 210/210）；"
                                  "国际往返走登录档案下 book1 RT 页的 "
@@ -380,8 +391,6 @@ DIMENSION_NOTES = {
                              "IJ004+MM304）——配置卡/轮尾采集/概览/来源/提醒/"
                              "历史/CSV 齐全，矩阵 ✓ 仅 2 段；缺口程 2 段已实测"
                              "整单 ¥2184（9C8515+MM079）；3+ 段实测无组合卡，"
-                             "不是渠道没有",
-    ("qunar", "multi_city"): "站点有多程入口；采集端未实现，矩阵记未验证，"
                              "不是渠道没有",
     ("fliggy", "multi_city"): "站点有多程入口；采集端未实现，矩阵记未验证，"
                               "不是渠道没有",
@@ -413,8 +422,6 @@ DIMENSION_NOTES = {
                                "11-06 ¥1169 / 11-07 ¥883 / 11-08 ¥715，与采集端"
                                " 90 天窗历逐日一致；`ts/calendar` 需页内签名，"
                                "仅作详情/国际备选",
-    ("qunar", "detail"): "有航班号/时刻/价格；机型与舱位覆盖率低"
-                         "（机型 17%、舱位 1%），不是每家都带",
     ("fliggy", "detail"): "PC 列表有完整航班号/时刻；国际日历行无航班号"
                           "（日历结构性无航班级信息，不是解析漏项）",
     ("app_qunar", "calendar"): "登录后「低价机票」→「日历」：整月"
@@ -560,7 +567,6 @@ DIMENSION_NOTES = {
 DIMENSION_SCOPE = {
     ("ctrip", "multi_city"): "仅 2 段",
     ("fliggy", "round_trip"): "仅国际",
-    ("qunar", "round_trip"): "仅国内",
     ("app_qunar", "round_trip"): "仅国内",
     ("app_tongcheng", "round_trip"): "仅国际",
     # 飞猪 App 往返 2026-11-06 接通，但只覆盖**当月**（日历只验证到当月），
@@ -619,6 +625,8 @@ def app_alignment_gaps(plat: str) -> tuple:
 # 键必须与 path_note() 的实参逐字一致（test_r658 会扫源码对账）：
 # 新增通路时这里不同步，界面就退回裸 id。
 PATH_CN = {
+    # App 内人机验证（r1063 T81）：健康卡与账本都要有中文名
+    "app-captcha": "人机验证",
     # 浏览器渠道
     "H5": "H5",                 # 已是行业通用写法，保留
     "PC": "PC",
@@ -629,6 +637,10 @@ PATH_CN = {
     "多程": "多程",
     "航班明细": "航班明细",
     "PC可见": "PC 可见",
+    # r1063 T153：本轮新增的两条独立通路必须在这里注册——否则策略面板
+    # 配不了、链路闸门也停不了（`_path_ok` 只认这张表）。
+    "PC·国际": "PC·国际（国际列表页）",
+    "PC·周历": "PC·周历（跨日期低价条 · 票面价）",
     # 其余散落在单个 crawler 里的通路名（r658 门禁扫 path_note 字面量
     # 对账时补出，此前没人意识到它们也会上屏）
     "H5列表": "H5 列表",
@@ -696,6 +708,10 @@ def channel_dims_payload() -> dict:
             "surface_cells": {s: surface_state(p, s) for s in SURFACES},
             "surface_notes": {s: SURFACE_NOTES.get((p, s), "")
                               for s in SURFACES},
+            "surface_blocked": {
+                s: (surface_state(p, s) == ""
+                    and SURFACE_IMPLEMENTED.get((p, s), False))
+                for s in SURFACES},
         }
     return {
         "ok": True, "dims": list(DIMENSIONS), "surfaces": list(SURFACES),
@@ -707,6 +723,7 @@ def channel_dims_payload() -> dict:
                   "dim_scopes": {d: DIMENSION_SCOPE.get((p, d), "")
                                  for d in DIMENSIONS}},
                  **_surf(p),
+                 stopped=(p == "qunar"),
                  peer=APP_BROWSER_PEER.get(p, ""),
                  gaps=list(app_alignment_gaps(p)))
             for p in CHANNEL_DIMENSIONS],

@@ -108,6 +108,18 @@ def probe():
                     pg.evaluate("""(p)=>{const b=document.querySelector(
                         '#cfgview .cfgnav .cnav[data-p="'+p+'"]'); if(b)b.click();}""", p)
                     pg.wait_for_timeout(800)
+                    if p == "pacing":
+                        # 900 档第二个分节默认收起（cfgSecInit：innerWidth<=900 且 i>0），
+                        # 参数格不可见时判据只剩卡头一层；同时 #cfgpacingRows 是异步渲染，
+                        # 并发负载下 800ms 可能仍是「加载中…」。先等行渲染完、再展开分节，
+                        # 让对齐判据在 900 也真正量到 srow/glcell（不是放宽断言）。
+                        pg.wait_for_function(
+                            "()=>{const r=document.getElementById('cfgpacingRows');"
+                            "return r && !/加载中/.test(r.textContent);}", timeout=15000)
+                        pg.evaluate("""()=>{document.querySelectorAll(
+                            '#cfgmain .cfpanel .subsec[data-cfgsec].folded .secfold'
+                        ).forEach(b=>b.click());}""")
+                        pg.wait_for_timeout(300)
                     out[w][p] = pg.evaluate(JS)
                 pg.close()
             br.close()

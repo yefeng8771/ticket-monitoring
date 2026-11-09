@@ -148,8 +148,8 @@ def test_pacing_grid_keeps_three_columns_at_1440():
     """三列网格样式必须覆盖到新容器（否则控件会挤成一列）。"""
     got, after, errs = _once()
     cols = got["grid"].split()
-    assert len(cols) == 3, (
-        "#cfgpacing 的 .glgrid 不是三列（CSS 选择器没覆盖新容器）：%r"
+    assert len(cols) == 12, (
+        "#cfgpacing 的 .glgrid 不是 12 列（r1131 12 列网格）：%r"
         % got["grid"])
 
 

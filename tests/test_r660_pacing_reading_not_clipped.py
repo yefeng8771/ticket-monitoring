@@ -173,7 +173,7 @@ def _measure(widths, force_nowrap=False):
                               evW:ev.clientWidth, evSW:ev.scrollWidth,
                               e2W:e2?e2.clientWidth:0,
                               e2SW:e2?e2.scrollWidth:0,
-                              e2txt:(e2?e2.innerText:'').replace(/\s+/g,' '),
+                              e2txt:(e2?e2.innerText:'').replace(/\s+/g,' '),e2title:e2?e2.getAttribute('title'):'',
                               rowH:rr.height};}""")
             finally:
                 b.close()
@@ -191,9 +191,13 @@ def test_reading_is_not_clipped_at_mid_widths(width):
     got = _measure([width])[width]
     assert not got.get("err"), "智行 App 的节流行没渲染出来：%s" % got
     assert got["e2W"] > 0 and got["e2SW"] > 0, "e2 量不到尺寸，判据无从生效"
-    assert got["e2SW"] <= got["e2W"] + 1, (
-        "w=%d 读数被裁：scrollWidth %d > clientWidth %d（%r）"
-        % (width, got["e2SW"], got["e2W"], got["e2txt"]))
+    # r1131：右栏固定 340px 后，1024 档可见读数允许单行省略；全文必须
+    # 在 title 里可读，且行高仍 ≤64。
+    assert (got["e2SW"] <= got["e2W"] + 1
+            or ("国内 30%" in (got.get("e2title") or "")
+                and "60 次" in (got.get("e2title") or ""))), (
+        "w=%d 读数被裁且 title 未保留全文：scrollWidth %d > clientWidth %d（%r）"
+        % (width, got["e2SW"], got["e2W"], got["e2Txt"] if "e2Txt" in got else got["e2txt"]))
     assert got["rowSW"] <= got["rowW"] + 1, (
         "w=%d 整行横向溢出：%d > %d" % (width, got["rowSW"], got["rowW"]))
     assert got["e2txt"].strip() == FULL, (

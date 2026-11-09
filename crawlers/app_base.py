@@ -168,6 +168,15 @@ def dismiss_until_gone(dev, marker: str, *, tries: int = 2,
     return (str(marker) not in xml), xml
 
 
+def _udr_cfg(cfg: dict) -> str:
+    """user_data 唯一口径（r972）：与 `yield_stats.user_data_root` 同源。"""
+    try:
+        from core.yield_stats import user_data_root
+        return str(user_data_root(cfg or {}))
+    except Exception:
+        return "user_data"
+
+
 class AppCrawler:
     """Android App 渠道基类（单设备串行采集）。"""
 
@@ -270,6 +279,53 @@ class AppCrawler:
         from .challenge import ChallengeContext, handle_device
 
         block = detect_block(xml)
+        # App 内「滑到底」型滑块（r1063 T81）：先自动试一次——
+        # 真机现场（飞猪）是阿里 NC 滑块，`input swipe` 单段直线会被判机器
+        # （回报 error:x2VW8），所以走 appvcode 的变速轨迹。
+        try:
+            from core.android import appvcode
+            from core.android import slider_vision
+            # ② 截图兜底（r1063 T86）：阿里把滑块画在 canvas 里，UI 树经常没有节点。
+            # 先按文本判，再按截图判——两者都不命中才走人工挑战处置。
+            if (not appvcode.is_slider_page(xml)) and slider_vision.visible(dev):
+                _vrep = slider_vision.solve_by_ocr(dev, tries=2,
+                                                   log=self.logger)
+                self.path_note(
+                    "app-captcha", "ok" if _vrep.get("ok") else "captcha",
+                    rows=0,
+                    detail="滑块（截图兜底）%d 次：%s"
+                           % (int(_vrep.get("tries") or 0),
+                              str(_vrep.get("why") or "")[:90]))
+                if _vrep.get("ok"):
+                    xml = dev.dump() or xml
+                else:
+                    return xml, Block("captcha",
+                                      "滑块验证未通过（截图兜底）：%s"
+                                      % str(_vrep.get("why") or "")[:80])
+            if appvcode.is_slider_page(xml):
+                _rep = appvcode.solve(dev, xml, tries=2, log=self.logger)
+                self.path_note(
+                    "app-captcha", "ok" if _rep.get("ok") else "captcha",
+                    rows=0,
+                    detail="滑块自动尝试 %d 次：%s"
+                           % (int(_rep.get("tries") or 0),
+                              str(_rep.get("why") or "")[:100]))
+                if _rep.get("ok"):
+                    xml = dev.dump() or xml
+                else:
+                    # 记一条降级：人机验证是"必须人动手/换手段"的一类，
+                    # 只在日志里写的话，面板上永远只看到 0 条（r1063 T96）
+                    try:
+                        from core import degraded as _dg2
+                        _dg2.note("app_captcha", self.name,
+                                  str(_rep.get("why") or "滑块未通过")[:80])
+                    except Exception:
+                        pass
+                    return xml, Block("captcha",
+                                      "滑块验证未通过：%s"
+                                      % str(_rep.get("why") or "")[:100])
+        except Exception as _e:
+            self.logger.warning("[%s] 滑块自动尝试异常：%s", self.name, _e)
         if block.kind in (BLOCK_CAPTCHA, BLOCK_FACE):
             # 挑战处置接缝：注册了处理器就交给它（解完自行 dump）；
             # 没注册或没接住 → 照现行处置返回给调用方。
@@ -508,6 +564,10 @@ class AppCrawler:
             self.logger.info("[%s] 快照恢复失败但设备仍登录，继续采集", self.name)
         elif page:
             self.login_suspect = True
+            try:
+                self.mark_login_wall("页面停在登录墙")
+            except Exception:
+                pass
         return False
 
     def _cold_start_and_probe(self, dev, wait_s: float = 30) -> str:
@@ -613,11 +673,36 @@ class AppCrawler:
         self.last_path = ""
         self.last_status = ""
 
+    # ---------- 分段计时（r1063 T77）----------
+    # 只做观测：计时抛异常绝不影响采集。
+    def timed(self, name: str):
+        try:
+            return self.phases_timer()(name)
+        except Exception:
+            import contextlib
+            return contextlib.nullcontext()
+
+    def phases_timer(self):
+        if getattr(self, "_phases", None) is None:
+            from core.phase_timer import PhaseTimer
+            self._phases = PhaseTimer()
+        return self._phases
+
     def path_note(self, path: str, status: str, rows: int = 0,
                   date: str = "", detail: str = "", ms: int = 0,
                   http_status: int = 0, url: str = ""):
         if status not in self.PATH_STATUS:
             status = "error"
+        # 分段打点（r1063 T77）：上一条账到这一条账的间隔 = 上一步的耗时。
+        try:
+            import time as _pt
+            _now = _pt.time()
+            if getattr(self, "_phase_prev", None):
+                _pn, _pt0 = self._phase_prev
+                self.phases_timer().mark(_pn, _now - _pt0)
+            self._phase_prev = (str(path), _now)
+        except Exception:
+            pass
         rec = {"path": str(path), "status": status,
                "rows": int(rows or 0), "date": str(date or ""),
                "detail": str(detail or "")[:160], "ms": int(ms or 0),
@@ -630,6 +715,75 @@ class AppCrawler:
         self.paths.append(rec)
         self.last_path = rec["path"]
         self.last_status = rec["status"]
+        # 会话可用期（r1063 T93）：量化"登录后能用多久"
+        try:
+            from core import session_window as _sw
+            _sw.note(getattr(self, "user_data_root", "")
+                     or _udr_cfg(self.config),
+                     self.name, rec["status"])
+        except Exception:
+            pass
+        # r1063 T85 login_note_marks_wall：记了 `login` 就等于"这家要登录"——
+        # 自动置 login_suspect 并落墙记忆。否则健康页不显示「去登录」，
+        # 而且下一轮还会白跑一次（真机实测：携程 21s/轮全花在这上面）。
+        try:
+            if rec["status"] == "login":
+                self.login_suspect = True
+                if not self.login_wall_until():
+                    self.mark_login_wall("路径账记 login：%s"
+                                         % (rec["detail"] or rec["path"])[:80])
+                # r1063 T188：**先取证**——记 login 时把界面 dump 落盘。
+                # 现场：首页 dump 明明有「会员/积分」（已登录），采集却记
+                # 「该日被要求登录」。不看清当时屏上是什么，就只能猜
+                # （搜索时才拦？要实名？还是我们判据误判？）。
+                try:
+                    import os as _os
+                    import time as _t2
+                    _d = _os.path.join(str(getattr(self, "user_data_root",
+                                                  "user_data")), self.name)
+                    _os.makedirs(_d, exist_ok=True)
+                    _fn = "app_login_fail_%s_%s.xml" % (
+                        _t2.strftime("%Y%m%d_%H%M%S"),
+                        str(rec["path"]).replace("/", "-"))
+                    _dev = getattr(self, "_last_dev", None)
+                    _xml = ""
+                    if _dev is not None:
+                        try:
+                            _xml = _dev.dump() or ""
+                        except Exception:
+                            _xml = ""
+                    if _xml:
+                        with open(_os.path.join(_d, _fn), "w",
+                                  encoding="utf-8") as _f:
+                            _f.write(_xml)
+                        # 只留最近 6 份，别把设备目录撑爆
+                        _all = sorted(x for x in _os.listdir(_d)
+                                      if x.startswith("app_login_fail_"))
+                        for _old in _all[:-6]:
+                            try:
+                                _os.remove(_os.path.join(_d, _old))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # r1063 T160：**任何**路径的连续超时都算（含 `app-date` 这类细段）。
+        # 以前只在"结果记账"那一个函数里计数，而真机最大的浪费恰好是细段
+        # （点日历后日期没变，每轮 4 次 × 几十秒），于是熔断从未触发。
+        try:
+            if rec["status"] == "timeout":
+                self._timeout_streak = int(
+                    getattr(self, "_timeout_streak", 0) or 0) + 1
+                if self._timeout_streak >= int(self.APP_STALL_STREAK):
+                    self.note_app_stall(
+                        "连续 %d 次超时（末次 %s：%s）"
+                        % (self._timeout_streak, rec["path"],
+                           (rec["detail"] or "")[:60]))
+            elif rec["status"] in ("ok", "calendar"):
+                self._timeout_streak = 0
+        except Exception:
+            pass
         return rec
 
     # ---------- 链路闸门（r1063 T9）：用某个主阶段之前先问一次 ----------
@@ -994,9 +1148,19 @@ class AppCrawler:
             # 顺便记下主通路的**状态**：账本只累加 ok/fail 的话，
             # "确实没票(empty)"、"解析失败(error)"、"登录墙(login)"
             # 会混成一个 fail 数字，处置方向完全不同（2026-11-05）。
-            _st = next((str(r.get("status") or "") for r in (self.paths or [])
-                        if str(r.get("path") or "") == path), "")
-            led.note(self.name, path or "unknown", ok, rows=rows, status=_st)
+            _pv = next((r for r in (self.paths or [])
+                        if str(r.get("path") or "") == path), {})
+            _st = str(_pv.get("status") or "")
+            # 原因原文一起进账（r1063 T75）：飞猪那次"访问被拒绝"就是这么丢的
+            led.note(self.name, path or "unknown", ok, rows=rows, status=_st,
+                     detail=str(_pv.get("detail") or ""))
+            # 分段耗时也进账（r1063 T77）：只记成功率的话，"慢在哪一步"永远是谜
+            try:
+                _ph = self.phases_timer().summary()
+                if _ph:
+                    led.note_phases(self.name, _ph)
+            except Exception:
+                pass
             return {"ok": ok, "rows": rows, "path": path}
         except Exception:
             return {}
@@ -1128,6 +1292,56 @@ class AppCrawler:
         """
         return None
 
+    # ---------- 日历限频（r1063 T216）----------
+    def _calendar_min_gap_s(self) -> int:
+        """两次长窗口日历之间的最小间隔（秒）。配置 `app_calendar_min_gap_s`。
+
+        整窗收割一次覆盖 60+ 天，刷一次够当天用；每轮都刷会把设备的查询配额
+        烧光，连带明细也拿不到（真机：连续 5 次"有格子无价"后明细 0 条）。
+        """
+        try:
+            v = int((self.config or {}).get("app_calendar_min_gap_s", 3600) or 0)
+            return max(0, min(24 * 3600, v))
+        except (TypeError, ValueError):
+            return 3600
+
+    def _calendar_stamp_path(self) -> str:
+        import os as _os
+        return _os.path.join(str(getattr(self, "user_data_root", "user_data")),
+                             self.name, "calendar_stamp.json")
+
+    def _calendar_due(self) -> bool:
+        """现在该不该刷日历（间隔未到就不刷）。"""
+        import json as _json
+        import os as _os
+        path = self._calendar_stamp_path()
+        try:
+            with open(path, encoding="utf-8") as f:
+                last = float((_json.load(f) or {}).get("at") or 0)
+        except Exception:
+            last = 0.0
+        gap = self._calendar_min_gap_s()
+        if gap <= 0 or not last:
+            return True
+        left = gap - (time.time() - last)
+        if left > 0:
+            self.logger.info(
+                "[%s] 日历未到间隔（还剩 %d 分钟），本轮只做明细",
+                self.name, int(left / 60) + 1)
+            return False
+        return True
+
+    def _mark_calendar(self) -> None:
+        import json as _json
+        import os as _os
+        path = self._calendar_stamp_path()
+        try:
+            _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump({"at": time.time()}, f, ensure_ascii=False)
+        except Exception:
+            pass
+
     def _route_unchanged(self, dev, from_city: str, to_city: str) -> bool:
         """App 当前是否已停在目标航线上（按界面文案判，不靠记忆）。"""
         try:
@@ -1146,6 +1360,7 @@ class AppCrawler:
         各 App 渠道传同一种 reason 词汇，健康卡/节流才读得懂同一件事。
         """
         if got:
+            self._timeout_streak = 0          # r1063 T148：成功即清零
             return self.path_note(path, "ok", rows=len(got), date=date,
                                   detail="%d 条真实航班/时刻/价格" % len(got),
                                   ms=ms, url=url)
@@ -1155,6 +1370,14 @@ class AppCrawler:
         if why == "login":
             return self.path_note(path, "login", date=date,
                                   detail="该日被要求登录")
+        # r1063 T148：连续未取到结果就熔断，别把设备时间耗在"转圈"上
+        self._timeout_streak = int(getattr(self, "_timeout_streak", 0) or 0) + 1
+        if self._timeout_streak >= int(self.APP_STALL_STREAK):
+            try:
+                self.note_app_stall("连续 %d 次未取到结果（%s）"
+                                    % (self._timeout_streak, why or "unknown"))
+            except Exception:
+                pass
         return self.path_note(path, "timeout", date=date,
                               detail="未取到可用结果：%s" % (why or "unknown"))
 
@@ -1166,6 +1389,179 @@ class AppCrawler:
     #: 都派了 App 渠道，三个 App 渠道各耗 ~150s，单设备被白占十来分钟。
     date_horizon_days = 62
 
+    def _horizon_days(self) -> int:
+        """实际使用的日期视野（天）。配置优先，默认 62（保持既有行为）。
+
+        配置点：`crawler.app_date_horizon_days`（全局）、
+        `crawler.app_date_horizon_days_map`（按渠道，例如只放宽 ctrip）。
+        为什么要可配：`62` 是 2026-11-05 的实测结论（三个 App 各白耗 150s 零产出），
+        但 2026-11-09 用户截图显示**携程 App 列表能显示 81 天后的 01/29 且带价**，
+        说明这条边界至少对携程偏保守——放宽与否该由实测决定，不该写死在代码里。
+        """
+        try:
+            cfg = self.config or {}
+            by = cfg.get("app_date_horizon_days_map") or {}
+            raw = by.get(self.name) if isinstance(by, dict) else None
+            if raw is None:
+                raw = cfg.get("app_date_horizon_days")
+            if raw is not None:
+                v = int(raw)
+                if 7 <= v <= 400:
+                    return v
+        except Exception:
+            pass
+        try:
+            return int(self.date_horizon_days or 62)
+        except Exception:
+            return 62
+
+    # ---------- 渠道状态记忆（r1063 T69，与浏览器侧共用 core.service_state）----------
+    SERVICE_CLOSED_FILE = "service_closed.json"
+    LOGIN_WALL_FILE = "login_wall.json"
+    SERVICE_PROBE_S = 6 * 3600
+    LOGIN_PROBE_S = 2 * 3600
+
+    def _sst_root(self) -> str:
+        return (getattr(self, "user_data_root", "")
+                or _udr_cfg(self.config))
+
+    def _sst_win(self, key: str, default: float) -> float:
+        try:
+            return float(self.config.get(key) or default)
+        except (AttributeError, TypeError, ValueError):
+            return float(default)
+
+    def service_closed_until(self) -> float:
+        from core import service_state as _sst
+        return _sst.until(self._sst_root(), self.name, "service_closed")
+
+    def mark_service_closed(self, detail: str = "", *, permanent=False) -> None:
+        from core import service_state as _sst
+        _sst.mark(self._sst_root(), self.name, "service_closed", detail,
+                  window_s=self._sst_win("service_probe_s",
+                                         self.SERVICE_PROBE_S),
+                  permanent=permanent)
+
+    def service_closed_skip(self, dates, path: str = "QUERY") -> bool:
+        import time as _t
+        until = self.service_closed_until()
+        if until <= _t.time():
+            return False
+        for d in (dates or []):
+            try:
+                self.path_note(path, "unsupported", date=d,
+                               detail="该渠道通路已停服，暂停查询（%.1f 小时后重探）"
+                                      % ((until - _t.time()) / 3600.0))
+            except Exception:
+                continue
+        return True
+
+    def login_wall_until(self) -> float:
+        from core import service_state as _sst
+        return _sst.until(self._sst_root(), self.name, "login_wall")
+
+    def mark_login_wall(self, detail: str = "") -> None:
+        # r1063 T127：登录墙 / 验证页 / 阿里安全页 = "必须换手段"的一类，
+        # 记进降级账本，面板的「降级」那行才会显示出来（否则只有 0 条）。
+        try:
+            from core import degraded as _dg
+            _dg.note("app_risk_blocked", self.name, str(detail or "")[:110])
+        except Exception:
+            pass
+        from core import service_state as _sst
+        _sst.mark(self._sst_root(), self.name, "login_wall", detail,
+                  window_s=self._sst_win("login_probe_s", self.LOGIN_PROBE_S))
+
+    def clear_login_wall(self) -> None:
+        from core import service_state as _sst
+        _sst.clear(self._sst_root(), self.name, "login_wall")
+
+    def login_wall_skip(self, dates, path: str = "app-login") -> bool:
+        import time as _t
+        until = self.login_wall_until()
+        if until <= _t.time():
+            return False
+        left = (until - _t.time()) / 60.0
+        for d in (dates or []):
+            try:
+                self.path_note(path, "login", date=d,
+                               detail="需登录（%.0f 分钟内不再重试）：到「渠道登录」"
+                                      "登一次即可恢复" % left)
+            except Exception:
+                continue
+        # r1063 T127：登录墙短路也要在面板「降级」里可见（App 风控）
+        try:
+            from core import degraded as _dg
+            _dg.note("app_risk_blocked", self.name,
+                     "登录墙短路：还需等 %.0f 分钟（去「渠道登录」登一次）" % left)
+        except Exception:
+            pass
+        return True
+
+    def early_skip(self, dates, path: str = "app-login") -> bool:
+        """开查前的一道闸（r1063 T69）：**停服**或**要登录**就别白跑。
+
+        为什么放在这里：App 渠道一次 fetch 要 80–150 秒设备时间，而
+        `rt.ensure_ready()` 本身就要几十秒。明知道停服/没登录还去跑，
+        等于每轮白烧一分半。
+        """
+        # ⓪ 用户正在 App 里登录别的渠道 → 本轮让位（r1063 T167）。
+        #   同一台模拟器是串行资源；抢前台会把用户的登录会话顶掉，
+        #   用户看到的是"画面没了、也没存下来"。
+        try:
+            from core.android import login_api as _la
+            _who = _la.active_plat()
+            if _who and _who != self.name:
+                for d in (dates or []):
+                    try:
+                        self.path_note(path, "paced", date=d,
+                                       detail="用户正在 App 登录「%s」，本轮让位"
+                                              % _who)
+                    except Exception:
+                        continue
+                return True
+        except Exception:
+            pass
+        # ① 先看"App 自行退出"熔断（r1063 T129）：命中就直接跳过，最省时间
+        try:
+            left = self.app_gone_left_s()
+            if left > 0:
+                for d in (dates or []):
+                    try:
+                        self.path_note(path, "blocked", date=d,
+                                       detail="App 自行退出后熔断中（还剩 %.0f 分钟）"
+                                              % (left / 60.0))
+                    except Exception:
+                        continue
+                return True
+        except Exception:
+            pass
+        # ② 再看"连续未取到结果"熔断（r1063 T148）
+        try:
+            left_s = self.app_stall_left_s()
+            if left_s > 0:
+                for d in (dates or []):
+                    try:
+                        self.path_note(path, "timeout", date=d,
+                                       detail="连续未取到结果，暂停中（剩 %.0f 分钟）"
+                                              % (left_s / 60.0))
+                    except Exception:
+                        continue
+                return True
+        except Exception:
+            pass
+        try:
+            if self.service_closed_skip(dates):
+                return True
+        except Exception:
+            pass
+        try:
+            if self.login_wall_skip(dates, path=path):
+                return True
+        except Exception:
+            pass
+        return False
+
     def reject_far_dates(self, dates) -> bool:
         """日期超出 App 视野时写 `unsupported` 并返回 True（调用方直接返回空）。
 
@@ -1174,7 +1570,8 @@ class AppCrawler:
         """
         from datetime import date as _d, timedelta as _td
         today = _d.today()
-        end = today + _td(days=int(self.date_horizon_days or 90))
+        _horizon = self._horizon_days()
+        end = today + _td(days=_horizon)
         far = []
         for s in dates or []:
             try:
@@ -1188,7 +1585,7 @@ class AppCrawler:
         self.path_note(
             "app-date", "unsupported",
             detail="日期超出 App 视野（%d 天内，最远 %s），交浏览器"
-                   % (int(self.date_horizon_days or 90), far[0]))
+                   % (_horizon, far[0]))
         return True
 
     def date_guard(self, date: str, fn, *args, _default=None, **kwargs):
@@ -1265,6 +1662,105 @@ class AppCrawler:
                 return line.strip()[:160]
         return ""
 
+    APP_GONE_S = 7200      # App 自行退出后的熔断窗口（秒）
+
+    APP_STALL_STREAK = 3      # 连续多少次"未取到结果"就熔断
+    APP_STALL_S = 1800        # 熔断窗口（秒）
+
+    def note_app_stall(self, detail: str = "") -> None:
+        """连续超时熔断（r1063 T148）：页面一直打不开时别再白等设备时间。
+
+        `app_gone` 管"App 自行退出"，这里管"能起但拿不到结果"（转圈/白屏/
+        接口不回）。两者都在 `early_skip` 里当闸门。
+        """
+        try:
+            from core.yield_stats import user_data_root as _udr
+            from core import service_state as _ss
+            root = str(_udr(self.config))
+            _ss.mark(root, self.name, "app_stall",
+                     str(detail or "连续未取到结果")[:160],
+                     window_s=int(self.APP_STALL_S))
+        except Exception:
+            pass
+        try:
+            from core import degraded as _dg
+            _dg.note("app_risk_blocked", self.name,
+                     "连续 %d 次未取到结果，暂停 %d 分钟（%s）"
+                     % (int(getattr(self, "_timeout_streak", 0) or 0),
+                        int(self.APP_STALL_S) // 60, str(detail or "")[:60]))
+        except Exception:
+            pass
+        try:
+            self.logger.warning("[%s] 连续未取到结果，熔断 %d 分钟：%s",
+                                self.name, int(self.APP_STALL_S) // 60, detail)
+        except Exception:
+            pass
+
+    def app_stall_left_s(self) -> float:
+        """app_stall 窗口还剩多少秒（0 = 没熔断）。"""
+        try:
+            from core.yield_stats import user_data_root as _udr
+            from core import service_state as _ss
+            root = str(_udr(self.config))
+            return max(0.0, _ss.until(root, self.name, "app_stall")
+                       - __import__("time").time())
+        except Exception:
+            return 0.0
+
+    def note_app_gone(self, detail: str = "") -> None:
+        """记录"App 自行退出"并熔断一段时间（r1063 T129）。
+
+        为什么单独记：阿里系 App 在检测到环境异常时会**主动退出**（无 crash 记录），
+        表现成"一点就重启"。这时继续每轮硬跑只是白烧设备时间。
+        """
+        try:
+            from core.yield_stats import user_data_root as _udr
+            from core import service_state as _ss
+            root = str(_udr(self.config))
+        except Exception:
+            root, _ss = "user_data", None
+        try:
+            win = int((self.config.get("android") or {}).get("app_gone_s")
+                      or self.APP_GONE_S)
+        except (TypeError, ValueError):
+            win = self.APP_GONE_S
+        text = str(detail or "App 启动后自行退出（疑似风控）")[:160]
+        try:
+            if _ss is not None:
+                _ss.mark(root, self.name, "app_gone", text, window_s=win)
+        except Exception:
+            pass
+        try:
+            from core import degraded as _dg
+            _dg.note("app_risk_blocked", self.name,
+                     "%s（%d 分钟内不再尝试）" % (text, win // 60))
+        except Exception:
+            pass
+        try:
+            self.logger.warning("[%s] 记 app_gone：%s（%d 分钟内跳过）",
+                                self.name, text, win // 60)
+        except Exception:
+            pass
+
+    def app_gone_left_s(self) -> float:
+        """app_gone 窗口还剩多少秒（0 = 没熔断）。"""
+        try:
+            from core.yield_stats import user_data_root as _udr
+            from core import service_state as _ss
+            root = str(_udr(self.config))
+            left = _ss.until(root, self.name, "app_gone") - __import__("time").time()
+            return max(0.0, left)
+        except Exception:
+            return 0.0
+
+    def _app_alive(self, dev) -> bool:
+        """前台是不是自家 App（读不到就当活着，避免误判）。"""
+        try:
+            act = str(dev.current_activity() or "")
+        except Exception:
+            return True
+        return str(act).split("/")[0].strip() == str(self.package or "")
+
     def prepare_device(self, dev) -> None:
         """设备就绪后的**统一前置**：竖屏 → 登录态 → 权限框 → ANR → props 重清。
 
@@ -1272,22 +1768,38 @@ class AppCrawler:
         App，而重启后最容易撞上「没有响应」死锁（实证：主线程等 so 下载
         锁）。放在这里，任何渠道第一轮都不会因为卡死白跑。
         """
+        # r1063 T188：记住本次设备句柄——登录墙取证需要现场 dump。
+        self._last_dev = dev
         # 先锁竖屏：坐标/滑动按 900×1600 写，横屏会让整轮点不动
         # （2026-11-01 现场：accelerometer_rotation=1，App 转成 1600×900，
         # 首页控件都在却怎么点都打不开城市页，账本记 set-city-dep）
+        # r1063 T88：逐步骤打点——前置整段实测 7.7 秒，是 App 单轮里最大的一项，
+        # 但以前只有总数。先量清，再动刀。
         try:
-            dev.lock_portrait()
+            with self.timed("前置·竖屏"):
+                dev.lock_portrait()
         except Exception:
             pass
-        self.restore_login_snapshot(dev)
-        self._dismiss_system_prompts(dev)
-        self._ensure_own_app(dev)
-        self.recover_anr(dev, wait_s=30)
-        self._refresh_vendor_props(dev)
+        with self.timed("前置·登录态"):
+            self.restore_login_snapshot(dev)
+        with self.timed("前置·权限框"):
+            self._dismiss_system_prompts(dev)
+        with self.timed("前置·切前台"):
+            self._ensure_own_app(dev)
+        # r1063 T129：切前台后再确认一次"App 还在"——阿里系会自行退出
+        with self.timed("前置·存活"):
+            if not self._app_alive(dev):
+                self.note_app_gone("切前台后 App 不在（自行退出）")
+        with self.timed("前置·ANR"):
+            self.recover_anr(dev, wait_s=30)
+        with self.timed("前置·props"):
+            self._refresh_vendor_props(dev)
         # 定位（r1063 T45）：模拟器重启/被回收后 GPS 会回到出厂点（加州），
         # 一家上海出发的 App 读到设备在加州，是比 UA 更硬的矛盾。
-        self.ensure_geo(dev)
-        self.ensure_proc_cpuinfo(dev)
+        with self.timed("前置·定位"):
+            self.ensure_geo(dev)
+        with self.timed("前置·cpuinfo"):
+            self.ensure_proc_cpuinfo(dev)
 
     def ensure_proc_cpuinfo(self, dev) -> None:
         """确认 /proc/cpuinfo 不是宿主 Intel；缺了就通过 MuMu root shell 重挂。

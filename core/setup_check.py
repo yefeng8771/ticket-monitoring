@@ -59,6 +59,46 @@ def check_modules(names=("yaml", "httpx", "playwright")):
                 "pip install -r requirements.txt", action="install_deps")
 
 
+RETIRED_PLATFORMS = {
+    "qunar": "去哪儿网页版机票查询及预订服务已停止提供（PC 更早停服）",
+}
+
+
+def _is_retired(root: str, plat: str) -> bool:
+    """该渠道是不是**永久停服已退役**（静态事实优先，其次读它的停服记忆）。"""
+    if str(plat) in RETIRED_PLATFORMS:
+        return True
+    try:
+        import json
+        import time
+        p = os.path.join(root, "user_data", str(plat), "service_closed.json")
+        with open(p, encoding="utf-8") as f:
+            rec = json.load(f) or {}
+        return bool(rec.get("permanent")) and float(
+            rec.get("until") or 0) > time.time()
+    except Exception:
+        return False
+
+
+def check_captcha_backend():
+    """简易验证码识别后端（ddddocr）在不在。
+
+    为什么单列一行：它是**可选的**，不装也能采；但装了才能自动过
+    「简单滑块 / 文字 / 算数」这类通用验证（强人机验证不在此列）。
+    以前它只躺在 requirements 的注释里，自检不查、一键引导不装——
+    用户看到面板写「识别后端缺失」却不知道怎么办。
+    """
+    try:
+        import ddddocr  # noqa: F401
+        return _row(OK, "识别后端", "ddddocr 已装（简易滑块/文字/算数可自动尝试）")
+    except Exception:
+        pass
+    return _row(WARN, "识别后端",
+                "未装 ddddocr：简易滑块/文字/算数类验证只能走基础兜底"
+                "（强人机验证不受影响）",
+                "pip install ddddocr", action="install_deps")
+
+
 def check_browser():
     """Playwright 的 Chromium 有没有装好（下载后第一次必须先装内核）。
 
@@ -113,7 +153,27 @@ def check_config():
                 universe = list(_B) + list(_A)
             except Exception:
                 universe = []
-            rest = [p for p in universe if p not in plats]
+            # 区分「没订阅」与「**已退役（停服）**」（r1063 T68）：
+            # 后者不该再劝人去开——开了也是白跑。
+            retired, rest = [], []
+            for p in universe:
+                if p in plats:
+                    continue
+                if _is_retired(root, p):
+                    retired.append(p)
+                else:
+                    rest.append(p)
+            if retired:
+                head = _row(
+                    WARN if rest else OK, "配置",
+                    "已退役 %d 个通路：%s（永久停服，数据由 App 通路承担）"
+                    % (len(retired), "、".join(retired)))
+                if rest:
+                    head["detail"] += "；未订阅 %d 个：%s" % (
+                        len(rest), "、".join(rest))
+                    head["fix"] = ("想采就在 users[].platforms 里加上"
+                                   "（App 渠道需模拟器在跑）")
+                return head
             if rest:
                 return _row(WARN, "配置",
                             "%d 个用户，订阅 %d 个渠道；未订阅 %d 个：%s"
@@ -143,6 +203,71 @@ def check_dirs():
     return _row(WARN, "数据目录", "缺：%s" % "、".join(miss),
                 "程序首次启动会自建；也可以手动 mkdir",
                 action="mkdir")
+
+
+def _source_version() -> str:
+    """源码版本（`main.py` 的 `__version__`）。读不到返回空串。"""
+    try:
+        import re
+        txt = io_open("main.py").read()
+        m = re.search(r'__version__\s*=\s*"([^"]+)"', txt)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def io_open(path: str):
+    import io
+    return io.open(path, encoding="utf-8", errors="replace")
+
+
+def check_running_instance(port_hint: int = 0) -> dict:
+    """本机是否有实例在跑，以及**它跑的是不是这份源码**（r1063 T97）。
+
+    为什么要单列：发行版和源码版本不一致时，界面一切正常、但源码里的改进
+    **一项都没生效**——这是最贵的误解（"我改了怎么没效果"）。
+    """
+    src = _source_version() or "未知"
+    ports = [port_hint] if port_hint else [8765, 8000, 5000]
+    for port in ports:
+        try:
+            import json
+            import urllib.request
+            with urllib.request.urlopen(
+                    "http://127.0.0.1:%d/api/state" % port, timeout=2.0) as r:
+                st = json.loads(r.read().decode("utf-8") or "{}")
+        except Exception:
+            continue
+        run = str(st.get("version") or "?")
+        if st.get("version") == "demo":
+            continue
+        if run and src and run != src and run != "?":
+            return _row(
+                WARN, "运行实例",
+                "本机在跑 v%s（端口 %d），而这份源码是 v%s —— "
+                "源码里的改进**尚未生效**" % (run, port, src),
+                fix="停掉旧实例后从源码跑：python main.py；"
+                    "或重新打包发行版（scripts/ 里的打包脚本）")
+        return _row(OK, "运行实例",
+                    "v%s（端口 %d），与源码一致" % (run, port))
+    return _row(OK, "运行实例", "本机没检测到在跑的实例（端口 8765/8000/5000）")
+
+
+def check_dump_backend() -> dict:
+    """App 取树后端：u2 快 / CLI 慢 6 倍（r1063 T95）。
+
+    为什么要单列一行：这是**纯性能**差异，功能上 u2 缺了也能跑，
+    于是最容易在"装完能用"的假象里被忽略——实测整轮差 24 秒。
+    """
+    try:
+        import importlib.metadata as _md
+        ver = _md.version("uiautomator2")
+    except Exception:
+        return _row(
+            WARN, "取树后端",
+            "未装 uiautomator2 —— App 渠道会退回 CLI 取树（单次 2–3 秒，整轮慢 6 倍）",
+            fix="python -m pip install 'uiautomator2>=3.0'")
+    return _row(OK, "取树后端", "uiautomator2 %s（App 取树走 u2，单次约 0.07 秒）" % ver)
 
 
 def check_android():
@@ -214,6 +339,49 @@ def check_android():
     return _row(OK, "App 通路", "已连到设备（%s）" % getattr(dev, "serial", ""))
 
 
+def check_device_env() -> dict:
+    """设备脸自洽性（r1063 T96）：机型/平台/GPU/ABI 是否自相矛盾。
+
+    这是"0 条"最常见、又最容易被忽略的根因（携程 50003 / 阿里强制滑块都可能
+    源于它），而且它不出现在任何采集日志里——所以单列一行，并把结论记进
+    降级账本，面板「降级」那行才看得见。
+
+    只在自检里跑（约 1–2 秒的 getprop/dumpsys），不进每轮采集。
+    """
+    try:
+        from core.android import consistency as _ck
+        from core.android import emulator as _emu
+        dev = _emu.device(_State_cfg())
+        if dev is None:
+            return _row(OK, "设备环境", "拿不到设备，跳过审计")
+        rep = _ck.note_if_issues(dev, _State_cfg())
+    except Exception as e:
+        return _row(OK, "设备环境", "审计跳过：%s" % type(e).__name__)
+    if rep.get("high"):
+        first = next(i for i in rep["items"] if i["level"] == "high")
+        return _row(
+            WARN, "设备环境",
+            "%s → 高风险：%s 现 %s / 应 %s"
+            % (rep.get("summary", ""), first.get("key", ""),
+               str(first.get("got", ""))[:22], str(first.get("want", ""))[:26]),
+            fix="python -m core.android.consistency 看全部矛盾；"
+                "改完身份要 python scripts/identity_boot_module.py 再重启实例")
+    if rep.get("total"):
+        return _row(OK, "设备环境",
+                    "%s（低风险，可不处理）" % rep.get("summary", ""))
+    return _row(OK, "设备环境", "设备脸自洽（无矛盾）")
+
+
+def _State_cfg() -> dict:
+    """当前配置（自检内部用；读不到给空 dict）。"""
+    try:
+        import yaml
+        with open("config.yaml", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
 def check_geo():
     """App 定位有没有钉住（r1063 T45）。
 
@@ -270,8 +438,12 @@ def run_checks():
         check_modules(),
         check_config(),
         check_browser(),
+        check_captcha_backend(),
+        check_dump_backend(),
+        check_running_instance(),
         check_dirs(),
         check_android(),
+        check_device_env(),
         check_geo(),
         check_wechat_flat_assets(),
     ]
@@ -281,7 +453,9 @@ def run_checks():
 SAFE_ACTIONS = ("install_deps", "install_browser", "create_config",
                 "mkdir", "launch_emulator", "restart_emulator")
 _SAFE_TEXT = ("python -m playwright install chromium",
-              "pip install -r requirements.txt")
+              "pip install -r requirements.txt",
+              # r1063 T95 取树后端（没装会慢 6 倍）：与上面两条同类，都是装依赖
+              "uiautomator2")
 
 
 def fixable(rows):
@@ -306,9 +480,21 @@ def apply_fix(row, echo=print):
     root = _root()
     cmd = row["fix"]
     if cmd.startswith("pip install"):
-        echo("→ 安装依赖：%s（可能需要几分钟）" % cmd)
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "-r",
-                            os.path.join(root, "requirements.txt")])
+        # r1063 T192：**按提示装**。以前不管提示是什么都跑
+        # `pip install -r requirements.txt`；而 ddddocr 在 requirements 里是
+        # 注释掉的可选项，于是"提示装 ddddocr"实际什么都没装。
+        _target = cmd[len("pip install"):].strip()
+        if _target.startswith("-r"):
+            echo("→ 安装依赖：%s（可能需要几分钟）" % cmd)
+            _args = [sys.executable, "-m", "pip", "install", "-r",
+                     os.path.join(root, "requirements.txt")]
+        else:
+            _pkgs = [x for x in _target.split() if x and not x.startswith("-")]
+            if not _pkgs:
+                return False
+            echo("→ 安装包：%s（可能需要几分钟）" % " ".join(_pkgs))
+            _args = [sys.executable, "-m", "pip", "install"] + _pkgs
+        r = subprocess.run(_args)
         return r.returncode == 0
     if row.get("action") in ("launch_emulator", "restart_emulator"):
         # 用户要求：模拟器该由程序自己拉起/重启（r1063 T64）。

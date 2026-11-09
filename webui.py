@@ -2617,7 +2617,8 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
  .lglane-h{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--tx)}
  .lglane-h .lgdot{margin-left:auto}
  .lglane-sub{font-size:11px;color:var(--mut)}
- .lglane .btn2{width:100%;justify-content:center;white-space:nowrap;margin-top:4px}
+ .lglane .btn2{width:100%;justify-content:center;white-space:nowrap;margin-top:auto}
+ /* r1063 T184：按钮压到 lane 底部——两栏说明行数不同时按钮才不会一高一低 */
  @media(max-width:520px){.lglanes{grid-template-columns:1fr}}
  .lgcard{border:1px solid var(--line);border-radius:var(--r2);padding:12px 14px;
    background:var(--card);display:flex;flex-direction:column;gap:7px;
@@ -2679,6 +2680,9 @@ const RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)')
 .dimtbl .cell.y{background:var(--okbg);color:var(--ok-txt)}
 .dimtbl .cell.n{background:var(--r-surface-2);color:var(--r-ink-3)}
 .dimtbl .cell.u{background:color-mix(in srgb,var(--warn) 12%,transparent);color:var(--warn-deep)}
+.dimtbl .cell.blk{background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warn-deep);font-weight:700}
+.dimtbl .cell.stop{background:var(--r-surface-2);color:var(--r-ink-3);font-size:10px;font-weight:700}
+.dimtbl .cell.na{background:transparent;color:var(--r-ink-3)}
 .dimtbl td.na .cell{opacity:.45}
 .dimtbl td:hover .cell{outline:2px solid color-mix(in srgb,var(--r-blue) 22%,transparent);outline-offset:1px}
 .dimlegend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11px;color:var(--r-ink-3)}
@@ -4918,6 +4922,16 @@ overflow-wrap:anywhere;margin-top:2px;opacity:.95}   /* r342：未定义的 --tx
 
 /* 工作台 */
 #searchview .srx-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}
+/* 结果卡头独立于两列/单列：折叠镜像时列表变整行，头部按钮坐标不变。 */
+#searchview .srx-results{display:flex;flex-direction:column;min-width:0}
+#searchview .srx-results>.srx-listhead{border:1px solid var(--line);border-bottom:1px solid var(--line);
+ border-radius:var(--srx-r) var(--srx-r) 0 0;background:var(--card);position:relative;z-index:6}
+#searchview .srx-results>.srx-grid{margin-top:0}
+#searchview .srx-results .srx-list,#searchview .srx-results .srx-mirror{
+ border-top:0!important;border-radius:0 0 var(--srx-r) var(--srx-r)!important}
+#searchview .srx-mirror.srx-folded{display:none!important;position:static!important;
+ width:auto!important;height:0!important;min-height:0!important;margin:0!important;
+ border:0!important;background:transparent!important;overflow:visible!important}
 #searchview .srx-list{background:var(--card);border:1px solid var(--line);border-radius:var(--srx-r);overflow:hidden;min-width:0}
 #searchview .srx-listhead{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
  min-height:48px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--card);position:relative;z-index:5}
@@ -5184,6 +5198,13 @@ overflow-wrap:anywhere;margin-top:2px;opacity:.95}   /* r342：未定义的 --tx
 #searchview .srx-mtab .p{width:18px;height:18px;border-radius:calc(18px * .273);background:var(--pc,var(--mut));color:#fff;display:inline-flex;
  align-items:center;justify-content:center;font-size:10px;flex:none}
 #searchview .srx-mtab .n{font-family:var(--srx-mono);font-size:10px;color:var(--mut)}
+/* 桌面双栏时镜像轨只有 620–820px，10 家长名字会挤成「去哪儿 A」并裁掉
+   最后一颗。图标本身已唯一识别渠道，宽档只留图标+行数，全名进 title/
+   aria-label；选中渠道全名在镜像正文标题行可见。单栏/窄档仍显示名字。 */
+@media(min-width:1101px){
+ #searchview .srx-mirror .srx-mtab .nm{display:none!important}
+ #searchview .srx-mirror .srx-mtab{justify-content:center!important;padding-left:9px!important;padding-right:9px!important}
+}
 #searchview .srx-mtab.off{opacity:.9;color:var(--tx2)}
 #searchview .srx-mtools{display:flex;align-items:center;gap:4px;margin-left:auto;flex:none}
 /* r979：视图工具组挂在 chrome 行末（主机名/标签之后），与 host 同排。 */
@@ -5224,13 +5245,6 @@ overflow-wrap:anywhere;margin-top:2px;opacity:.95}   /* r342：未定义的 --tx
  #searchview .srx-mrow .m span{white-space:normal!important;overflow:visible!important;
   text-overflow:clip!important;word-break:keep-all!important;overflow-wrap:normal!important;
   line-height:1.35!important}
-}
-/* 320 窄档给班次元信息一个 2 行盒：Linux 字体度量会把 3 行撑到 89px，
-   行盒 >80 会挤掉相邻行。两行足够放下日期/+1，超出部分截断而不是撑高。 */
-@media(max-width:380px){
- #searchview .srx-mrow .m span{display:-webkit-box!important;
-  -webkit-box-orient:vertical!important;-webkit-line-clamp:2!important;
-  overflow:hidden!important;max-height:2.7em!important}
 }
 #searchview .srx-mrow .pr{text-align:right;flex:none}
 #searchview .srx-mrow .pr b{display:block;font-family:var(--srx-mono);font-size:14px;font-weight:700;letter-spacing:-.3px;font-variant-numeric:tabular-nums}
@@ -9045,6 +9059,9 @@ r433：改成 6 列 + 前三张 span2 / 后两张 span3 后，两行卡宽不一
 #loginRows .lgcard>.lgsection+.lgslots{grid-area:info}
 /* 操作列：直接子级的 .btn2 与 .lgact 都落在同一格，右缘严格对齐 */
 #loginRows .lgcard>.btn2,#loginRows .lgcard>.lgact{grid-area:act;justify-self:end;align-self:center}
+#loginRows .lgcard>.btn2{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important}
+#cfgview .lgcard>.btn2{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important}
+#loginRows .lgact>.btn2,#cfgview .lgact>.btn2{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important}
 #loginRows .lgact{display:flex;justify-content:flex-end;width:100%}
 #loginRows .lgslots{display:grid;grid-template-columns:minmax(0,1fr)!important;gap:0!important}
 /* 飞猪双端：PC / H5 两槽并排，保持与单槽行同高。
@@ -9084,6 +9101,7 @@ r433：改成 6 列 + 前三张 span2 / 后两张 span3 后，两行卡宽不一
     下仍会省略成「去哪儿 Ap…」。真机标签在渠道入口的「内嵌画面」行仍可见，
     此处让名称优先。 */
  #loginRows .lgcard[data-channel^="app_"] .lgtag{display:none!important}
+ #loginRows .lgcard[data-channel="qunar"] .lgtag{display:none!important}
  /* 关注轨「未达标」10px 需 31px，320 档被 flex 压到 28px 截字；
     收一格轨道间距（10→8）把位置让给状态词。 */
  .sector-strip{gap:8px!important}
@@ -9091,6 +9109,17 @@ r433：改成 6 列 + 前三张 span2 / 后两张 span3 后，两行卡宽不一
 }
 #loginRows .lgslot-h{grid-area:h}
 #loginRows .lgslot .lgsub{grid-area:sub}
+/* r1063 T176：单槽卡在所有宽度都并成一行（端标 + 说明）。
+   原来只有窄档≤700px 才「h sub」一行，宽屏是两行——第一行只剩「PC」+
+   状态点，看着像孤立标签，且与 App 卡（本来一行）高度不齐。
+   作用域限 `.lgslots.one`：双槽卡（PC/H5）布局不受影响。 */
+#loginRows .lgslots.one .lgslot{grid-template-areas:"h sub"!important;
+ grid-template-columns:auto minmax(0,1fr)!important;gap:0 8px!important;
+ align-items:baseline!important}
+#loginRows .lgslots.one .lgslot-h{white-space:nowrap}
+#loginRows .lgslots.one .lgslot-h .lgdot{margin-left:5px}
+#loginRows .lgslots.one .lgslot .lgsub{overflow:hidden;text-overflow:ellipsis;
+ white-space:nowrap}
 #loginRows .lgcard .btn2{background:transparent!important;border:0!important;color:var(--r-blue)!important;
  padding:0 4px!important;min-height:28px!important;font-size:11px!important;white-space:nowrap}
 /* 登录行按钮是「文字链接」形态（无边框无底色），全局 focus-visible 的
@@ -10875,7 +10904,7 @@ html[data-theme="dark"] #opscard .opsbtns>button:first-child{color:#0b1220!impor
  gap:0 34px!important;align-items:start!important;margin-top:2px}
 #paceBox .pace-main,#paceBox .pace-side{min-width:0}
 #paceBox .pace-side{padding-left:0}
-#paceBox .pace-side .pace-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+#paceBox .pace-side .pace-stats{grid-template-columns:repeat(4,minmax(0,1fr))!important}
 #paceBox .pace-ch{margin-top:0!important}
 #paceBox .pace-row{grid-template-columns:104px 94px minmax(0,1fr) auto!important;
  column-gap:12px!important;min-height:56px!important;padding:8px 2px!important;
@@ -11694,8 +11723,8 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
 #cfgview #sec-login .lgnext{margin-left:6px}
 #cfgview #sec-login .lgnext::before{content:"· "}
 @media(max-width:560px){
- #cfgview #sec-login .lgnext{display:block;margin-left:0}
- #cfgview #sec-login .lgnext::before{content:none}
+ /* 390 档：飞猪双端说明继续内联换行，别单起一块（否则说明 3 行）。 */
+ #cfgview #sec-login .lgnext{display:inline;margin-left:0}
 }
 #cfgview #sec-dims>.uhead{row-gap:4px}
 #cfgview .lgfoot{align-items:center;gap:10px;flex-wrap:wrap}
@@ -11980,7 +12009,7 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
  gap:0 34px!important;align-items:start!important;margin-top:2px}
 #paceBox .pace-main,#paceBox .pace-side{min-width:0}
 #paceBox .pace-side{padding-left:0}
-#paceBox .pace-side .pace-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+#paceBox .pace-side .pace-stats{grid-template-columns:repeat(4,minmax(0,1fr))!important}
 #paceBox .pace-ch{margin-top:0!important}
 #paceBox .pace-row{grid-template-columns:104px 94px minmax(0,1fr) auto!important;
  column-gap:12px!important;min-height:56px!important;padding:8px 2px!important;
@@ -12374,7 +12403,7 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
 #cfgpacingRows .sbd{display:none;padding:0 0 12px}
 #cfgpacingRows .srow.open .sbd{display:block}
 #cfgpacingRows .sgrid{display:grid;
- grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;padding-top:4px}
+ grid-template-columns:repeat(auto-fit,minmax(180px,260px));justify-content:start;gap:8px 12px;padding-top:4px}
 #cfgview #cfgpacingRows .glcell{padding-left:0!important}
 #cfgpacingRows .sadv{font-size:12px;color:var(--r-ink-2);line-height:1.6;margin:10px 0 0}
 #cfgpacingRows .sadv b{color:var(--r-ink-3);font-weight:600;margin-right:6px}
@@ -12542,7 +12571,7 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
 #searchview .srx-mirror .srx-mrail .srx-mtab{width:auto!important;min-width:0!important;
  flex:0 0 auto!important}
 #searchview .srx-mirror .srx-mrail>.srx-mrail-end{display:flex!important;
- position:static!important;flex:0 0 auto!important;margin:0!important;
+ position:static!important;flex:0 0 auto!important;margin:0 0 0 auto!important;
  padding:0!important;background:transparent!important;box-shadow:none!important}
 #searchview .srx-mirror .srx-mrail .srx-foldbtn{position:static!important;
  top:auto!important;right:auto!important;margin:0!important;z-index:auto!important}
@@ -12552,6 +12581,18 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
 #searchview .srx-hero-act select{height:32px}
 #searchview .srx-hero-act>.srx-btn{height:32px;padding:0 12px}
 #searchview .srx-hero-act>.srx-more-btn{display:inline-flex!important;align-items:center;justify-content:center}
+/* 渠道入口与同排工具同高同语言；旧样式只命中 .srx-probeacts，被搬到
+   hero-act 后 inherits 成一颗 27px 裸文字，用户截图点名「样式不佳」。 */
+#searchview .srx-hero-act .srx-chlinks{margin:0!important;border:0!important;padding:0!important}
+#searchview .srx-hero-act .srx-chlinks>summary.srx-chbtn{display:inline-flex!important;align-items:center;gap:5px;
+ height:32px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--tx2);
+ font-size:12px;font-weight:600;cursor:pointer;list-style:none;white-space:nowrap}
+#searchview .srx-hero-act .srx-chlinks>summary.srx-chbtn::-webkit-details-marker{display:none}
+#searchview .srx-hero-act .srx-chlinks>summary.srx-chbtn:hover{background:var(--hover);color:var(--tx)}
+#searchview .srx-hero-act .srx-chlinks[open]>summary.srx-chbtn{background:var(--r-blue-soft);color:var(--blue)}
+#searchview .srx-hero-act .srx-chlinks>summary.srx-chbtn:after{content:"›";font-size:15px;line-height:1;
+ opacity:.7;transform:rotate(90deg);transition:transform .16s}
+#searchview .srx-hero-act .srx-chlinks[open]>summary.srx-chbtn:after{transform:rotate(-90deg)}
 #searchview .srx-more-pop{display:none!important}
 #searchview .srx-hero-act.open .srx-more-pop{display:flex!important;position:absolute;top:calc(100% + 8px);right:0;
  width:min(560px,calc(100vw - 24px));flex-wrap:wrap;gap:4px;padding:10px;background:var(--card);
@@ -12581,30 +12622,33 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
 #searchview .srx-railacts button{height:28px;padding:0 6px;border:0;border-radius:var(--r3);
  background:transparent;color:var(--mut);font-size:12px;cursor:pointer}
 #searchview .srx-railacts button:hover{background:var(--hover);color:var(--tx)}
-#searchview .srx-batchrow{position:relative;display:flex;align-items:center;gap:8px;margin:6px 0 0;
- width:max-content;max-width:100%;flex:0 0 auto}
-#searchview .srx-batchrow .srx-batchtoggle{height:32px;padding:0 12px;border:0;border-radius:var(--r3);
- background:var(--rowalt);color:var(--tx2);font-size:12px;font-weight:600;cursor:pointer}
-#searchview .srx-batchrow .srx-batchtoggle:hover{background:var(--hover);color:var(--tx)}
-#searchview .srx-batchrow .srx-batchtoggle[aria-expanded="true"]{background:color-mix(in srgb,var(--blue) 12%,var(--card));color:var(--blue)}
-#searchview .srx-batchhint{font-size:11px;color:var(--mut)}
-#searchview .srx-batchrow .srx-batchdock{position:absolute!important;left:0!important;top:calc(100% + 6px)!important;
- width:min(560px,calc(100vw - 32px))!important;z-index:70!important;padding:10px!important;
+/* 组合触发器与实时探针同排同高：城市+日期+探针+组合只占一行；队列是
+   锚在表单正下方的临时浮层，展开不推表单、不推渠道行、不推结果。
+   （旧版把「组合」单独做成第三行，用户实报「又给我写成三行」。） */
+#searchview #srxProbe .srx-qrow>.srx-batchtoggle{height:32px!important;padding:0 12px!important;
+ border:0!important;border-radius:8px!important;background:var(--r-surface-2)!important;
+ color:var(--r-ink-2)!important;font-size:12px!important;font-weight:600!important;
+ font-variant-numeric:tabular-nums!important;
+ cursor:pointer;flex:0 0 auto!important;white-space:nowrap!important}
+#searchview #srxProbe .srx-qrow>.srx-batchtoggle:hover{background:var(--r-surface-3)!important;color:var(--r-ink)!important}
+#searchview #srxProbe .srx-qrow>.srx-batchtoggle.on,
+#searchview #srxProbe .srx-qrow>.srx-batchtoggle[aria-expanded="true"]{
+ background:var(--r-blue-soft)!important;color:var(--r-blue)!important}
+#searchview .srx-probeform{position:relative!important}
+#searchview #srxBatchDock{position:absolute!important;left:0!important;top:calc(100% + 6px)!important;
+ width:min(560px,calc(100vw - 32px))!important;max-height:min(60vh,420px);overflow:auto;
+ z-index:70!important;padding:10px!important;
  background:var(--card)!important;border:1px solid var(--line)!important;border-radius:var(--r10)!important}
-#searchview #srxBatchDock{background:var(--card)!important;border:1px solid var(--line)!important;border-radius:var(--r10)!important}
-#searchview .srx-batchrow .srx-batchdock:empty,
-#searchview .srx-batchrow .srx-batchdock:has(#srxBatchWrap[style*="display:none"]){display:none!important}
-#searchview .srx-batchrow .srx-batchdock #srxBatchWrap{display:flex!important;flex-direction:column!important;
+#searchview #srxBatchDock #srxBatchWrap{display:flex!important;flex-direction:column!important;
  gap:8px!important;margin:0!important;padding:0!important}
-#searchview .srx-batchrow .srx-batchdock .srx-batchlist{order:1;display:flex!important;flex-direction:column!important;
+#searchview #srxBatchDock #srxBatchList{order:1;display:flex!important;flex-direction:column!important;
  gap:6px!important;margin:0!important}
-#searchview .srx-batchrow .srx-batchdock .srx-batchbar{display:flex!important;order:2;margin:0!important;padding-top:8px!important;
+#searchview #srxBatchDock .srx-batchbar{display:flex!important;order:2;margin:0!important;padding-top:8px!important;
  border-top:1px solid var(--line);justify-content:flex-end;flex-wrap:nowrap!important}
-#searchview .srx-probe.open .srx-batchrow .srx-batchdock .srx-batchbar{display:flex!important;order:2!important}
-#searchview .srx-batchrow .srx-batchdock .srx-batchbar>span{display:none!important}
-#searchview .srx-batchrow .srx-batchdock .srx-batchbar button{height:30px!important;padding:0 8px!important;
+#searchview #srxBatchDock .srx-batchbar>span{display:none!important}
+#searchview #srxBatchDock .srx-batchbar button{height:30px!important;padding:0 8px!important;
  font-size:12px!important;white-space:nowrap!important}
-#searchview .srx-batchrow .srx-batchdock .srx-blchip{width:100%!important;justify-content:space-between!important;
+#searchview #srxBatchDock .srx-blchip{width:100%!important;justify-content:space-between!important;
  height:34px!important;background:var(--rowalt)!important;border-radius:var(--r3)!important;padding:0 8px!important}
 #searchview #srxToolsRow{display:contents!important}
 #searchview .srx-context{background:transparent!important;border:0!important;padding:0!important;margin:0 0 8px!important}
@@ -12669,15 +12713,24 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
  #searchview .srx-probe.open .srx-qrow>.go{flex:0 0 124px!important;width:124px!important;padding:0 10px!important}
 }
 @media(max-width:900px){
- /* 渠道入口内容重：窄档用底部抽屉，关闭入口在面板 × */
- #searchview #srxChLinks[open]>#srxChLinksBox{position:fixed!important;left:8px!important;right:8px!important;
-  bottom:8px!important;top:auto!important;width:auto!important;max-height:80vh!important;overflow:auto!important}
+ /* 渠道入口仍锚在触发器下方（JS 计算 --cl-left/--cl-top），不再强拉成
+    与触发器无关的左侧抽屉；只收紧可用高度。 */
+ #searchview #srxChLinks[open]>#srxChLinksBox{max-height:80vh!important;overflow:auto!important}
 }
 /* ===== r1130 渠道健康（桌面/全宽，放在所有窄档媒体之外） ===== */
 #healthDiag{padding:0!important;position:relative}
 #healthDiag .uhead{padding:10px 14px 4px!important;min-height:0!important}
 #healthDiag .srccap{display:none!important}
 #healthDiag #healthDiagMore{display:none!important}
+/* 来源接入条只在诊断卡内部占一行：路径与「展开说明/App 登录」同排，
+   不再被搬到卡外当浮岛（旧 renderHealthChain 的 insertBefore 用户实报遮挡）。 */
+#healthDiag>#srccap{display:flex!important;align-items:center!important;gap:8px 12px!important;
+ flex-wrap:wrap!important;margin:0!important;padding:2px 14px 8px!important;
+ background:transparent!important;border:0!important;border-radius:0!important;min-height:0!important}
+#healthDiag>#srccap .scpath{flex:0 1 auto!important;min-width:0!important;flex-wrap:nowrap!important;
+ overflow:hidden!important;margin:0!important}
+/* 动作组紧接状态链：间距 12px，禁止 margin-left:auto 把它推到卡片最右。 */
+#healthDiag>#srccap .scfoot{flex:0 0 auto!important;margin-left:12px!important;justify-content:flex-start!important}
 #healthDiag .hchain{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 14px 6px}
 #healthDiag .hchain-node{display:inline-flex;align-items:center;justify-content:center;gap:6px;
  height:30px;min-width:150px;padding:0 12px;border-radius:var(--pill);background:var(--rowalt);
@@ -12745,10 +12798,39 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
  #healthcard .hrow .hrowbtn{width:44px;height:28px;padding:0!important;font-size:11px}
 }
 /* ===== r1130 final overrides（ID 特异性，压过历史层叠） ===== */
-#searchview #srxProbe .srx-qrow{display:flex!important;flex-wrap:nowrap!important;height:32px!important;gap:6px!important}
+#searchview #srxProbe .srx-qrow{display:flex!important;flex-wrap:nowrap!important;height:32px!important;gap:6px!important;
+ width:100%!important;min-width:0!important}
+/* 健康页节流：左渠道清单 + 右 340px 读数栏（280–360 硬约束）；
+   单行 ≤64px；策略 chip 最多 4 个/行。 */
+@media(min-width:901px){
+ #paceBox .pace-body{grid-template-columns:minmax(0,1fr) 340px!important;gap:16px!important}
+ #paceBox .pace-ch{display:flex!important;flex-direction:column!important}
+ #paceBox .pace-side{grid-column:auto!important;border-top:0;margin-top:0;padding-left:0!important}
+ #paceBox .pace-side .pace-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ #paceBox .pstrip{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:6px!important}
+}
 #searchview #srxProbe{padding-top:10px!important}
 #searchview #srxProbe .srx-qrow .srx-citybox{min-width:120px!important}
 #searchview #srxProbe .srx-qrow .srx-citybox input{width:100%!important;min-width:0!important}
+/* 宽档把城市输入吃满可用宽（原来固定 150px，右侧大半张卡空着） */
+@media(min-width:601px){
+ #searchview #srxProbe .srx-qrow .srx-fromfield,
+ #searchview #srxProbe .srx-qrow .srx-tofield{flex:1 1 0!important;min-width:0!important;
+  max-width:320px!important}
+ #searchview #srxProbe .srx-qrow .srx-datefield{flex:0 1 160px!important;min-width:138px!important}
+ #searchview #srxProbe .srx-qrow>.go{flex:0 0 auto!important;width:auto!important}
+}
+@media(min-width:601px) and (max-width:760px){
+ #searchview #srxProbe .srx-qrow .srx-citybox{min-width:0!important}
+ #searchview #srxProbe .srx-qrow .srx-datefield{flex:0 0 120px!important;min-width:110px!important}
+ #searchview #srxProbe .srx-qrow>.go{flex:0 0 88px!important;width:88px!important;padding:0 5px!important;font-size:11px!important}
+ #searchview #srxProbe .srx-qrow>.srx-batchtoggle{width:60px!important;padding:0 4px!important;font-size:10px!important}
+}
+@media(min-width:361px) and (max-width:380px){
+ #searchview #srxProbe .srx-qrow .srx-datefield{flex:0 0 104px!important;width:104px!important;max-width:104px!important}
+ #searchview #srxProbe .srx-qrow>.go{flex:0 0 100px!important;width:100px!important;padding:0 5px!important;font-size:11px!important}
+ #searchview #srxProbe .srx-qrow>.srx-batchtoggle{width:66px!important;padding:0 5px!important;font-size:10px!important}
+}
 @media(max-width:600px){
  #searchview #srxProbe .srx-qrow{flex-wrap:wrap!important;height:auto!important;gap:6px 4px!important}
  #searchview #srxProbe .srx-qrow .srx-fromfield,
@@ -12759,6 +12841,14 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
  #searchview #srxProbe .srx-qrow .srx-datefield{flex:1 1 auto!important;min-width:0!important}
  #searchview #srxProbe .srx-qrow .srx-datefield input{width:100%!important}
  #searchview #srxProbe .srx-qrow>.go{flex:0 0 124px!important;width:124px!important;padding:0 10px!important}
+}
+/* 390 档动作行留余量：日期框吃剩余宽、探针钮收 12px，避免 Linux 字体
+   下「日期+探针+组合」多出 8px 触发第三行（CI 实测表单高 120）。 */
+@media(min-width:381px) and (max-width:600px){
+ #searchview #srxProbe .srx-qrow .srx-datefield{flex:1 1 auto!important;min-width:0!important;width:auto!important;max-width:none!important}
+ #searchview #srxProbe .srx-qrow .srx-datefield input{width:100%!important;min-width:0!important}
+ #searchview #srxProbe .srx-qrow>.go{flex:0 0 112px!important;width:112px!important;padding:0 8px!important}
+ #searchview #srxProbe .srx-qrow>.srx-batchtoggle{padding:0 10px!important}
 }
 #searchview #srxBatchDock{position:absolute!important;left:0!important;top:calc(100% + 6px)!important;
  width:min(560px,calc(100vw - 32px))!important;z-index:70!important;padding:10px!important;
@@ -12801,7 +12891,9 @@ html{scrollbar-gutter:stable;overflow-y:scroll}
 input[type="checkbox"],input[type="radio"]{font-size:13px!important}
 #searchview #srxChLinks[open]>#srxChLinksBox{position:fixed!important;left:var(--cl-left,8px)!important;
  top:var(--cl-top,120px)!important;width:var(--cl-w,560px)!important;max-height:70vh!important;
- overflow:auto!important;z-index:96!important}
+ overflow:auto!important;z-index:96!important;padding:10px 12px!important;
+ background:var(--card)!important;border:1px solid var(--line)!important;
+ border-radius:var(--r10)!important;box-shadow:0 12px 32px -14px rgba(15,23,42,.24)!important}
 #searchview .srx-more-pop .srx-chbtn{width:78px!important;min-width:78px!important;max-width:78px!important;justify-content:center!important}
 #searchview #srxChLinksBox .clx-l{display:inline-flex!important;align-items:center!important;height:30px!important;padding:0 8px!important;border-radius:7px!important}
 #searchview .srx-mxcard .pn{gap:0!important}
@@ -12853,29 +12945,35 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
 #searchview #srxChannelRow .srx-platbtn b{font-family:var(--srx-mono);font-size:11px;color:var(--r-ink-3);font-weight:600}
 #searchview #srxChannelRow .srx-platdd[open] .srx-platbtn{background:var(--r-blue-soft)!important;color:var(--r-blue)!important}
 #searchview #srxChannelRow .srx-platdd[open] .srx-platbtn b{color:var(--r-blue)}
-#searchview #srxChannelRow .srx-platpop{position:absolute;right:0;top:calc(100% + 6px);z-index:90;
+/* 关闭态必须真的不渲染：details 的 UA 隐藏会被作者 display:flex/block
+   覆盖，浮层虽然被 overflow:clip 裁掉，仍占着命中矩形、能被 Tab/自动化
+   读到（用户实报「点里面还会挡到下面的按钮」）。 */
+#searchview #srxPlatDD:not([open]) .srx-platpop{display:none!important}
+#searchview .srx-platpop{position:absolute;right:0;top:calc(100% + 6px);z-index:90;
  width:min(520px,calc(100vw - 24px));max-height:min(70vh,520px);overflow:auto;
  background:var(--card);border:1px solid var(--line);border-radius:var(--r2);
  padding:12px}
-#searchview #srxChannelRow .srx-platpop-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
-#searchview #srxChannelRow .srx-platpop-h>b{font-size:13px;color:var(--r-ink);font-weight:600}
-#searchview #srxChannelRow .srx-platpop-h>span{font-size:11px;color:var(--r-ink-3)}
-#searchview #srxChannelRow .srx-platpop-x{margin-left:auto;height:24px;min-width:24px;border:0;border-radius:var(--pill);background:var(--r-surface-2);color:var(--r-ink-3);font-size:14px;cursor:pointer}
-#searchview #srxChannelRow .srx-platpop .srx-platpick{display:flex;flex-wrap:wrap;gap:6px!important;max-width:none!important}
-#searchview #srxChannelRow .srx-platpop .srx-pchip{height:32px!important;border:0!important;background:var(--r-surface-2)!important;border-radius:var(--pill)!important;padding:0 10px!important;font-size:12px!important}
-#searchview #srxChannelRow .srx-platpop .srx-pchip .bic{width:20px!important;height:20px!important}
-#searchview #srxChannelRow .srx-platpop .srx-pchip input{display:none}
-#searchview #srxChannelRow .srx-platpop .srx-pchip:has(input:checked){background:var(--r-blue-soft)!important;color:var(--r-blue)!important}
-#searchview #srxChannelRow .srx-platpop .srx-applab{font-size:12px!important;color:inherit!important;background:transparent!important;padding:0!important}
-#searchview #srxChannelRow .srx-platpop-f{display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--r-hair)}
-#searchview #srxChannelRow .srx-platpop-f>span{margin-right:auto;font-family:var(--srx-mono);font-size:11px;color:var(--r-ink-3)}
-#searchview #srxChannelRow .srx-platpop-f button{height:28px;padding:0 10px;border:0;border-radius:var(--pill);background:var(--r-surface-2);color:var(--r-ink-2);font-size:12px;font-weight:600;cursor:pointer}
+#searchview .srx-platpop-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+#searchview .srx-platpop-h>b{font-size:13px;color:var(--r-ink);font-weight:600}
+#searchview .srx-platpop-h>span{font-size:11px;color:var(--r-ink-3)}
+#searchview .srx-platpop-x{margin-left:auto;height:24px;min-width:24px;border:0;border-radius:var(--pill);background:var(--r-surface-2);color:var(--r-ink-3);font-size:14px;cursor:pointer}
+#searchview .srx-platpop .srx-platpick{display:flex;flex-wrap:wrap;gap:6px!important;max-width:none!important}
+#searchview .srx-platpop .srx-pchip{height:32px!important;border:0!important;background:var(--r-surface-2)!important;border-radius:var(--pill)!important;padding:0 10px!important;font-size:12px!important}
+#searchview .srx-platpop .srx-pchip .bic{width:20px!important;height:20px!important}
+#searchview .srx-platpop .srx-pchip input{display:none}
+#searchview .srx-platpop .srx-pchip:has(input:checked){background:var(--r-blue-soft)!important;color:var(--r-blue)!important}
+#searchview .srx-platpop .srx-applab{font-size:12px!important;color:inherit!important;background:transparent!important;padding:0!important}
+#searchview .srx-platpop-f{display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--r-hair)}
+#searchview .srx-platpop-f>span{margin-right:auto;font-family:var(--srx-mono);font-size:11px;color:var(--r-ink-3)}
+#searchview .srx-platpop-f button{height:28px;padding:0 10px;border:0;border-radius:var(--pill);background:var(--r-surface-2);color:var(--r-ink-2);font-size:12px;font-weight:600;cursor:pointer}
 
 /* 渠道浮层：打开后被 portal 到 #searchview 下，必须用 JS 计算的 --pp-*
    做 fixed 定位；否则留在文档流里落到整页底部（实测 y=1131）。 */
 #searchview>.srx-platpop{position:fixed!important;left:var(--pp-left,8px)!important;
  top:var(--pp-top,80px)!important;width:var(--pp-w,520px)!important;
- max-height:min(62vh,480px);overflow:auto;z-index:95}
+ max-height:min(62vh,480px);overflow:auto;z-index:95;
+ background:var(--card)!important;border:1px solid var(--line)!important;
+ border-radius:var(--r2)!important;padding:12px!important}
 
 #searchview .srx-mrail-tabs{flex:0 1 auto!important;min-width:0!important;overflow:hidden!important}
 #searchview .srx-mirror .srx-mrail .srx-mtab{flex:1 1 0!important;min-width:40px!important;max-width:none!important;
@@ -12899,14 +12997,10 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
 }
 @media(max-width:360px){
  #searchview #srxProbe .srx-qrow{display:flex!important;flex-wrap:wrap!important;grid-template-columns:none!important;gap:4px!important}
- /* 320 窄档：字段标签（出发/到达）由 placeholder/aria-label 承担，去掉后
-    城市对 36px + 日期/探针 36px 两行收口（Linux 字体度量下也 ≤80）。
-    日期字段必须可收缩到与探针同排，不能被日期控件的固有宽度挤到第三行。 */
- #searchview #srxProbe .srx-qrow .srx-flab{display:none!important}
- #searchview #srxProbe .srx-qrow .srx-datefield{flex:0 0 calc(100% - 128px)!important;
-  width:calc(100% - 128px)!important;max-width:calc(100% - 128px)!important;min-width:0!important}
- #searchview #srxProbe .srx-qrow .srx-datefield input{width:100%!important;min-width:0!important}
  #searchview #srxProbe .srx-qrow .srx-swap{flex:0 0 28px!important;width:28px!important}
+ #searchview #srxProbe .srx-qrow .srx-datefield{flex:0 0 96px!important;width:96px!important;max-width:96px!important}
+ #searchview #srxProbe .srx-qrow>.go{flex:0 0 96px!important;width:96px!important;padding:0 5px!important;font-size:11px!important}
+ #searchview #srxProbe .srx-qrow>.srx-batchtoggle{width:64px!important;padding:0 5px!important;font-size:10px!important}
  #searchview #srxProbe .srx-qrow .srx-fromfield,
  #searchview #srxProbe .srx-qrow .srx-tofield{flex:0 0 calc(50% - 26px)!important;width:calc(50% - 26px)!important;max-width:calc(50% - 26px)!important}
  #searchview .srx-mxcard .pn i{font-size:10px!important;white-space:normal!important;
@@ -12923,12 +13017,19 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
 
 #searchview #srxPlatPick img.srx-rail-ic{width:20px!important;height:20px!important}
 #searchview #srxPlatPick .srx-pchip img.bic{width:20px!important;height:20px!important}
-#searchview .srx-mirror.srx-folded .srx-mrail{justify-content:flex-start!important;padding-right:88px!important}
+/* r1131：折叠触发器两态同坐标。旧实现把整张 816px 宽的镜像盒绝对定位
+   盖在列表头上，透明区域挡住「解析详情/快照/证据 JSON」，按钮又插进
+   动作组中间——用户实报「一会飘到下面，一会在上面遮挡」。
+   定案：轨道不再预留 88px，按钮始终是行内最后一颗；折叠态镜像盒只保留
+   88px 宽的工具位（= 按钮宽 + 左右 10px），不覆盖列表动作。 */
+#searchview .srx-mirror .srx-mrail{padding:8px 10px!important}
+#searchview .srx-mirror .srx-mrail .srx-foldbtn{position:static!important;
+ top:auto!important;right:auto!important;margin:0 0 0 4px!important;flex:0 0 auto!important}
 #searchview .srx-mirror .srx-mrail .srx-mtab{flex:1 1 0!important;min-width:0!important;max-width:none!important;
  overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
-#searchview .srx-mirror.srx-folded .srx-foldbtn{right:98px!important;margin-left:0!important}
-#searchview .srx-mirror.srx-folded{position:static!important;width:auto!important;max-width:100%!important;
- height:auto!important;min-height:0!important;margin:0!important}
+#searchview .srx-mirror.srx-folded .srx-mrail{justify-content:flex-end!important;
+ padding:8px 10px!important;min-height:44px!important}
+#searchview .srx-mirror.srx-folded .srx-mrail::before{display:none!important}
 #searchview .srx-mxcard .pn i{white-space:normal!important;line-height:1.25!important;
  overflow:visible!important;text-overflow:clip!important}
 /* ===== r1130i 压过恢复段的旧节流样式：工具条去灰底卡中卡 ===== */
@@ -12953,6 +13054,107 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
   padding:0!important;justify-content:center!important;gap:0!important;overflow:hidden!important}
  #searchview #srxPlatPick .srx-pchip .srx-applab{display:none!important}
  #searchview #srxPlatPick .srx-pchip .bic{width:16px!important;height:16px!important}
+}
+
+/* ===== r1131 渠道入口：固定按钮 + 右侧抽屉 + 遮罩 ===== */
+#searchview .srx-chmask{position:fixed;inset:0;z-index:97;background:rgba(15,23,42,.34);
+ -webkit-backdrop-filter:blur(1px);backdrop-filter:blur(1px)}
+#searchview .srx-chmask[hidden]{display:none!important}
+#searchview .srx-chdrawer{position:fixed;top:0;right:0;bottom:0;z-index:98;
+ width:400px;max-width:calc(100vw - 20px);display:flex;flex-direction:column;
+ background:var(--card);border-left:1px solid var(--line);
+ box-shadow:-18px 0 48px rgba(15,23,42,.22)}
+#searchview .srx-chdrawer[hidden]{display:none!important}
+#searchview .srx-chdrawer-h{display:flex;align-items:center;gap:8px;min-height:52px;
+ padding:0 14px;border-bottom:1px solid var(--line);flex:0 0 auto}
+#searchview .srx-chdrawer-h>b{font-size:14px;color:var(--ink);font-weight:600}
+#searchview .srx-chdrawer-h>span{font-size:11px;color:var(--r-ink-3);min-width:0;
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#searchview .srx-chdrawer-h .clx-x{margin-left:auto;width:28px;height:28px;border:0;
+ border-radius:var(--pill);background:var(--r-surface-2);color:var(--r-ink-2);
+ font-size:16px;cursor:pointer;flex:0 0 auto}
+#searchview #srxChLinksDrawer #srxChLinksBox{flex:1 1 auto;min-height:0;overflow:auto;
+ padding:10px 14px 18px}
+#searchview #srxChLinksDrawer .clx-row{padding:8px 0}
+#searchview #srxChLinksDrawer .clx-links{gap:6px}
+#searchview #srxChLinksDrawer .clx-l{height:30px}
+@media(max-width:600px){
+ #searchview .srx-chdrawer{width:calc(100vw - 16px);max-width:none}
+}
+
+/* ===== r1131 配置表单：12 列网格 / 标签列 120–160 / 桌面每行 2 字段 ===== */
+@media(min-width:901px){
+  #cfgview #cfgglobals .glgrid>.secbody,
+ #cfgview #cfgpacing .glgrid>.secbody,
+ #cfgpacingRows .sgrid>.secbody{grid-column:1/-1!important;min-width:0!important;width:100%!important}
+#cfgview #cfgglobals .glgrid,
+ #cfgview #cfgpacing .glgrid,
+ #cfgpacingRows .sgrid{margin-left:12px!important;grid-template-columns:repeat(12,minmax(0,1fr))!important;
+  gap:8px 14px!important;justify-content:stretch!important}
+ #cfgview #cfgglobals .glgrid>.glcell,
+ #cfgview #cfgpacing .glgrid>.glcell,
+ #cfgpacingRows .sgrid>.glcell{grid-column:span 6!important;display:grid!important;
+  grid-template-columns:132px minmax(0,1fr)!important;align-items:center!important;
+  column-gap:10px!important;row-gap:2px!important;padding:8px 10px!important}
+ #cfgview #cfgglobals .glgrid>.glcell>.glab,
+ #cfgview #cfgpacing .glgrid>.glcell>.glab,
+ #cfgpacingRows .sgrid>.glcell>.glab{grid-column:1!important;grid-row:1!important;
+  text-align:left!important;white-space:normal!important;line-height:1.35!important;
+  min-width:0!important;overflow:visible!important}
+ #cfgview #cfgglobals .glgrid>.glcell>input,
+ #cfgview #cfgglobals .glgrid>.glcell>select,
+ #cfgview #cfgpacing .glgrid>.glcell>input,
+ #cfgview #cfgpacing .glgrid>.glcell>select,
+ #cfgpacingRows .sgrid>.glcell>input,
+ #cfgpacingRows .sgrid>.glcell>select,
+ #cfgpacingRows .sgrid>.glcell>.sro{grid-column:2!important;grid-row:1!important;
+  margin-top:0!important;width:100%!important;height:32px!important;min-height:32px!important}
+ #cfgview #cfgglobals .glgrid>.glcell>.scb,
+ #cfgview #cfgpacing .glgrid>.glcell>.scb,
+ #cfgpacingRows .sgrid>.glcell>.scb{grid-column:2!important;grid-row:1!important;min-height:32px}
+ #cfgview #cfgglobals .glgrid>.glcell>.gsub,
+ #cfgview #cfgpacing .glgrid>.glcell>.gsub,
+ #cfgpacingRows .sgrid>.glcell>.gsub,
+ #cfgpacingRows .sgrid>.glcell>.verr{grid-column:2!important;grid-row:2!important;
+  margin-top:0!important;line-height:1.4!important}
+}
+@media(max-width:900px){
+ #cfgview #cfgglobals .glgrid>.glcell,
+ #cfgview #cfgpacing .glgrid>.glcell,
+ #cfgpacingRows .sgrid>.glcell{grid-column:span 12!important}
+}
+
+/* r1131 健康矩阵：单行 ≤56px。hcells 的纵向触控衬垫在桌面上收一档，
+   把行压到 56 以内；窄档仍保留 36px 触控地板。 */
+@media(min-width:761px){
+ #healthcard .hcells{padding:6px 0!important;margin:-4px 0!important}
+ #healthcard .hrow{padding-top:3px!important;padding-bottom:3px!important}
+}
+
+/* 筛选：每个 chip 组最多 2 行；超出折叠成「更多」。 */
+#srxCtxFly .srf-card .srf-chips.srf-foldable{max-height:70px;overflow:hidden}
+#srxCtxFly .srf-card.srf-expanded .srf-chips.srf-foldable{max-height:none;overflow:visible}
+#srxCtxFly .srf-card .srf-morechips{height:24px;padding:0 9px;border:0;border-radius:var(--pill);
+ background:var(--r-surface-2);color:var(--r-ink-3);font-size:11px;font-weight:600;cursor:pointer;margin-left:auto}
+#srxCtxFly .srf-card .srf-morechips:hover{background:var(--r-blue-soft);color:var(--blue)}
+
+/* 节流行：第一行 30px + 策略条 22px + 内衬，总高 ≤64px。 */
+@media(min-width:901px){
+ #paceBox .pace-row{grid-template-rows:30px 22px!important;min-height:0!important;
+  padding:4px 0!important;row-gap:2px!important}
+ #paceBox .pace-row .ev{height:30px;flex-wrap:nowrap!important;align-items:center!important;gap:2px 10px!important}
+ #paceBox .pace-row .ev .e1{flex:0 1 42%!important;white-space:nowrap!important;
+  overflow:hidden!important;text-overflow:ellipsis!important}
+ #paceBox .pace-row .ev .e2{flex:1 1 58%!important;min-width:120px!important;white-space:nowrap!important;
+  overflow:hidden!important;text-overflow:ellipsis!important}
+ #paceBox .pace-row .ac button{height:26px!important}
+ #paceBox .pstrip{height:22px!important;padding:0!important;overflow:hidden!important;
+  grid-auto-rows:22px!important;gap:4px!important}
+ #paceBox .pstrip .pchip{height:22px!important;padding:0 8px!important;font-size:11px!important}
+}
+
+@media(pointer:coarse){
+ #cfgview .glcell input:not(.switch),#cfgview .glcell select{height:36px!important;min-height:36px!important}
 }
 </style></head><body><div class="wrap">
 <svg class="svgdefs" aria-hidden="true" focusable="false"><defs>
@@ -13313,37 +13515,25 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
       r423：并进卡内后仍是一整块满宽信息带，依旧自成一段。现在直接长在
       标题行里（与「渠道诊断」同一行、同一基线），路径即标题的展开说明：
       不再有第二行、不再有底纹块，说明仍绝对定位在行下。 -->
- <div class="srccap" id="srccap" role="group" aria-label="去哪儿网页通路 SOURCE ACCESS：只讲去哪儿 PC 停服后的网页取数路径；App 渠道见下方渠道健康与渠道登录">
+ <div class="srccap" id="srccap" role="group" aria-label="去哪儿网页通路 SOURCE ACCESS：PC/H5 网页版均已停服；数据走去哪儿 App（app_qunar）">
   <div class="scpath" role="group" aria-label="去哪儿取数路径">
    <div class="scnode dead" title="PC 网页已于 2026-10-10 停服"><span class="sck">PC 网页</span><b>已停服</b><em>2026-10-10 起</em></div>
    <span class="scarr" aria-hidden="true">→</span>
-   <div class="scnode live" title="H5 机票（m.flight）登录后出全量航班明细"><span class="sck">H5 机票</span><b>登录后可用</b><em>出全量航班明细</em></div>
+   <div class="scnode dead" title="H5 机票查询服务已停服（2026-11）"><span class="sck">H5 机票</span><b>已停服</b><em>2026-11 起</em></div>
    <span class="scarr" aria-hidden="true">→</span>
-   <div class="scnode gate" title="手机号 / 扫码登录，Cookie 与 H5 共用"><span class="sck"><svg class="ic" aria-hidden="true"><use href="#i-lock"></use></svg>登录态</span><b class="scstate" id="scQState" role="status" aria-live="polite" aria-atomic="true">读取中…</b><em>手机号 / 扫码</em></div>
+   <div class="scnode live" title="网页通路停服后，数据由去哪儿 App 真机采集（独立渠道 app_qunar）"><span class="sck"><svg class="ic" aria-hidden="true"><use href="#i-lock"></use></svg>App 通路</span><b class="scstate" id="scQState" role="status" aria-live="polite" aria-atomic="true">app_qunar</b><em>真机采集</em></div>
   </div>
   <div class="scfoot">
    <span class="scacts">
-    <button type="button" class="sclink" id="scNoteBtn" aria-expanded="false" aria-controls="scNote" onclick="srxToggleScNote(this)">展开说明</button>
-    <button type="button" class="scbtn" id="scLoginBtn" onclick="srxGoLogin('qunar')">去登录</button>
-    <a class="scbtn ghost" href="https://touch.qunar.com/h5/flight/" target="_blank" rel="noopener noreferrer" title="打开去哪儿 H5 机票页（登录后出明细）">打开 H5</a>
+    <button type="button" class="sclink" id="healthDiagMore2" aria-expanded="false" aria-controls="healthDiagBody" onclick="toggleHealthDiag()">展开说明</button>
+    <button type="button" class="sclink" id="scNoteBtn" aria-expanded="false" aria-controls="scNote" onclick="srxToggleScNote(this)">停服说明</button>
+    <button type="button" class="scbtn" id="scLoginBtn" onclick="srxGoLogin('app_qunar')">App 登录</button>
+    <span class="scbtn ghost" aria-disabled="true" title="去哪儿 PC/H5 网页版均已停服">H5 已停服</span>
    </span>
   </div>
-  <span class="scnote" id="scNote">本块只讲去哪儿网页通路。App 渠道走 Android 真机采集，状态与日志见下方渠道健康行；下单仍不在采集范围。</span>
+  <span class="scnote" id="scNote">去哪儿网页版 PC/H5 机票查询均已停服；数据由去哪儿 App 真机采集（独立渠道 app_qunar），状态与日志见下方渠道健康行；下单仍不在采集范围。</span>
  </div>
 </div>
- <div class="hchain" id="healthChain" role="status" aria-live="polite">
-  <span class="hchain-node" data-k="pc"><b>PC</b><em>读取中…</em></span>
-  <span class="hchain-arr" aria-hidden="true">→</span>
-  <span class="hchain-node" data-k="h5"><b>H5</b><em>读取中…</em></span>
-  <span class="hchain-arr" aria-hidden="true">→</span>
-  <span class="hchain-node" data-k="login"><b>登录态</b><em>读取中…</em></span>
- </div>
- <div class="hchain-actions">
-  <button type="button" class="hdiag-morebtn" id="healthDiagMore2" aria-expanded="false" aria-controls="healthDiagBody" onclick="toggleHealthDiag()">展开说明</button>
-  <span class="sp"></span>
-  <button type="button" class="sclink" id="healthLoginBtn" onclick="srxGoLogin('qunar')">查看登录</button>
-  <a class="sclink" href="https://touch.qunar.com/h5/flight/" target="_blank" rel="noopener noreferrer" title="打开去哪儿 H5 机票页（登录后出明细）">打开 H5</a>
- </div>
  <div id="healthDiagBody" class="hdiag"><span class="muted">读取中…</span></div></div>
 <div class="ucard" id="healthcard" style="display:none"><div class="uhead"><span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="seclab inline"><span class="no">01</span><span class="zh">渠道健康</span><span class="en">HEALTH</span></span><span class="muted">近 24h · 每格一轮扫描 · 点击格子看该轮日志</span></span>
  <span class="muted"><span id="hroundcnt"></span><span id="hsrcNote"></span><button id="hauthact" class="hact" type="button" hidden data-p="" onclick="srxGoLogin(this.dataset.p)">需登录 · 去登录</button></span></div>
@@ -13427,8 +13617,20 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
      </span></label>
     <label class="srx-field srx-datefield" for="srxDate"><input type="date" id="srxDate" aria-label="出发日期"></label>
     <button type="button" class="go" id="srxGo" onclick="srxProbeRun()" title="实时探针" aria-label="实时探针"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg>实时探针</button>
+    <button type="button" class="srx-batchtoggle" id="srxBatchToggle" onclick="srxBatchToggle()" aria-expanded="false" title="展开/收起组合队列" aria-label="展开组合队列">组合 0/4</button>
     <button type="button" class="exit" id="srxExitProbe" onclick="srxExitProbe()" style="display:none">退出探针</button>
    </div>
+  <div class="srx-batchdock" id="srxBatchDock">
+   <div id="srxBatchWrap" style="display:none">
+    <div class="srx-batchbar">
+     <button type="button" class="srx-batchadd" aria-label="加入组合" title="用当前条件再加入一条组合" onclick="srxProbeAddLeg()">＋ 当前条件</button>
+     <button type="button" class="srx-batchgo" id="srxBatchGo" onclick="srxProbeRunBatch()" style="display:none">运行组合</button>
+     <button type="button" class="srx-batchclear" id="srxBatchClear" onclick="srxProbeClearBatch()" style="display:none">清空</button>
+     <span id="srxBatchHint"></span>
+    </div>
+    <div class="srx-batchlist" id="srxBatchList" role="list" aria-label="组合探针清单"></div>
+   </div>
+  </div>
   </div><!-- /srxProbeForm -->
   <div class="srx-crow" id="srxChannelRow">
     <span class="srx-crow-lab">渠道 <small>优先级 携程 › 去哪儿 › 飞猪 › 同程 › 途牛 › App（需勾选）</small></span>
@@ -13450,13 +13652,9 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
      <button type="button" onclick="srxPlatAll(false)" title="清空全部渠道">清空</button>
     </span>
    </div>
-  <div class="srx-batchrow" id="srxBatchRow">
-   <button type="button" class="srx-batchtoggle" id="srxBatchToggle" onclick="srxBatchToggle()" aria-expanded="false" title="展开/收起组合队列" aria-label="展开组合队列">组合 0/4</button>
-   <span class="srx-batchhint">最多 4 条 · 加入后运行整组</span>
-  </div>
-  <!-- r1049e：表单之外的全部工具收进一行——展开探针时最多「表单一行 +
-       工具/组合同一行」，不再出现第三行常驻按钮带。队列与工具共用这一行，
-       390 超出部分横向滑动（右缘渐隐），不换行、不再往下长。 -->
+  <!-- r1049e：表单之外的全部工具收进一行——展开探针时固定「输入/探针/
+       组合一行 + 渠道一行」，不再出现第三行常驻按钮带。组合队列浮在
+       表单下方，390 超出部分横向滑动（右缘渐隐），不换行、不往下长。 -->
   <div class="srx-toolsrow" id="srxToolsRow">
   <div class="srx-probehead srx-probe-toolbar">
    <button type="button" class="srx-taskbtn" id="srxTaskBtn" onclick="srxTaskOpen()" style="display:none">进度 <b id="srxTaskBtnN">0/0</b></button>
@@ -13473,24 +13671,12 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
       <button type="button" onclick="srxPlatAll(false)">清空</button></div>
     </div>
    </details>
-   <details class="srx-chlinks" id="srxChLinks" ontoggle="srxChLinksToggle(this)">
-    <summary class="srx-chbtn" aria-expanded="false" title="展开当前航线的各渠道页面入口"><span class="srx-chbtn-txt">渠道入口</span></summary>
-    <div id="srxChLinksBox"><span class="muted">展开后加载当前航线的渠道页面。</span></div>
-   </details>
+   <button type="button" class="srx-btn" id="srxChLinksBtn" aria-expanded="false"
+     aria-controls="srxChLinksDrawer" title="展开渠道入口目录（固定入口，不携带航线日期）"
+     onclick="srxChLinksOpen()">渠道入口</button>
    <em id="srxProbeMode" hidden>监控数据</em>
    <span class="srx-probe-mini" id="srxProbeMini" hidden></span>
    <button type="button" class="srx-probe-toggle" id="srxProbeToggle" onclick="srxToggleProbe()" aria-expanded="true" aria-controls="srxProbeForm"><span class="srx-chev" aria-hidden="true"></span><span class="srx-tgl-txt">收起探针</span></button>
-  </div>
-  <div class="srx-batchdock" id="srxBatchDock">
-   <div id="srxBatchWrap" style="display:none">
-    <div class="srx-batchbar">
-     <button type="button" class="srx-batchadd" aria-label="加入组合" title="用当前条件再加入一条组合" onclick="srxProbeAddLeg()">＋ 当前条件</button>
-     <button type="button" class="srx-batchgo" id="srxBatchGo" onclick="srxProbeRunBatch()" style="display:none">运行组合</button>
-     <button type="button" class="srx-batchclear" id="srxBatchClear" onclick="srxProbeClearBatch()" style="display:none">清空</button>
-     <span id="srxBatchHint"></span>
-    </div>
-    <div class="srx-batchlist" id="srxBatchList" role="list" aria-label="组合探针清单"></div>
-   </div>
   </div>
   </div><!-- /srx-toolsrow -->
   <div class="srx-probefoot">
@@ -13612,20 +13798,23 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
   <button type="button" data-mtab="mirror" role="tab" aria-selected="false">原页镜像</button>
  </div>
 
- <div class="srx-grid mtab-list" id="srxGrid">
+ <div class="srx-results" id="srxResults">
+  <div class="srx-listhead" id="srxListHead"><div><b id="srxListTitle">解析列表</b><span class="cnt" id="srxCount">—</span><span class="meta" id="srxMeta"></span></div>
+   <span class="srx-lhact"><span id="srxUpdated" class="srx-mono" style="font-size:11px;color:var(--tx2)">—</span>
+    <button type="button" class="srx-btn" id="srxOpenSel" onclick="srxOpenDetail()">解析详情</button>
+    <button type="button" class="srx-btn" onclick="srxOpenSnapshots()">快照</button>
+    <button type="button" class="srx-btn" onclick="srxExportEvidence()">证据 JSON</button>
+    <button type="button" class="srx-btn" id="srxMirrorFold" data-foldtarget="srxMirror" onclick="srxFold(this.dataset.foldtarget,this)" aria-expanded="true" aria-controls="srxMirror">收起镜像</button>
+   </span></div>
+  <div class="srx-grid mtab-list" id="srxGrid">
   <section class="srx-list" aria-label="解析列表">
-   <div class="srx-listhead"><div><b id="srxListTitle">解析列表</b><span class="cnt" id="srxCount">—</span><span class="meta" id="srxMeta"></span></div>
-    <span class="srx-lhact"><span id="srxUpdated" class="srx-mono" style="font-size:11px;color:var(--tx2)">—</span>
-     <button type="button" class="srx-btn" id="srxOpenSel" onclick="srxOpenDetail()">解析详情</button>
-     <button type="button" class="srx-btn" onclick="srxOpenSnapshots()">快照</button>
-     <button type="button" class="srx-btn" onclick="srxExportEvidence()">证据 JSON</button>
-    </span></div>
    <div class="srx-thead" aria-hidden="true"><span>源</span><span>航班 / 航司</span><span>时刻 · 时长</span><span>状态</span><span>价格</span><span></span></div>
    <div class="srx-rows" id="srxRows"><div class="srx-skel"></div><div class="srx-skel"></div><div class="srx-skel"></div></div>
    <button type="button" class="srx-more-rows" id="srxMoreRows" onclick="srxMoreRows()" style="display:none">加载更多</button>
   </section>
   <section class="srx-mirror" id="srxMirror" aria-label="渠道页面镜像"></section>
- </div>
+  </div><!-- /srxGrid -->
+ </div><!-- /srxResults -->
 
  <section class="srx-detail" id="srxDetail" role="dialog" aria-modal="true" aria-hidden="true" aria-label="解析详情与原始行证据"></section>
  <div class="srx-dmask" id="srxDmask" onclick="if(event.target===this)srxCloseDetail()"></div>
@@ -13634,6 +13823,13 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
  <div class="srx-galmask" id="srxModalmask" onclick="if(event.target===this)srxCloseModal()"></div>
  <div class="srx-modal" id="srxModal" role="dialog" aria-modal="true" aria-label="检索工具"></div>
 
+ <div class="srx-chmask" id="srxChLinksMask" hidden onclick="srxChLinksClose()"></div>
+ <aside class="srx-chdrawer" id="srxChLinksDrawer" role="dialog" aria-modal="true"
+  aria-label="渠道入口目录" hidden>
+  <div class="srx-chdrawer-h"><b>渠道入口</b><span>固定入口 · 不携带航线日期</span>
+   <button type="button" class="clx-x" onclick="srxChLinksClose()" aria-label="关闭渠道入口">×</button></div>
+  <div id="srxChLinksBox"><span class="muted">打开后加载各渠道页面入口。</span></div>
+ </aside>
  <div class="srx-footnote"><b>证据边界</b>
   <span>右侧「原页镜像」是按真实采集行结构重绘的渠道页面（非原站截图、非 iframe）；原站受 X-Frame-Options/登录态限制，请以「打开原页」新窗口为准。镜像值来自同一条 raw 行，缺键一律标未供；补位行标「N.Nh」且不参与“本轮”判断。日历价不是可出手机票，不参与达标与同班比价。
    <a href="#" onclick="switchView('mon');showMonTab('health');return false">渠道健康 →</a>
@@ -13667,7 +13863,7 @@ input[type="checkbox"],input[type="radio"]{font-size:13px!important}
  <div class="cfgmain" id="cfgmain">
  <div class="cfpanel" id="panel-login">
  <div class="ucard" id="sec-login"><div class="uhead"><span class="seclab inline"><span class="secicon"><svg class="ic" aria-hidden="true"><use href="#i-lock"></use></svg></span><span class="zh">渠道登录</span></span>
-  <span class="secnote">所有渠道都必须登录（入口页可匿名浏览，出价与明细需登录）<span class="lgnext">飞猪 PC/H5 分别登录（会话不共享）</span></span></div>
+  <span class="secnote">所有渠道都必须登录（入口页可匿名浏览，出价与明细需登录）<span class="lgnext">飞猪 PC/H5 需分别登录</span></span></div>
  <div id="loginRows"><span class="muted">加载中…</span></div>
  <div class="row lgfoot" style="margin-top:6px">
   <button class="btn2" onclick="loadLogin(this)"><svg class="ic" aria-hidden="true"><use href="#i-rotate"></use></svg> 刷新状态</button>
@@ -14173,7 +14369,7 @@ function srxSetFold(id,folded){
  const btns=new Set([...document.querySelectorAll('[data-foldtarget="'+id+'"]')]);
  document.querySelectorAll('[onclick*="'+id+'"]').forEach(b=>btns.add(b));
  btns.forEach(btn=>{
-  if(!btn.classList.contains('srx-foldbtn'))return;
+  if(!btn.classList.contains('srx-foldbtn')&&btn.id!=='srxMirrorFold')return;
   const base=String(btn.textContent||'').trim().replace(/^(收起|展开)/,'')||'详情';
   btn.textContent=(folded?'展开':'收起')+base;
   btn.setAttribute('aria-expanded',folded?'false':'true');
@@ -14183,23 +14379,6 @@ function srxSetFold(id,folded){
 function srxFold(id,btn){
  const el=$(id);if(!el)return;
  const folded=!el.classList.contains('srx-folded');
- if(id==='srxMirror'){
-  const grid=el.parentElement;
-  if(folded&&innerWidth>900&&grid){
-   const gr=grid.getBoundingClientRect(),er=el.getBoundingClientRect();
-   grid.style.setProperty('position','relative','important');
-   const _tabs=el.querySelector('.srx-mrail-tabs');
-   if(_tabs)el.style.setProperty('--mrail-tabs-w',_tabs.getBoundingClientRect().width+'px');
-   el.style.setProperty('position','absolute','important');
-   el.style.setProperty('left',(er.left-gr.left)+'px','important');
-   el.style.setProperty('top',(er.top-gr.top)+'px','important');
-   el.style.setProperty('width',er.width+'px','important');
-  }else{
-   el.style.removeProperty('position');el.style.removeProperty('left');
-   el.style.removeProperty('top');el.style.removeProperty('width');el.style.removeProperty('--mrail-tabs-w');
-   if(grid)grid.style.removeProperty('position');
-  }
- }
  srxSetFold(id,folded);
  try{
   const m=JSON.parse(localStorage.getItem('jpsrx_folds')||'{}');
@@ -17757,7 +17936,7 @@ function srxToggleScNote(btn){
   srxScNoteFit();
  }
  if(btn){btn.setAttribute('aria-expanded',on?'true':'false');
-  btn.textContent=on?'收起说明':'展开说明';}
+  btn.textContent=on?'收起停服说明':'停服说明';}
 }
 function channelAuthView(p){
  /* App 渠道的会话在 /api/app-login/*（内嵌真机画面），不在浏览器槽位
@@ -17887,9 +18066,12 @@ async function loadChannelState(force){
  CHANNEL_STATE.pending=pending;return pending;
 }
 function renderSourceAccess(){
- const el=$('scQState'),btn=$('scLoginBtn'),v=channelAuthView('qunar');
- if(el){el.textContent=v.label;el.className='scstate '+v.tone;el.title=v.title;}
- if(btn){btn.hidden=v.status==='demo';btn.textContent=v.needsLogin?'去登录':'查看登录';btn.title=v.title;}
+ /* 去哪儿网页版 PC/H5 均已停服：这条状态位固定指向 App 通路，
+    不再用浏览器渠道的登录态覆盖成「H5 可登录」。 */
+ const el=$('scQState'),btn=$('scLoginBtn');
+ if(el){el.textContent='app_qunar';el.className='scstate ok';
+  el.title='网页版已停服；数据由去哪儿 App 真机采集（独立渠道 app_qunar）';}
+ if(btn){btn.hidden=false;btn.textContent='App 登录';btn.title='登录去哪儿 App 以启用 app_qunar 采集';}
 }
 function renderHealthLoginAction(){
  const ha=$('hauthact');if(!ha)return;
@@ -18119,8 +18301,11 @@ function toggleHealthDiag(){
 function renderHealthChain(j){
  /* 来源接入条原在卡头同一行；r1130 卡头锁 34px 后它会被裁掉。把它移到
     卡头下方、诊断体上方，保留「PC 停服→H5→登录态」三节点证据。 */
- try{const _sc=$('srccap'),_hd=$('healthDiag');
-  if(_sc&&_hd&&_sc.parentElement!==_hd.parentNode)_hd.parentNode.insertBefore(_sc,_hd)}catch(e){}
+ try{const _sc=$('srccap'),_hd=$('healthDiag'),_head=$('healthDiagHead');
+  /* 只在诊断卡内部下移一行（卡头 → 路径条），绝不搬到卡外：
+     旧写法把整条来源条插到 #healthDiag 前面，路径与「App 登录」
+     悬在卡外右缘，用户截图圈出的就是这块浮岛。 */
+  if(_sc&&_hd&&_sc.parentElement!==_hd)_hd.insertBefore(_sc,_head?_head.nextSibling:_hd.firstChild)}catch(e){}
  const box=$('healthChain');if(!box)return;
  const d=(j&&j.diag)||[];
  const browser=/^(ctrip|qunar|fliggy|tongcheng|tuniu)$/;
@@ -18132,9 +18317,11 @@ function renderHealthChain(j){
  const set=(k,txt,cls)=>{const n=box.querySelector('[data-k="'+k+'"]');if(!n)return;
   const e=n.querySelector('em');if(e)e.textContent=txt;
   n.classList.toggle('bad',cls==='bad');n.classList.toggle('ok',cls==='ok');n.classList.toggle('warn',cls==='warn')};
- set('pc',pcbad?'需处理':(pcDead?'4/5 可用':'可用'),pcbad?'bad':(pcDead?'warn':'ok'));
- set('h5',h5bad?'需重登':'正常',h5bad?'bad':'ok');
- set('login',loginN?(loginN+' 家需登录'):'已保存',loginN?'bad':'ok');
+ /* 该条只讲去哪儿网页通路：PC/H5 均已停服（2026-11 用户确认），
+    不再显示 H5/登录态可用；App 通路状态在下方渠道健康行。 */
+ set('pc','已停服','bad');
+ set('h5','已停服','bad');
+ set('login','app_qunar','ok');
 }
 function renderHealthDiag(){
  const box=$('healthDiagBody');if(!box)return;
@@ -18417,7 +18604,7 @@ function renderHealth(j){
      节奏忽高忽低）。全文仍进 title，行内单行省略。 */
   /* 去哪儿停服不进独立横幅：只在去哪儿行写一次 12px 说明。 */
   const _qnote=(p==='qunar')
-   ?'<span class="hqnote" title="去哪儿 PC 网页 2026-10-10 起停服；H5 登录后可出全量航班明细">PC 网页已停服 · H5 登录后出明细</span>':'';
+   ?'<span class="hqnote" title="去哪儿网页版（PC 与 H5）机票查询均已停服（2026-11）；数据由独立渠道 app_qunar 承担">PC/H5 网页均已停服 · 数据走 App</span>':'';
   const _scopeHtml=(_scTxt.length>1||_pathHtml||_slotHtml||_qnote)
    ?`<span class="hscope" title="${he('近24h分端成功率：'+_scTxt.join(' · ')
        +'；分端样本各自独立，不互相冲抵'+(_slotNote?('；'+_slotNote):''))}">${he(_scTxt.join(' · '))}${_pathHtml}${_slotHtml}${_qnote}</span>`
@@ -18844,7 +19031,7 @@ async function previewPush(){const b=$('pvBtn');
  const _bl=b.textContent;b.textContent='构建中 · 约需半分钟…';   /* 慢路径时长预期：生产数据量 /api/preview ~27s，只挂 11px spinner 无文案，用户唯一合理反应就是认为坏了；文案随 busy 恢复（成功/失败同） */
  const _sq=++_PV_SEQ;_PV_PENDING=true;
  try{const r=await fetch('/api/preview',{method:'POST',
-   headers:{'Content-Type':'application/json'},body:JSON.stringify({user:U})});
+   headers:{'Content-Type':'application/json'},body:JSON.stringify({user:(typeof U==='number'?U:(parseInt(U,10)||0))})});
   if(_sq!==_PV_SEQ)return;   /* Esc 取消或已换代：构建完了也不开（busy 摘除走 finally） */
   const j=await r.json();
   if(!j.ok){toast(heFriendly(j.err)||'预览失败','err');return;}
@@ -20230,15 +20417,6 @@ function cityPanelPick(n){
  const el=_cpEl;
  el.value=n;cityPanelClose();
  el.dispatchEvent(new Event('change',{bubbles:true}));
- /* Linux/慢机：change 可能触发整表单重建，旧 input 被换掉、新 input 先按
-    旧模型取值。补一次 0ms 回填（按同一 onchange 表达式找新控件），
-    保证「模型回填 / 输入框 / 卡头」三面同拍。 */
- const _oc=el.getAttribute&&el.getAttribute('onchange');
- if(_oc)setTimeout(()=>{try{
-   const cur=[...document.querySelectorAll(
-     '.rline input[onchange]')].find(x=>x.getAttribute('onchange')===_oc);
-   if(cur&&cur!==el)cur.value=n;
- }catch(e){}},0);
 }
 document.addEventListener('mousedown',e=>{
  const p=$('citypanel');
@@ -20619,7 +20797,7 @@ function loginWaitTick(){
  document.querySelectorAll('[data-loginwait]').forEach(b=>{
   const w=LOGIN_WAIT[b.dataset.loginwait];if(!w)return;
   const s=Math.round((Date.now()-w.t0)/1000);
-  b.textContent='正在打开窗口… '+s+'s'+(s>=6?'（等采集让出该渠道）':'');
+  b.textContent='正在打开窗口… '+s+'s'+(s>=6?' · 等采集':'');b.title=s>=6?'等采集让出该渠道':'正在打开登录窗口';
   b.setAttribute('aria-busy','true');b.disabled=true;});
 }
 let LGSIG='';   /* 登录态内容签名：轮询期状态无变化不重绘（重建按钮
@@ -20650,8 +20828,8 @@ function lgActionHTML(s){
  const _w=LOGIN_WAIT[key];
  if(_w){
   const _ws=Math.round((Date.now()-_w.t0)/1000);
-  return '<button class="btn2" disabled aria-busy="true" data-loginwait="'+he(key)+'">正在打开窗口… '
-   +_ws+'s'+(_ws>=6?'（等采集让出该渠道）':'')+'</button>';
+  return '<button class="btn2" disabled aria-busy="true" data-loginwait="'+he(key)+'" title="'+(_ws>=6?'等采集让出该渠道':'正在打开登录窗口')+'">正在打开窗口… '
+   +_ws+'s'+(_ws>=6?' · 等采集':'')+'</button>';
  }
  /* 账本说会话已失效（needs_login）时，卡片必须以「需重登」示人——
     快照文件还在 ≠ 会话有效（现场：去哪儿 App 快照已失效，卡却写「待验证」）。 */
@@ -20696,10 +20874,26 @@ function lgShortStatus(s){
   available:'明细可用',login_required:'需登录',challenge:'需验证',
   save_error:'保存失败',active:'登录中',saving:'保存中'}[st]||st;
 }
-function lgFliggyModalHTML(){
+/* 双端登录弹窗（r1063 T177：由"飞猪专用"泛化为任意渠道）。
+   每家两端各自独立会话，所以给两条 lane，各自一个动作按钮。 */
+const LG_DUAL={
+ ctrip:{title:'携程双端登录',pc:'ctrip',h5:'ctrip_h5',
+        pcLabel:'PC 携程账号',h5Label:'H5 携程账号',
+        note:'两端都必须登录：PC 与 m 站出价/明细都要登录后才有。同一携程账号，但两域会话不共享，需要分别登录。'},
+ fliggy:{title:'飞猪双端登录',pc:'fliggy',h5:'fliggy_h5',
+        pcLabel:'PC 飞猪账号',h5Label:'H5 淘宝账号',
+        note:'两端都必须登录：PC 与淘宝 H5 出价/明细都要登录后才有。同一淘宝账号，但两域会话不共享，需要分别登录。'},
+ tongcheng:{title:'同程双端登录',pc:'tongcheng',h5:'tongcheng_h5',
+        pcLabel:'PC 同程账号',h5Label:'H5 同程账号',
+        note:'两端都必须登录：PC 与 m 站出价/明细都要登录后才有。同一同程账号，两域会话不共享，需要分别登录。'},
+ tuniu:{title:'途牛双端登录',pc:'tuniu',h5:'tuniu_h5',
+        pcLabel:'PC 途牛账号',h5Label:'H5 途牛账号',
+        note:'两端都必须登录：PC 与 m 站出价/明细都要登录后才有。同一途牛账号，两域会话不共享，需要分别登录。'}};
+function lgDualModalHTML(plat){
+ const D=LG_DUAL[plat]||LG_DUAL.fliggy;
  const j=CHANNEL_STATE&&CHANNEL_STATE.payload;
  const slots=(j&&j.slots)||{};
- const pc=slots.fliggy,h5=slots.fliggy_h5;
+ const pc=slots[D.pc],h5=slots[D.h5];
  function lane(s,title){
   if(!s)return `<div class="lglane"><div class="lglane-h">${he(title)}</div><div class="lglane-sub">未保存会话</div></div>`;
   const st=s.status||(s.saved?'saved':'missing');
@@ -20708,10 +20902,10 @@ function lgFliggyModalHTML(){
    +`<div class="lglane-h"><span>${he(title)}</span><span class="lgdot${lgDotCls(s)}" title="${LG_DOT_TIP}"></span></div>`
    +`<div class="lglane-sub" title="${he(s.detail||'')}">${he(sub)}</div>${lgActionHTML(s)}</div>`;
  }
- return '<div class="lgmodal-h"><b>飞猪双端登录</b><span>PC 与 H5 会话独立</span>'
+ return '<div class="lgmodal-h"><b>'+he(D.title)+'</b><span>PC 与 H5 会话独立</span>'
   +'<button type="button" class="x" onclick="lgCloseModal()" aria-label="关闭">✕</button></div>'
-  +'<div class="lgmodal-b"><div class="lgmodal-note">两端都必须登录：PC 与淘宝 H5 出价/明细都要登录后才有。同一淘宝账号，但两域会话不共享，需要分别登录。</div>'
-  +'<div class="lglanes">'+lane(pc,'PC 飞猪账号')+lane(h5,'H5 淘宝账号')+'</div></div>';
+  +'<div class="lgmodal-b"><div class="lgmodal-note">'+he(D.note)+'</div>'
+  +'<div class="lglanes">'+lane(pc,D.pcLabel)+lane(h5,D.h5Label)+'</div></div>';
 }
 let LG_LASTFOCUS=null;
 /* ── App 渠道登录画面（r604）──────────────────────────────────
@@ -20942,6 +21136,23 @@ function appLoginRestore(focusText){
  }
 }
 function appLoginClose(){
+ /* r1063 T186：**关窗即保存**。以前只有点「我已登录完成」才导出快照，
+    用户在真机画面里登好了直接关面板 → 什么都没存（磁盘上快照还是几天前的）。
+    与浏览器端「关窗即保存」对齐：关之前发一次 finish，失败只记日志。 */
+ try{
+  const _p=APP_LOGIN&&APP_LOGIN.plat;
+  const _st=_p?((APP_LOGIN_STATE||{})[_p]||{}):null;
+  const _busy=_st&&(_st.active||_st.saved===false&&_st.status==='pending');
+  if(_p&&(_st&&(_st.active||_st.status==='pending'))){
+   fetch('/api/app-login/finish',{method:'POST',
+     headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({plat:_p})})
+    .then(r=>r.json()).then(j=>{
+      if(j&&j.ok&&typeof toast==='function')
+        toast('已保存 '+_p+' 的登录会话', 'ok');
+    }).catch(()=>{});
+  }
+ }catch(e){}
  appLoginStop();
  const m=$('lgModal'),k=$('lgMask');
  if(m){m.classList.remove('open','appfocus');delete m.dataset.kind}
@@ -21192,18 +21403,21 @@ function lgRefreshFliggy(){const m=$('lgModal');if(!m||!m.classList.contains('op
     弹窗归属用 data-kind 标记，谁开谁写。 */
  if((m.dataset.kind||'fliggy')!=='fliggy')return;
  m.innerHTML=lgFliggyModalHTML()}
-function lgOpenFliggy(){
+function lgFliggyModalHTML(){return lgDualModalHTML('fliggy')}
+function lgOpenDual(plat){
+ const P0=LG_DUAL[plat]?plat:'fliggy';
  const m=$('lgModal'),k=$('lgMask');if(!m||!k)return;
- LG_LASTFOCUS=document.activeElement;m.innerHTML=lgFliggyModalHTML();
+ LG_LASTFOCUS=document.activeElement;m.innerHTML=lgDualModalHTML(P0);
  m.classList.add('open');k.classList.add('open');
- m.dataset.kind='fliggy';
+ m.dataset.kind='dual';m.dataset.plat=P0;
  /* 与 appLoginOpen 同律：共用容器的可读名称由开窗方写，别留在静态
     HTML 的那一份（App 画面开过之后再开飞猪会读到 App 的名字）。 */
- m.setAttribute('aria-label','飞猪双端登录');
+ m.setAttribute('aria-label',(LG_DUAL[P0]||{}).title||'双端登录');
  
  if(typeof srxLockBody==='function')srxLockBody();
  const x=_LASTKBD?m.querySelector('.x'):null;if(x)try{x.focus()}catch(e){}
 }
+function lgOpenFliggy(){lgOpenDual('fliggy')}
 function lgCloseModal(){
  const m=$('lgModal'),k=$('lgMask');
  if(m&&m.dataset.kind==='app'){appLoginClose();return}
@@ -21228,11 +21442,13 @@ function renderLoginCards(force){
  const sig=JSON.stringify([j&&j.plats,j&&j.slots,CHANNEL_STATE&&CHANNEL_STATE.error,j&&j.demo,
                            APP_LOGIN_STATE]);
  if(!force&&sig===LGSIG)return;LGSIG=sig;
- const order=['ctrip','qunar','fliggy','fliggy_h5','tongcheng','tuniu'];
+ const order=['ctrip','ctrip_h5','qunar','fliggy','fliggy_h5',
+  'tongcheng','tongcheng_h5','tuniu','tuniu_h5'];
  /* 全渠道统一「必须登录」：入口页虽可匿名浏览，但出价/明细必须登录。
     此前 fliggy 写「可匿名查价」、同程/途牛写「建议登录」，用户不知该不该登。 */
- const reqs={ctrip:'必须登录',qunar:'必须登录',fliggy:'必须登录',
-  fliggy_h5:'必须登录',tongcheng:'必须登录',tuniu:'必须登录'};
+ const reqs={ctrip:'必须登录',ctrip_h5:'必须登录',qunar:'必须登录',
+  fliggy:'必须登录',fliggy_h5:'必须登录',tongcheng:'必须登录',
+  tongcheng_h5:'必须登录',tuniu:'必须登录',tuniu_h5:'必须登录'};
  let slots;
  if(j&&j.slots){
   slots=order.map(k=>j.slots[k]).filter(Boolean);
@@ -21263,12 +21479,17 @@ function renderLoginCards(force){
              active:!!a.active};})
   :[];
  const groups=[
-  {key:'ctrip',name:'携程',tag:'全端',slots:[by.ctrip]},
-  {key:'qunar',name:'去哪儿',tag:'H5',slots:[by.qunar]},
+  /* r1063 T177：**所有浏览器渠道统一双端**（跟飞猪一样，不再只有飞猪）。
+     后端早有 `*_h5` 槽位；此前界面只画一个，用户没法登 H5 端。 */
+  {key:'ctrip',name:'携程',tag:'PC / H5',
+   slots:[by.ctrip,by.ctrip_h5]},
+  {key:'qunar',name:'去哪儿',tag:'网页停服',slots:[by.qunar]},
   {key:'fliggy',name:'飞猪',tag:'PC / H5',
    slots:[by.fliggy,by.fliggy_h5]},
-  {key:'tongcheng',name:'同程',tag:'全端',slots:[by.tongcheng]},
-  {key:'tuniu',name:'途牛',tag:'全端',slots:[by.tuniu]},
+  {key:'tongcheng',name:'同程',tag:'PC / H5',
+   slots:[by.tongcheng,by.tongcheng_h5]},
+  {key:'tuniu',name:'途牛',tag:'PC / H5',
+   slots:[by.tuniu,by.tuniu_h5]},
  ].concat(appSlots.map(sl=>({key:sl.plat,name:sl.name,tag:'真机',
                              slots:[sl]})))
   .map(g=>Object.assign({},g,{slots:(g.slots||[]).filter(Boolean)}))
@@ -21344,8 +21565,6 @@ function renderLoginCards(force){
                           ||st==='error'||st==='expired');
   });
   const dual=g.slots.length>1;
-  const pc=dual?g.slots.find(s=>s.slot==='fliggy'):null;
-  const h5=dual?g.slots.find(s=>s.slot==='fliggy_h5'):null;
   // 双端（飞猪）与单渠道走同一套三列：名字 | 说明+槽位 | 操作。
   // 按钮一律作为 .lgcard 直接子级，第三列才不会塌成 0。
   // 双端（飞猪）也必须走同一份 slotBody：此处曾自带一套 DOM，只渲染
@@ -21353,16 +21572,25 @@ function renderLoginCards(force){
   // 「必须登录」、飞猪两端却只有「未登录」，读者会以为飞猪不需要登录（r608）。
   // slotBody 已含「表面名 + 圆点 + 账号/要求/状态」，两端各调一次即可。
   const inner=dual
-   ?`<div class="lgslots one">${[pc,h5].filter(Boolean).map(s=>slotBody(s,1)).join('')}</div>`
-    +`<div class="lgact"><button class="btn2" onclick="lgOpenFliggy()">${ic('lock')} 双端登录</button></div>`
+   ?`<div class="lgslots one">${g.slots.map(s=>slotBody(s,1)).join('')}</div>`
+    +`<div class="lgact"><button class="btn2" onclick="lgOpenDual('${he(p)}')">${ic('lock')} 双端登录</button></div>`
    :`<div class="lgslots one">${g.slots.map(slotBody).join('')}</div>`
     +`<div class="lgact">${g.slots.map(lgActionHTML).join('')}</div>`;
   return `<div class="lgcard${anySaved?' saved':''}${anyActive?' active':''}${anyNeed?' stale':''}" data-channel="${p}">`
    +`<div class="lgname">${srxPlatIcon(p)}<span class="lgnm">${he(g.name)}</span><span class="lgtag">${he(g.tag)}</span>`
-   +`<span class="lgreq">必须登录</span></div>`
+   +(p==='qunar'?'':`<span class="lgreq">必须登录</span>`)+`</div>`
    +(g.sub?`<div class="lgsection">${he(g.sub)}</div>`:'')
    +inner+'</div>';
  }).join('')+'</div>';
+ /* r1063 T185：双端弹窗是静态快照——卡片重绘后必须同步刷新它，
+    否则登录窗开了、会话也存了，弹窗里那条 lane 还写着「弹窗登录」，
+    用户就找不到「我已登录完成」（现场：同程 H5 已登进去但弹窗没变）。 */
+ try{
+  const _m=$('lgModal');
+  if(_m&&_m.classList.contains('open')&&_m.dataset.kind==='dual'){
+   _m.innerHTML=lgDualModalHTML(_m.dataset.plat||'fliggy');
+  }
+ }catch(e){}
 }
 let CHLINK_CFG_LOADED=false;
 var CHLINK_CFG_DATA=null;
@@ -21503,8 +21731,19 @@ function _rtScopeNote(isIntl){
   return (c.name||c.plat)+((c.dim_scopes||{}).round_trip||'');
  }).join('、');
 }
-function dimCell(v,plat,nm,note){
- const m=v==='y'?['y','✓','支持']:(v==='n'?['n','×','不支持']:['u','?','未验证']);
+function dimCell(v,plat,nm,note,kind){
+ /* 四态明确区分「实现」与「未实现」，不再用一个 ? 混住两类：
+    y=已验证出数；blk=已实现但当前风控/设备/IP/账号受限；
+    n=采集端未实现；stop=渠道已停服；na=不适用。 */
+ let m;
+ if(kind==='stop'||(v==='n'&&plat==='qunar'))m=['stop','停','已停服'];
+ /* 已实现就画 ✓；风控/设备/IP/账号受限用琥珀底色区分，不再用「!」
+    让读者以为代码没做。 */
+ else if(kind==='blk')m=['blk','✓','已实现 · 当前风控/设备/IP/账号受限'];
+ else if(v==='y')m=['y','✓','已验证出数'];
+ else if(v==='n')m=['n','×','采集端未实现'];
+ else if(kind==='na')m=['na','—','不适用'];
+ else m=['n','×','采集端未实现'];
  const who=nm||plat||'';
  const tip=who+(who?' · ':'')+m[2]+(note?'｜'+note:'');
  return '<span class="cell '+m[0]+'" title="'+he(tip)
@@ -21542,18 +21781,19 @@ function renderDimMatrix(){
         const has=Object.prototype.hasOwnProperty.call(c.surface_cells||{},s);
         if(!has)return '<td class="na" title="App 渠道无端面之分">—</td>';
         const v=(c.surface_cells||{})[s]||'';
+        const kind=c.stopped?'stop':((v===''&&(c.surface_blocked||{})[s])?'blk':'');
         /* 说明必须进 **内层 .cell 的 title**：挂在 <td> 会被 cell 自己的
            title 遮住（悬停只读最深层），实测线上只能看到「同程 · 支持」，
            那段「getflightlist / 需切桌面身份」永远读不到——写了等于没写。 */
-        return '<td'+(v===''?' class="na"':'')+surfNote(c,s)+'>'
-          +dimCell(v,c.plat,c.name,(c.surface_notes||{})[s])+'</td>';
+        return '<td'+surfNote(c,s)+'>'
+          +dimCell(v,c.plat,c.name,(c.surface_notes||{})[s],kind)+'</td>';
       }).join('')+'</tr>').join('')
   : '';
  const rows=dims.map(d=>'<tr><th>'+he(DIM_CN[d]||d)
   +(DIM_TIP[d]?'<em>'+he(DIM_TIP[d])+'</em>':'')+'</th>'
   +chans.map(c=>{const v=(c.cells||{})[d]||'';
-     return '<td'+(v===''?' class="na"':'')+'>'
-       +dimCell(v,c.plat,c.name,(c.dim_notes||{})[d]||'')+'</td>';}).join('')+'</tr>').join('');
+     return '<td>'
+       +dimCell(v,c.plat,c.name,(c.dim_notes||{})[d]||'',c.stopped?'stop':'')+'</td>';}).join('')+'</tr>').join('');
  const gaps=chans.filter(c=>(c.gaps||[]).length);
  const gapHtml = gaps.length
   ? '<div class="dimgap">App 渠道相对浏览器端仍缺：'+gaps.map(c=>
@@ -21563,8 +21803,9 @@ function renderDimMatrix(){
  box.innerHTML='<div class="dimscroll">左右滑动查看全部渠道 →</div>'
   +'<div class="dimwrap"><table class="dimtbl"><thead>'+head+'</thead><tbody>'
   +surfHead+rows+'</tbody></table></div>'
-  +'<div class="dimlegend"><span>'+dimCell('y')+' 已验证出数</span><span>'+dimCell('n')
-  +' 渠道无此能力/停服</span><span>'+dimCell('')+' 产品支持但采集端未实现或当前风控未出数</span></div>'+gapHtml;
+  +'<div class="dimlegend"><span>'+dimCell('y')+' 已验证出数</span><span>'+dimCell('','','','','blk')
+  +' 已实现 · 当前风控/设备/IP/账号受限</span><span>'+dimCell('n')+' 采集端未实现</span><span>'+dimCell('n','qunar')
+  +' 渠道停服</span><span>'+dimCell('','','','','na')+' 不适用</span></div>'+gapHtml;
  dimScrollHint();
 }
 /* 提示只在真的溢出时出现：760 档表格恰好放得下，固定按媒体查询显示
@@ -21607,25 +21848,19 @@ function srxChLinksHTML(j,probe){
   html+=chBandHTML(p,cells,specials,chMeta(j,p),probe,'');
  });
  html+='</div>';
- const ctx=j.mode==='route'?('当前航线 '+he((j.from_name||j.from)+'→'+(j.to_name||j.to))+ ' · '+he(j.date)):'固定入口 · 不携带航线日期';
+ const ctx=j.mode==='route'?('当前航线 '+he((j.from_name||j.from)+'→'+(j.to_name||j.to))+' · '+he(j.date)):'固定入口 · 不携带航线日期';
  const tail=probe?'新标签打开；登录/保存会话请到「渠道登录」弹窗。':'新标签打开；登录/保存会话用上方「弹窗登录」，页面登录标在入口上。';
  html+='<div class="chlfoot" title="'+ctx+' · '+tail+'">'+ctx+'</div>';
  return html;
 }
-function srxChLinksClose(){const d=document.getElementById('srxChLinks');if(d&&d.open){d.open=false;srxChLinksToggle(d)}}
-/* r1108d：探针「渠道入口」不再复用配置页的大卡矩阵。
-   一条渠道一行：名字 + 登录态 + 四个等高文字钮（PC/H5 × 国内/国际），
-   所有按钮同一 30px 高、同一圆角与底色，窄档自动两列换行。 */
+/* r1108d：探针「渠道入口」固定目录：一条渠道一行，名字 + 登录态 +
+   四个等高文字钮（PC/H5 × 国内/国际），不携带当前航线/日期。 */
 function srxChLinksCompactHTML(j){
  const by={};(j.cells||[]).forEach(c=>{by[c.plat+'|'+c.surface+'|'+c.scope]=c});
  const sp={};(j.specials||[]).forEach(c=>{sp[c.plat+'|'+c.surface]=c});
  const plats=(typeof SRX_PLAT_KEYS!=='undefined'&&SRX_PLAT_KEYS.length)
    ?SRX_PLAT_KEYS:Object.keys(SRX_PLATS||{});
- const ctx=j.mode==='route'
-   ?((j.from_name||j.from)+'→'+(j.to_name||j.to)+' · '+(j.date||''))
-   :'固定入口 · 不携带航线日期';
- let h='<div class="clx"><div class="clx-head"><b>渠道入口</b><span class="clx-ctx" title="'+he(ctx)+'">'+he(ctx)+'</span>'
-   +'<button type="button" class="clx-x" onclick="srxChLinksClose()" aria-label="关闭渠道入口">×</button></div>';
+ let h='<div class="clx">';
  plats.forEach(p=>{
   const av=(typeof channelAuthView==='function')?channelAuthView(p):null;
   const cells=CHLINK_VARIANTS.map(v=>by[p+'|'+v[0]+'|'+v[1]]).filter(Boolean);
@@ -21652,19 +21887,8 @@ function srxChLinksCompactHTML(j){
 async function srxChLinksLoad(which){
  const isProbe=which==='probe';
  const box=$(isProbe?'srxChLinksBox':'cfgChannelLinksBox');if(!box)return false;
- let qs='';
- if(isProbe){
-  const fi=$('srxFrom'),ti=$('srxTo'),di=$('srxDate');
-  let fv=fi?srxCityCode(fi):'',tv=ti?srxCityCode(ti):'',dv=di?di.value:'';
-  let fn=(fi&&fi.dataset&&fi.dataset.name)||fv,tn=(ti&&ti.dataset&&ti.dataset.name)||tv;
-  if((!fv||!tv||!dv)&&SRX.batchLegs&&SRX.batchLegs.length){
-   const b=SRX.batchLegs[0];fv=b.from;tv=b.to;dv=b.date;fn=b.from_name||b.from;tn=b.to_name||b.to;
-  }
-  if(fv&&tv&&dv){
-   qs='?from='+encodeURIComponent(fv)+'&to='+encodeURIComponent(tv)+'&date='+encodeURIComponent(dv)
-     +'&from_name='+encodeURIComponent(fn)+'&to_name='+encodeURIComponent(tn);
-  }
- }
+ /* 固定目录：不读取航线/日期，不随检索变化。 */
+ const qs='';
  box.innerHTML='<span class="muted">加载中…</span>';
  try{
   const r=await fetch('/api/channel-links'+qs,{cache:'no-store'});
@@ -21687,46 +21911,49 @@ async function srxChLinksLoad(which){
   return false;
  }
 }
-function srxChLinksToggle(el){
- /* 渠道入口是单颗多态按钮：收起态「渠道入口」→ 打开态「收起入口」，
-    同词同长（4 字），宽度不跳、不另起一行常驻说明。 */
- if(el){
-  try{const gs=getSelection();if(gs)gs.removeAllRanges()}catch(e){}
-  const sm=el.querySelector('summary'),tx=el.querySelector('summary .srx-chbtn-txt');
-  if(tx)tx.textContent=el.open?'收起入口':'渠道入口';
-  if(sm){sm.setAttribute('aria-expanded',el.open?'true':'false');
-   sm.title=el.open?'收起当前航线的各渠道页面入口':'展开当前航线的各渠道页面入口'}
- }
- if(el&&el.open){
-  /* 同一时刻只允许一个操作浮层：打开渠道入口先收起组合/渠道选择。 */
-  try{if(typeof SRX!=='undefined'&&SRX.batchOpen){SRX.batchOpen=false;srxBatchRender()}}catch(e){}
-  try{if(typeof srxPlatPopClose==='function')srxPlatPopClose()}catch(e){}
-  srxChLinksLoad('probe');
- }
- if(el&&el.open&&!window.__srxChDoc){
-  window.__srxChDoc=1;
-  document.addEventListener('click',function(e){
-   const d=document.getElementById('srxChLinks');
-   if(d&&d.open&&!e.target.closest('#srxChLinksBox')&&!e.target.closest('#srxChLinks'))srxChLinksClose();
-  });
-  document.addEventListener('keydown',function(e){
-   if(e.key==='Escape')srxChLinksClose();
-  });
- }
- /* r1103：浮层改为 fixed 定位，左缘钉在触发器下方并按视口钳位；
-    旧实现右缘贴整行/工具组右缘，触发器在左时看起来「离十万八千里」。 */
- if(el&&el.open){const place=()=>{const b=el.querySelector('#srxChLinksBox');
-   if(!b)return;const t=el.querySelector('summary');const r=t?t.getBoundingClientRect():el.getBoundingClientRect();
-   const w=Math.min(560,innerWidth-16);
-   const host=el.closest('#srxMorePop');
-   const hb=host&&getComputedStyle(host).display!=='contents'?host.getBoundingClientRect():null;
-   b.style.setProperty('--cl-w',w+'px');
-   b.style.maxHeight='min(70vh,560px)';b.style.overflow='auto';
-   b.style.setProperty('--cl-left',Math.max(8,Math.min(r.right-w,innerWidth-w-8))+'px');
-   b.style.setProperty('--cl-top',Math.max(8,(hb?Math.min(hb.top,r.bottom+6):r.bottom+6))+'px');};
-  requestAnimationFrame(place);setTimeout(place,60);}
- else if(el){const b=el.querySelector('#srxChLinksBox');if(b){b.style.removeProperty('--cl-w');b.style.removeProperty('--cl-left');b.style.removeProperty('--cl-top');}}
+let _srxChScroll=0;
+function _srxChFocusables(){
+ const d=document.getElementById('srxChLinksDrawer');if(!d)return [];
+ return [...d.querySelectorAll('a[href],button:not([disabled]),input,select,textarea,[tabindex]:not([tabindex="-1"])')]
+   .filter(e=>e.getBoundingClientRect().width>2);
 }
+function srxChLinksOpen(){
+ const d=document.getElementById('srxChLinksDrawer'),m=document.getElementById('srxChLinksMask');
+ const b=document.getElementById('srxChLinksBtn');if(!d||!m)return;
+ try{if(typeof SRX!=='undefined'&&SRX.batchOpen){SRX.batchOpen=false;srxBatchRender()}}catch(e){}
+ try{if(typeof srxPlatPopClose==='function')srxPlatPopClose()}catch(e){}
+ _srxChScroll=window.scrollY||0;
+ d.hidden=false;m.hidden=false;
+ document.querySelectorAll('#searchview > *').forEach(el=>{
+  if(el!==d&&el!==m)el.setAttribute('inert','');
+ });
+ document.body.style.overflow='hidden';
+ if(b){b.setAttribute('aria-expanded','true');b.textContent='收起入口';b.title='收起渠道入口目录'}
+ srxChLinksLoad('probe');
+ try{const f=_srxChFocusables()[0];if(f)f.focus()}catch(e){}
+ if(!window.__srxChDoc){window.__srxChDoc=1;
+  document.addEventListener('keydown',function(e){
+   const dr=document.getElementById('srxChLinksDrawer');
+   if(!dr||dr.hidden)return;
+   if(e.key==='Escape'){e.preventDefault();srxChLinksClose();return}
+   if(e.key!=='Tab')return;
+   const fs=_srxChFocusables();if(!fs.length)return;
+   const first=fs[0],last=fs[fs.length-1];
+   if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}
+   else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}
+  });
+ }
+}
+function srxChLinksClose(){
+ const d=document.getElementById('srxChLinksDrawer'),m=document.getElementById('srxChLinksMask');
+ const b=document.getElementById('srxChLinksBtn');
+ if(d)d.hidden=true;if(m)m.hidden=true;
+ document.querySelectorAll('#searchview > *').forEach(el=>{if(el.hasAttribute&&el.hasAttribute('inert'))el.removeAttribute('inert')});
+ document.body.style.overflow='';
+ try{window.scrollTo(0,_srxChScroll)}catch(e){}
+ if(b){b.setAttribute('aria-expanded','false');b.textContent='渠道入口';b.title='展开渠道入口目录（固定入口，不携带航线日期）';try{b.focus({preventScroll:true})}catch(e){b.focus()}}
+}
+function srxChLinksToggle(el){const d=document.getElementById('srxChLinksDrawer');if(d&&!d.hidden)srxChLinksClose();else srxChLinksOpen()}
 /* r1108：探针渠道浮层进了「更多」之后不再有整条工具行可贴右缘，
    改为 fixed 钉在渠道按钮下方并按视口钳位（390 曾右溢 288px）。 */
 function srxPlatPopEl(d){
@@ -21768,6 +21995,9 @@ function srxPlatPopToggle(d){
   /* 先量触发钮（还在「更多」里且可测量），再收菜单；否则 rect 归零，
      浮层会错误地贴到视口左上角。 */
   const r=s.getBoundingClientRect();
+  /* 探针收起时触发钮 rect 归零，若 details 仍保持 open（折叠前已打开），
+     浮层会按默认 8/80 贴到视口左上角，形成无主浮层。收起态直接关掉。 */
+  if(r.width<2||r.height<2){srxPlatPopClose();return}
   const ha=d.closest('#searchview .srx-hero-act');
   if(ha&&ha.classList.contains('open')){
    ha.classList.remove('open');
@@ -21950,7 +22180,7 @@ async function loginStart(p,b,slot){
      节流到 1 分钟，自增计数会停在很离谱的数字上（实测停在 6s），
      用户切回来看到的进度就不对。 */
    const s=Math.round((Date.now()-_t0)/1000);
-   b.textContent='正在打开窗口… '+s+'s'+(s>=6?'（等采集让出该渠道）':'');
+   b.textContent='正在打开窗口… '+s+'s'+(s>=6?' · 等采集':'');b.title=s>=6?'等采集让出该渠道':'正在打开登录窗口';
  },500);}
  const _restore=()=>{if(_tick)clearInterval(_tick);
   delete LOGIN_WAIT[key];
@@ -24145,6 +24375,15 @@ async function loadPacing(force){
    /* 退役标签同样走中文名（r659）：`dead.forEach` 原先连着写了两遍，
      整段「H5 退役」在行里出现两次。 */
    dead.forEach(pp=>pws.push(pathCN(pp)+' 退役'));
+   /* 最后一次原因（r1063 T76）：这是 `fetch_paths.note` 的原文，
+      例如「飞猪返回「访问被拒绝」安全页；需人工处理」或
+      「首页点机票后未到 Flutter 表单」。只进 title——可见文本已经贴边，
+      加字会把 1440/390 两档的行撑成两行（r420/r640 几何门禁盯着这块）。 */
+   var _whyTxt=Object.keys(pw).map(pp=>{
+    const w=pw[pp]||{};
+    const why=String(w.why||'').trim();
+    return why?(pathCN(pp)+'：'+why):'';
+   }).filter(Boolean).join('；');
    const pathTxt=_maskSynth?'':[scoped('dom','国内'),scoped('intl','国际')]
     .concat(pws).filter(Boolean).join(' · ');
    /* 速览右半：查询级成功率 + 明细/日历拆分。路径成功不等于查询成功
@@ -24324,7 +24563,8 @@ async function loadPacing(force){
      /* r1063 T55：给读数行补 title——`.e2` 在窄列里会折行/被裁，全文仍要可达。
         （只加属性，零布局变化；不改「两行」这个既有行设计。） */
      +((pathTxt||_qbit||_pen2||_waitTxt)?('<span class="e2" title="'
-        +esc([pathTxt,_qbit,_pen2,_waitTxt,_srTxt].filter(Boolean).join(' · '))
+        +esc([pathTxt,_qbit,_pen2,_waitTxt,_srTxt,_whyTxt]
+             .filter(Boolean).join(' · '))
         +'">'+'<i class="e2k">近24h</i>'
         +(pathTxt?esc(pathTxt):'')+(pathTxt&&_qbit?' · ':'')+_qbit
         /* 降频读数另起一小段，带自己的前缀，别和成功率数字黏成一句 */
@@ -24418,6 +24658,9 @@ async function loadPacing(force){
    const CN={app_geo:'定位',captcha_det:'识别后端',ua_kernel:'UA 内核',
              stealth_init:'伪装注入',captcha_shot:'识别截图',
              captcha_reload:'识别刷新',app_upgrade:'App 升级',
+             service_closed:'通路停服',
+             device_env:'设备环境',app_captcha:'人机验证',
+             app_risk_blocked:'App 风控',
              app_layout:'疑似改版',emulator:'模拟器',
              stealth:'伪装刷新',slider:'滑块'};
    /* 每类降级的**下一步**（r1063 T61）：只报次数等于让人自己猜。
@@ -24430,7 +24673,11 @@ async function loadPacing(force){
      captcha_reload:'刷新失败：挑战态可能卡住，建议重置会话后重试',
      app_upgrade:'App 升级后认屏/解析规则往往要更新：先看该渠道近 24h 是否掉量，必要时跑一次该渠道自检',
      app_layout:'连续 0 行 + 认不出页面：按改版处理——对这家跑自检、抓一张现场截图核对页面结构',
-     emulator:'模拟器没就绪：python -m core.setup_check --fix 会自己拉起并等它'};
+     emulator:'模拟器没就绪：python -m core.setup_check --fix 会自己拉起并等它',
+     service_closed:'这家网页版已停服（报文里明写「请前往 App」）：把这家的浏览器通路退役、改走 App 孪生；退役用策略面板的 retired_path',
+     device_env:'设备脸有矛盾（机型/平台/GPU 对不上）：python -m core.android.consistency 看明细；改完身份要 python scripts/identity_boot_module.py 再重启实例',
+     app_captcha:'人机验证没过：先清这家 App 数据（/api/channel/reset-app）再登录账号；轨迹类挑战（阿里 NC）不硬刚',
+     app_risk_blocked:'App 被风控/要登录：到「渠道登录」登录一次；若登录后仍被拦，改用同名的浏览器通路（实测能出数），App 侧不必硬刚'} ;
    const keys=Object.keys(d);
    if(!keys.length)return '';
    const bits=[],tips=[];
@@ -24444,7 +24691,39 @@ async function loadPacing(force){
    return '<div class="snote" title="'+esc(tips.join('\n')||'能力降级读数')+'">降级：'
     +esc(bits.join(' · '))+'</div>';})();
 
-  const _timeline=(()=>{
+  /* 自动诊断上屏（r1063 T194）：后端在同一份 pacing 载荷里给了"最该做的两条"
+    （`advice_top`），这里只负责画。空则不占位——零占位是既有规矩。 */
+ const _adviceLine=(()=>{
+  const a=(j&&j.advice_top)||[];
+  if(!a.length)return '';
+  const txt=a.map(function(x){return String((x&&x.text)||'')})
+   .filter(Boolean).join(' · ');
+  if(!txt)return '';
+  return '<div class="snote" title="'+esc(txt)+'">建议：'+esc(txt)+'</div>';})();
+ /* 通路弱环上屏（r1063 T196）：数据就在同一份 pacing 载荷里
+    (`channels[plat].paths[path] = {rate, attempts, why}`)，不新增接口。
+    只挑"损失量最大"的前三条——成功率高的、样本太少的都不上榜。 */
+ const _pathLine=(()=>{
+  /* r1063 T197：挑选逻辑在 Python（core.advise.weak_paths），前端只画。
+     原因：能力边界（unsupported/停服）不能算弱环——现场 `tuniu·PC 0%/45`
+     全是 unsupported，前端自己判就误报成"该修的通路"。 */
+  const rows=(j&&j.weak_paths)||[];
+  if(!rows.length)return '';
+  const top=rows.map(function(r){
+   const label=r.plat+'·'+r.path+' '+Math.round(Number(r.rate)*100)+'%/'+r.attempts;
+   /* 行内链接：继承 .snote 的字号与颜色，只加点击行为（零新样式）。 */
+   return '<a href="#" title="点一下：跳到该渠道·该链路的策略行去调参"'
+    +' style="color:inherit;text-decoration:underline dotted;cursor:pointer"'
+    +' onclick="return srxWeakJump(\''+esc(r.plat)+'\',\''+esc(r.path)+'\')">'
+    +esc(label)+'</a>'
+    +'<a href="#" title="对该渠道跑一次真实自检（出数才算可用）"'
+    +' style="color:inherit;text-decoration:none;cursor:pointer;margin-left:2px"'
+    +' onclick="return srxWeakProbe(\''+esc(r.plat)+'\',this)">⟳</a>';});
+  const rest=0;
+  return '<div class="snote" title="近24h 口径：登录/修复后的效果要等窗口滚过去才体现；全量见 python -m core.channel_matrix">'
+   +'通路弱环（近24h）：'+top.join(' · ')  /* 口径必须写出来：登录/修复后要等窗口滚过去 */  /* 每个标签内部已各自 esc；外层再 esc 会把 <a> 转成文本 */
+   +(rest>0?esc('（另 '+rest+' 条，见 channel_matrix）'):'')+'</div>';})();
+ const _timeline=(()=>{
    const t=j.timing||{};
    const n=Number(t.n||0);
    if(!n)return '';
@@ -24557,6 +24836,7 @@ async function loadPacing(force){
   const _ivScope={dom:'国内',intl:'国际',pc:'PC',h5:'H5',
    ctrip:'携程',qunar:'去哪儿',tongcheng:'同程',tuniu:'途牛',
    fliggy:'飞猪 PC',fliggy_h5:'飞猪 H5',
+   ctrip_h5:'携程 H5',tongcheng_h5:'同程 H5',tuniu_h5:'途牛 H5',
    app_zhixing:'智行 App',app_qunar:'去哪儿 App',app_fliggy:'飞猪 App',app_ctrip:'携程 App',app_tongcheng:'同程 App',app:'App 登录（旧记录）'};
   const _ivRate=(()=>{
    const _all=Object.keys(_iv).filter(k=>_iv[k]&&(_iv[k].n>0||_iv[k].unjudged>0));
@@ -24611,7 +24891,7 @@ async function loadPacing(force){
    +'</div>'
    +'<div class="pace-side">'
    +'<div class="pace-sec"><b>本轮节流</b><span class="pace-sub">计划 ＝ 快档 ＋ 慢档 ＋ TTL 内跳过</span></div>'
-   +_stats+_rail+_kv+_fostats+_degradeLine+_timeline
+   +_stats+_rail+_kv+_fostats+_degradeLine+_adviceLine+_pathLine+_timeline
    +'<div class="pace-sec"><b>干预</b><span class="pace-sub" title="预热养会话 · 自检当场取数，都只读不改配置">预热养会话 · 自检当场取数，都只读不改配置</span>'
     /* 全文进 title（r511）：分域拆分后这段在 420 档会被省略号截掉，
        截掉的正是「国内/国际」——那恰好是选哪一域自检的依据。
@@ -24630,6 +24910,76 @@ async function loadPacing(force){
 }
 /* 焦点陪跑：只认「哪个渠道的哪个动作」，不认 DOM 节点（节点每拍换新）。
    刷新按钮与下拉各自有固定键；行内动作键含渠道名，换序也不丢。 */
+ /* 弱环行内自检（r1063 T199）：点链接 = 对该渠道跑一次真查询自检。
+    刻意不复用"全部自检"（那是批量的，会给用户 1–5 分钟等待）。
+    结果走既有 toast，不新增任何控件样式。
+    **必须是顶层函数**：行内 onclick 只能解析全局名（实测放渲染函数内部
+    会报 "srxWeakProbe is not defined"）。 */
+ async function srxWeakProbe(plat,el){
+  if(!plat)return false;
+  const old=el?el.textContent:'';
+  try{
+   if(el){el.style.opacity='.5';el.textContent=plat+' 自检中…';}
+   const r=await fetch('/api/channel/probe',{method:'POST',
+     headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({platform:plat})});
+   const j=await r.json();
+   const msg=plat+' 自检：'+(j.ok?((j.rows||0)+' 条'):('失败 '+(j.err||'')));
+   if(typeof toast==='function')toast(msg,(j.ok?'ok':'warn'));
+  }catch(e){
+   if(typeof toast==='function')toast(plat+' 自检失败：'+e,'warn');
+  }finally{
+   if(el){el.style.opacity='';el.textContent=old;}
+   if(typeof loadPacing==='function')loadPacing();
+  }
+  return false;
+ }
+ /* 弱环 → 直达策略行（r1063 T200）：切到「全局参数」面板，把每条策略的
+    渠道设为该家、作用域设为该链路，并滚到第一行。
+    只做"设值 + 滚过去"——选项由既有的 stratScopeFill() 负责铺。 */
+ function srxWeakJump(plat,path){
+  try{
+   if(typeof switchView==='function')switchView('cfg');
+   if(typeof showCfgPanel==='function')showCfgPanel('globals');
+  }catch(e){}
+  setTimeout(function(){
+   try{
+    const rows=[...document.querySelectorAll('#cfgview .srow[data-strategy]')];
+    if(!rows.length){
+     if(typeof toast==='function')toast('没找到策略行，请手动打开「配置 → 全局参数」','warn');
+     return;
+    }
+    let first=null;
+    rows.forEach(function(row){
+     const sel=row.querySelector('select.ssel');
+     if(!sel)return;
+     let has=false;
+     [...sel.options].forEach(function(o){if(o.value===plat)has=true;});
+     if(!has)return;
+     sel.value=plat;
+     if(typeof stratScopeFill==='function')stratScopeFill(sel);
+     const sc=row.querySelector('select.ssel2');
+     if(sc){
+      let ok=false;
+      [...sc.options].forEach(function(o){if(o.value===path)ok=true;});
+      if(ok)sc.value=path;
+     }
+     if(!first)first=row;
+    });
+    if(first){
+     first.scrollIntoView({block:'center'});
+     first.classList.add('srow-hit');
+     setTimeout(function(){first&&first.classList.remove('srow-hit')},1600);
+     if(typeof toast==='function')
+       toast('已定位到「'+plat+'·'+path+'」的策略行：改完点保存即生效','ok');
+    }else if(typeof toast==='function'){
+     toast('策略面板里没有 '+plat+' 的行','warn');
+    }
+   }catch(e){}
+  },280);
+  return false;
+ }
+
 function _paceRestoreFocus(){
  try{
   const box=$('paceBox');if(!box)return;
@@ -25386,13 +25736,16 @@ const STRAT_ZH={
  arithmetic:'算数码',text:'文字码',ocr_scale:'放大倍数',auto_verify:'验证开窗'};
 function stratZh(p){
  const pid=String(p.pid||''),leaf=String(p.cfg||pid).split('.').pop();
+ /* .enabled 的 cfg 叶是策略 id（ttl_tier），不是参数名——旧逻辑取叶
+    得到未知词，整页 30+ 个开关都回落成「取值」。开关统一叫「启用」。 */
+ if(/\.enabled$/.test(pid))return '启用';
  const L=({healthy:'健康',rehab:'恢复',watch:'观察',degraded:'降级',
            blocked:'停用',slow:'慢速',pause:'暂停',human:'人工'})[leaf]||'';
  if(pid.indexOf('pace_factor.')===0)return L+'档倍率';
  if(pid.indexOf('residue_window.')===0)return L+'余温秒';
  if(pid.indexOf('risk_bands.')===0)return leaf==='login_backoff_s'?'登录退避阶梯':(L+'分界');
  if(pid.indexOf('block_window.')===0)return leaf==='human'?'人工停手秒':'轮换停手秒';
- return STRAT_ZH[leaf]||'取值';}
+ return STRAT_ZH[leaf]||leaf.replace(/_/g,' ');}
 /* 控件 id 由**参数声明的 cfg 点路径**派生（`crawler.policy.pace.watch` →
    `glbPaceWatch`）：同一份目录在两处生成同一个 id，不需要人工同步一张表。
    顶层段（crawler/schedule/android）与 `policy`/`levels` 这种纯分组段不进
@@ -25765,7 +26118,18 @@ function stratScopeFill(platSel){
  const opts=['<option value="">渠道整家</option>'];
  Object.keys(H.dims||{}).forEach(function(d){
   opts.push('<option value="'+esc(d)+'">维度 · '+esc(d)+'</option>');});
+ /* 链路选项 = **跑过的** ∪ **全量目录**（r1063 T158）。
+    以前只列 `health[plat].paths`（账本里出现过的），于是「还没跑过」的
+    新通路永远选不到——本轮的 `PC·国际` / `PC·周历` 就卡在这。目录来自
+    `/api/strategy.paths`（唯一口径 `core.channels.PATH_CN`）。 */
+ const _seen={};
  Object.keys(H.paths||{}).forEach(function(p){
+  _seen[p]=1;
+  opts.push('<option value="'+esc(p)+'">链路 · '+esc(p)+'</option>');});
+ ((STRATPAY&&STRATPAY.paths)||[]).forEach(function(it){
+  const p=String((it&&it.id)||'');
+  if(!p||_seen[p])return;
+  _seen[p]=1;
   opts.push('<option value="'+esc(p)+'">链路 · '+esc(p)+'</option>');});
  sc.innerHTML=opts.join('');sc.value='';}
 
@@ -25880,11 +26244,9 @@ async function loadStrategyPanel(force){
   h+=grp.map(stratRowHTML).join('');});
  host.innerHTML=h;
  host.dataset.painted='1';
- /* 桌面默认展开（参数一眼可见）、窄档默认收起（390/320 先给列表）：与
-    分区折叠同一套宽度判据，不另立一套。 */
- const wide=(typeof innerWidth==='number')&&innerWidth>900;
- host.querySelectorAll('.srow').forEach(function(row){
-  if(wide)stratFold(row.querySelector('.shd'));});
+ /* 参数行默认全部收起：标题行已带「当前值 + 来源 + 触发方式」，
+    展开才显示输入框。旧版桌面默认全展开，28 条策略把设置页拉成
+    一条数千像素的长墙（用户实报「乱糟糟」）。按需展开仍是原按钮。 */
  /* 停手作用域下拉首次填充（r1063 T18）：选项来自该渠道的成功率快照，
     画完就填一次，用户不用先切一次渠道才看得到链路可选。 */
  host.querySelectorAll('.srow select.ssel:not(.ssel2)').forEach(function(sel){
@@ -29902,7 +30264,30 @@ function srxRenderFacets(force){
     还在面板里多占 54px。 */
  const box=$('srxFmore');if(box)box.innerHTML=head+'<div class="srf-grid">'+common+time+history
   +'<div class="srf-stack">'+price+evidence+'</div></div>'+foot;
- srxUpdateHit();
+ srxUpdateHit();requestAnimationFrame(function(){requestAnimationFrame(srfFoldChips)});setTimeout(srfFoldChips,120);
+}
+function srfFoldChips(){
+ const box=$('srxFmore');if(!box)return;
+ box.querySelectorAll('.srf-card').forEach(function(card){
+  let any=false;
+  card.querySelectorAll('.srf-chips').forEach(function(ch){
+   ch.classList.remove('srf-expanded');
+   if(ch.scrollHeight>70){any=true;ch.classList.add('srf-foldable')}
+   else ch.classList.remove('srf-foldable');
+  });
+  card.classList.toggle('srf-hasmore',any);
+  let btn=card.querySelector('.srf-morechips');
+  if(!btn){
+   btn=document.createElement('button');
+   btn.type='button';btn.className='srf-morechips';
+   btn.onclick=function(){const on=card.classList.toggle('srf-expanded');
+    btn.textContent=on?'收起':'更多';btn.setAttribute('aria-expanded',on?'true':'false')};
+   const hd=card.querySelector('header');if(hd)hd.appendChild(btn);
+  }
+  btn.hidden=!any&&!card.classList.contains('srf-expanded');
+  btn.textContent=card.classList.contains('srf-expanded')?'收起':'更多';
+  btn.setAttribute('aria-expanded',card.classList.contains('srf-expanded')?'true':'false');
+ });
 }
 function srxRenderMobileSummary(){
  const el=$('srxMobileSummary');if(!el)return;
@@ -30205,7 +30590,7 @@ function srxMirrorHTML(){
       「穷举默认铺开」。当前选中渠道即使 0 行也保留，空态仍可解释。 */
  const railChans=chans.filter(c=>cnt[c]>0||c===ch);
  const _rch=railChans.length?railChans:[ch];
- const rail=_rch.map(c=>'<button type="button" class="srx-mtab'+(c===ch?' on':'')+(cnt[c]?'':' off')+'" data-mch="'+c+'" style="--pc:'+SRX_PLATS[c][1]+'" aria-pressed="'+(c===ch)+'"><span class="p" aria-hidden="true">'+srxPlatIcon(c)+'</span>'+SRX_PLATS[c][0]+'<span class="n">'+cnt[c]+'</span></button>').join('');
+ const rail=_rch.map(c=>'<button type="button" class="srx-mtab'+(c===ch?' on':'')+(cnt[c]?'':' off')+'" data-mch="'+c+'" style="--pc:'+SRX_PLATS[c][1]+'" aria-pressed="'+(c===ch)+'" aria-label="'+he(SRX_PLATS[c][0]+'，'+cnt[c]+' 行')+'" title="'+he(SRX_PLATS[c][0]+' · '+cnt[c]+' 行')+'"><span class="p" aria-hidden="true">'+srxPlatIcon(c)+'</span><span class="nm">'+he(SRX_PLATS[c][0])+'</span><span class="n">'+cnt[c]+'</span></button>').join('');
  const body=SRX.mview==='detail'?srxMirrorDetailHTML(f,ch):srxMirrorListHTML(ch,rows);
  /* r979：视图工具组（列表/详情/四源/打开原页）原挂在渠道轨末尾，强制
     `flex:1 1 100%` 独占一整行，10 家渠道换行后它孤零零贴在最右，左边
@@ -30213,7 +30598,7 @@ function srxMirrorHTML(){
     挪进浏览器 chrome 行：host 左侧、视图钮右侧，与正文标题同一行；
     渠道轨只留 10 颗渠道胶囊，工具组不再吃掉 34px 常驻高度。 */
  const mtools='<span class="srx-mtools"><button type="button" class="'+(SRX.mview==='list'?'on':'')+'" data-mview="list" aria-pressed="'+(SRX.mview==='list')+'">列表</button><button type="button" class="'+(SRX.mview==='detail'?'on':'')+'" data-mview="detail" aria-pressed="'+(SRX.mview==='detail')+'">详情</button><button type="button" data-mview="four" aria-pressed="'+(SRX.mview==='four')+'" title="四源同屏">四源</button>'+(lk&&lk.url?'<button type="button" data-openlink="'+he(lk.url)+'">打开原页</button>':'')+'</span>';
- return '<div class="srx-mrail"><span class="srx-mrail-tabs">'+rail+'</span><span class="srx-mrail-end"><button type="button" class="srx-foldbtn" data-foldtarget="srxMirror" onclick="srxFold(this.dataset.foldtarget,this)" aria-expanded="true">收起镜像</button></span></div>'
+ return '<div class="srx-mrail"><span class="srx-mrail-tabs">'+rail+'</span></div>'
   +'<div class="srx-mchrome"><span class="dots"><i></i><i></i><i></i></span><span class="host">'+he(host)+'</span><span class="tag">原页镜像 · 结构重绘</span>'+mtools+'</div>'
   +'<div class="srx-mbody"><div class="srx-msearch"><b>'+he(srxPairName(...(SRX.pair||'|').split('|')))+'</b><span>'+he(SRX.date||'全部日期')+'</span><span>'+he(nm)+'</span><span class="go" style="--pc:'+pc+'">镜像</span></div>'
   +'<div class="srx-mfilt"><span>'+he(nm)+'</span><span>'+rows.length+' 行</span><span>'+he(srxChAge(ch,rows))+'</span><span>与左侧同源 /api/state · 本渠道全量</span></div>'
@@ -30836,7 +31221,14 @@ function srxBatchRender(){
  const _list=$('srxBatchList');if(_list)_list.style.setProperty('order','1','important');
  const _bar=document.querySelector('#srxBatchDock .srx-batchbar');if(_bar)_bar.style.setProperty('order','2','important');
  const dock=$('srxBatchDock');if(dock){dock.style.setProperty('display',SRX.batchOpen?'block':'none','important');
-  dock.style.setProperty('width','min(560px, calc(100vw - 32px))','important');
+  /* 队列浮层贴「组合」触发器正下方；右侧放不下时整体左移，但绝不
+    越过表单左缘，也不改变表单/渠道行高度。 */
+  const _form=$('srxProbeForm'),_tg=$('srxBatchToggle');
+  const _dw=Math.min(560,Math.max(260,window.innerWidth-32));
+  dock.style.setProperty('width',_dw+'px','important');
+  if(_form&&_tg){const _fr=_form.getBoundingClientRect(),_tr=_tg.getBoundingClientRect();
+   const _max=Math.max(0,_fr.width-_dw);
+   dock.style.setProperty('left',Math.min(Math.max(0,_tr.left-_fr.left),_max)+'px','important');}
   dock.style.setProperty('top','calc(100% + 6px)','important');
   dock.style.setProperty('right','auto','important');}
  const hint=$('srxBatchHint');if(hint)hint.textContent='';
@@ -31326,13 +31718,13 @@ function srxExitProbe(){
 }
 
 /* ---------- actions ---------- */
-function srxOpenChLinks(){const p=$('srxProbe');if(p&&!p.classList.contains('open'))srxToggleProbe();const d=$('srxChLinks');if(d){d.open=true;try{d.scrollIntoView({block:'nearest'})}catch(e){}}}
+function srxOpenChLinks(){srxChLinksOpen()}
 function srxSetHeroProbe(on){
  const pt=$('srxProbeTool');if(!pt)return;
  const t=pt.querySelector('.srx-ptxt');if(t)t.textContent=on?'收起探针':'主动探针';
  pt.classList.toggle('on',!!on);pt.setAttribute('aria-expanded',on?'true':'false');
 }
-function srxToggleProbe(){const p=$('srxProbe');if(!p)return;const on=!p.classList.contains('open');p.classList.toggle('open',on);const b=$('srxProbeToggle');if(b){b.setAttribute('aria-expanded',on);const t=b.querySelector('.srx-tgl-txt');if(t)t.textContent=on?'收起探针':'展开探针';else b.textContent=on?'收起探针':'展开探针'}srxSetHeroProbe(on);try{localStorage.setItem('jpsrx_probeopen2',on?'1':'0')}catch(e){}srxRenderProbeMini();srxPickHint()}
+function srxToggleProbe(){const p=$('srxProbe');if(!p)return;const on=!p.classList.contains('open');p.classList.toggle('open',on);if(!on){try{if(typeof srxPlatPopClose==='function')srxPlatPopClose()}catch(e){}}const b=$('srxProbeToggle');if(b){b.setAttribute('aria-expanded',on);const t=b.querySelector('.srx-tgl-txt');if(t)t.textContent=on?'收起探针':'展开探针';else b.textContent=on?'收起探针':'展开探针'}srxSetHeroProbe(on);try{localStorage.setItem('jpsrx_probeopen2',on?'1':'0')}catch(e){}srxRenderProbeMini();srxPickHint()}
 function srxRenderProbeMini(j){
  const el=$('srxProbeMini'),p=$('srxProbe');if(!el)return;
  if(!p||p.classList.contains('open')){el.hidden=true;el.textContent='';return}
@@ -31979,10 +32371,8 @@ function srxCompactProbeTools(){
      否则跑起来后无法再打开进度面板。 */
   const task=document.getElementById('srxTaskBtn');
   if(task)tools.appendChild(task);
-  /* 2026-11-07：组合入口移到实时探针下方的独立行；面板 absolute 锚在
-     触发器正下方，展开/收起不推表单、不推结果列表。 */
-  const dock=document.getElementById('srxBatchDock'),batchRow=document.getElementById('srxBatchRow');
-  if(dock&&batchRow&&dock.parentElement!==batchRow)batchRow.appendChild(dock);
+  /* 组合入口与实时探针同排，队列面板 absolute 锚在表单正下方；
+     展开/收起不推表单、不推渠道行、不推结果列表。 */
   /* 次要工具收进「更多工具」浮层：首行只留用户、探针开关、更多工具。 */
   try{
    const act=document.querySelector('#searchview .srx-hero-act');
@@ -32000,7 +32390,7 @@ function srxCompactProbeTools(){
    if(gal&&act&&mb0&&gal.parentElement!==act){gal.classList.remove('srx-inmore');act.insertBefore(gal,mb0)}
    /* 渠道入口是用户点名的一级动作：单颗多态按钮（渠道入口↔收起入口），
       留在页头动作区；收进「更多工具」会让「打开」多一层且状态不可见。 */
-   const chl=document.getElementById('srxChLinks');
+   const chl=document.getElementById('srxChLinksBtn');
    if(chl&&act&&mb0&&chl.parentElement!==act){chl.classList.remove('srx-inmore');act.insertBefore(chl,mb0)}
    /* 渠道 rail 用官方图标：静态 chip 里的色点替换为官方图标（无图时保留色点）。 */
    document.querySelectorAll('#srxPlatPick .srx-pchip').forEach(l=>{
@@ -32178,6 +32568,10 @@ def _no_graphical_env() -> bool:
     网页里点「渠道登录」得到 no_gui；同一台 Mac 上命令行
     `--login` 却能弹窗。无头判定只对 Linux 成立。
     """
+    # `TM_FORCE_GUI=1`：用户明知有桌面却被判无头时的出口（GitHub #14 场景）
+    if str(os.environ.get("TM_FORCE_GUI") or "").strip() in ("1", "true",
+                                                            "yes", "on"):
+        return False
     return (sys.platform.startswith("linux")
             and not os.environ.get("DISPLAY")
             and not os.environ.get("WAYLAND_DISPLAY"))
@@ -32787,6 +33181,15 @@ def _strategy_payload():
                       "unhealed": int(st.get("unhealed") or 0),
                       "unjudged": int(st.get("unjudged") or 0)},
         })
+    # r1063 T158：把**通路清单**暴露给界面（含本轮新增的 `PC·国际` / `PC·周历`），
+    # 让策略面板能把「链路级」覆盖按行渲染，而不是让用户手打作用域键。
+    # 只增字段：老前端忽略未知键，不影响既有渲染。
+    try:
+        from core.channels import PATH_CN as _PCN
+        out["paths"] = [{"id": _k, "cn": _v}
+                        for _k, _v in sorted(_PCN.items())]
+    except Exception:
+        out["paths"] = []
     # 停手表：按 **profile** 读（与采集器决策时同一个目录，口径由
     # `_policy_engine` 定；写成 plat 会读一个没人写的目录）。
     # 单个渠道读不出 ≠ 整段坏：那个渠道不出现在表里，其余照常。
@@ -33330,6 +33733,13 @@ def _app_login_registry():
         with _State.lock:
             if _State.app_login is None:
                 _State.app_login = AppLoginRegistry()
+    # r1063 T167：把会话表登记给 login_api，采集侧才能"看到有人在登录"并让位
+    # （否则定时轮次会把 App 切走，用户的登录会话当场作废）。
+    try:
+        from core.android import login_api as _la
+        _la.set_registry(_State.app_login)
+    except Exception:
+        pass
     return _State.app_login
 
 
@@ -33750,7 +34160,10 @@ def _login_state_view() -> dict:
     slots = {}
     for key in LOGIN_SLOT_ORDER:
         meta = LOGIN_SLOTS[key]
-        if key == "fliggy_h5":
+        # r1063 T179：**凡独立端槽位**（槽位名≠渠道名，如 ctrip_h5）都按
+        # 自己的 profile 算状态。此前只有 fliggy_h5 走这条路，其余 `_h5`
+        # 抄渠道级状态 → 没登录也显示「会话有效·明细可用」（假可用）。
+        if key != meta.get("plat"):
             snap = _os.path.join(root, meta["profile"], "session-state.json")
             saved = _os.path.isfile(snap)
             try:
@@ -33786,7 +34199,7 @@ def _login_state_view() -> dict:
             # 账本上搜索路径的拦截比「入口页可达」更具体：入口页能开、
             # 搜索却被滑块挡住时，核验会写 page_ok——不能拿它盖掉事实。
             _blk = _path_block_from_rows(
-                path_rows.get("fliggy") or [], entry="h5",
+                path_rows.get(meta["plat"]) or [], entry="h5",
                 saved_at=max(saved_at, float(pending_at or 0)))
             if active or saving:
                 _blk = None
@@ -33874,6 +34287,35 @@ def _challenge_target(key: str) -> dict:
             "desktop": _p.startswith("PC"), "mobile": _p.startswith("H5")}
 
 
+def _spawn_cli_login(plat: str) -> tuple:
+    """另起一个进程跑 `--login <plat>`（= 终端里那条命令）。
+
+    为什么需要（GitHub #14）：macOS 打包版里进程内的有头窗口打不开，而
+    同一台机器跑 `--login` 却能弹。与其让用户自己开终端，不如**按钮直接走同一条路**。
+    返回 (ok, detail)。
+    """
+    import subprocess
+    import sys as _sys
+    plat = str(plat or "").strip()
+    if not plat:
+        return False, "缺少渠道"
+    try:
+        if getattr(_sys, "frozen", False):
+            cmd = [_sys.executable, "--login", plat]
+        else:
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "main.py")
+            cmd = [_sys.executable, script, "--login", plat]
+        kw = {}
+        if os.name == "nt":
+            kw["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        subprocess.Popen(cmd, cwd=os.getcwd(), close_fds=True, **kw) \
+            if os.name != "nt" else subprocess.Popen(cmd, cwd=os.getcwd(), **kw)
+        return True, "已在独立进程打开登录窗口（与命令行 --login 同一条路）"
+    except Exception as e:
+        return False, "另起登录进程也失败：%s" % str(e)[:120]
+
+
 def _start_login(plat: str, slot: str = "", url: str = "",
                  desktop: bool = False, mobile: bool = False) -> dict:
     """网页登录：按登录槽位弹出有头浏览器窗口并保存独立会话。
@@ -33919,7 +34361,16 @@ def _start_login(plat: str, slot: str = "", url: str = "",
                    "ready": ready, "saving": False,
                    "saved": False, "error": ""}
         _State.login_errors.pop(key, None)
+        # r1063 T183：登录窗要拿和采集同一把渠道锁。开会话就请采集收尾，
+        # 否则用户要干等一轮（并且超时后线程仍会开窗 → 窗口一直闪）。
+        session["cancel"] = threading.Event()
         _State.login_sessions[key] = session
+    try:
+        from core import interrupt as _itr
+        _itr.request(by="browser-login")
+        _State.logger.info("[登录] %s 已请求叫停本轮为登录让路", key)
+    except Exception:
+        pass
     cfg = _effective_crawler_config()
     logger = _State.logger
 
@@ -33943,6 +34394,11 @@ def _start_login(plat: str, slot: str = "", url: str = "",
             session["queued"] = True
             with channel_slot(_lock_key):
                 session["queued"] = False
+                # r1063 T183：等锁期间调用方已判超时并取消 → 不许再开窗
+                # （否则就是"僵尸窗口"：面板说失败，窗口却在几十秒后弹出来）。
+                if session.get("cancel") is not None \
+                        and session["cancel"].is_set():
+                    raise RuntimeError("登录请求已取消（等待渠道锁超时）")
                 if url:
                     # 打开被拦页本身（列表/搜索页），人工过关后关窗即保存。
                     confirmed = crawler.open_challenge_window(
@@ -34019,6 +34475,20 @@ def _start_login(plat: str, slot: str = "", url: str = "",
                                   key, meta.get("surface_label") or "全端"))))
             except Exception:
                 _State.logger.warning("[登录] %s 干预入账失败", key)
+            # r1063 T128：登录成功 → 立刻清登录墙记忆（否则下一轮仍短路）
+            try:
+                _cleared = _clear_login_wall_memo(
+                    str(meta.get("plat") or plat), key)
+                if _cleared:
+                    _State.logger.info("[登录] %s 已清登录墙记忆：%s", key,
+                                       "、".join(_cleared))
+            except Exception:
+                pass
+            # r1063 T134：清完墙立刻在后台复探一次，用户不用等下一轮
+            try:
+                _kick_login_probe(str(meta.get("plat") or plat))
+            except Exception:
+                pass
             if key == "fliggy_h5":
                 threading.Thread(target=_verify_login_slot,
                                  args=(key,), daemon=True,
@@ -34033,9 +34503,23 @@ def _start_login(plat: str, slot: str = "", url: str = "",
             if _was_open:
                 session["error"] = "会话保存未完成，请重试登录；详见本机日志"
             else:
-                session["error"] = "登录窗口没能打开：%s" % (
-                    (str(e)[:160] or type(e).__name__),)
-            _State.login_errors[key] = session["error"]
+                # r1063 T71：进程内开不出来时，可退回"命令行那条路"（macOS 打包版实测有效）。
+                # **默认关闭**（r620 契约）：兜底成功会清空 error，把"真实原因"变成
+                # 一句笼统话。macOS 用户需要时在 config 写 `web.login_cli_fallback: true`。
+                _fb_on = bool((((_State.cfg or {}).get("web") or {})
+                               .get("login_cli_fallback") or False))
+                _pok, _pdetail = ((False, "未开启 login_cli_fallback")
+                                  if not _fb_on else
+                                  _spawn_cli_login(str(meta.get("plat") or plat)))
+                if _pok:
+                    session["error"] = ""
+                    session["cli_fallback"] = _pdetail
+                    _State.login_errors.pop(key, None)
+                    _State.logger.info("[登录] %s %s", key, _pdetail)
+                else:
+                    session["error"] = "登录窗口没能打开：%s / %s" % (
+                        (str(e)[:120] or type(e).__name__), _pdetail)
+            _State.login_errors[key] = session.get("error") or ""
             _State.login_pending.pop(key, None)
             _State.logger.warning("[登录] %s 登录窗口异常: %s", key, e)
         finally:
@@ -34056,10 +34540,28 @@ def _start_login(plat: str, slot: str = "", url: str = "",
             break            # 线程已结束（失败或关窗），不再等
         _ok_ready = ready.wait(0.5)
     if not _ok_ready:
+        # r1063 T183：**排队中 ≠ 打不开**。采集正占着渠道锁时，窗口会在
+        # 采集收尾后自动弹出（我们已经请求叫停本轮），不能报失败让用户狂点
+        # （每点一次就多一只线程排队 → 窗口轮流开合，就是"一直闪"）。
+        if bool(session.get("queued")):
+            _State.logger.info(
+                "[登录] %s 正在排队等采集让出渠道锁（已请求叫停本轮），"
+                "窗口稍后会自动弹出", key)
+            return {"ok": True, "plat": meta["plat"], "slot": key,
+                    "queued": True, "pending_open": True,
+                    "next": "正在等采集让出该渠道（已请求叫停本轮）；"
+                            "窗口会自动弹出，请稍候，不要重复点击"}
         with _State.lock:
             _err = str(session.get("error") or "")
             if _State.login_sessions.get(key) is session:
                 _State.login_sessions.pop(key, None)
+        # 非排队仍没打开：**取消后台线程**，否则它稍后拿到锁还会开一个
+        # 僵尸窗口（面板已报失败，用户却看到窗口弹出来）。
+        try:
+            session["cancel"].set()
+            session["evt"].set()
+        except Exception:
+            pass
         _msg = (_err or "登录窗口未能在 45 秒内打开（可能是缺少浏览器内核、"
                 "显示服务不可用，或该渠道 profile 正被采集占用）；"
                 "详见本机日志 logs/monitor.log")
@@ -34076,11 +34578,55 @@ def _start_login(plat: str, slot: str = "", url: str = "",
             "queued": bool(session.get("queued"))}
 
 
+def _profile_session_file(plat: str, slot: str = "") -> str:
+    """该槽位浏览器 profile 里的 storage state 路径（优先 slot 再 plat）。"""
+    names = [str(slot or ""), str(plat or "").split(":")[0]]
+    base = str(plat or "").split(":")[0]
+    if base.endswith("_h5"):
+        base = base[:-3]
+    names.append(base)
+    for n in names:
+        if not n:
+            continue
+        p = os.path.join(str((_State.cfg or {}).get("crawler", {}).get(
+            "user_data_dir", "user_data")), n, "session-state.json")
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
 def _finish_login(plat: str, slot: str = "") -> dict:
     key = str(slot or plat or "")
     sess = _State.login_sessions.get(key)
     if not sess:
-        return {"ok": False, "err": "该登录槽位没有进行中的登录窗口"}
+        # r1063 T139：没有窗口也算保存——只要 profile 里已有会话文件。
+        # 用户最自然的动作是"登完把窗口关掉"，以前这时点保存永远失败。
+        f = _profile_session_file(plat, key)
+        fresh = False
+        try:
+            fresh = bool(f) and (time.time() - os.path.getmtime(f)) < 6 * 3600
+        except Exception:
+            fresh = bool(f)
+        if fresh:
+            cleared = []
+            try:
+                cleared = _clear_login_wall_memo(str(plat or ""), key)
+            except Exception:
+                pass
+            try:
+                _kick_login_probe(str(plat or ""))
+            except Exception:
+                pass
+            _State.logger.info(
+                "[登录] %s 无活动窗口，按已有登录态保存（%s，清理 %s）",
+                key, os.path.basename(f), "、".join(cleared) or "无")
+            return {"ok": True, "plat": plat, "slot": key, "saved": True,
+                    "profile_already_logged_in": True,
+                    "cleared": cleared,
+                    "next": "已按浏览器现有登录态保存（状态待核验后更新）"}
+        return {"ok": False,
+                "err": "该槽位没有进行中的登录窗口，且 profile 里没有会话文件",
+                "hint": "先点「去登录」打开窗口，登完**直接关窗**即可（关窗即保存）"}
     globals().get("_PROBE_CHALLENGE_TS", {}).pop(plat, None)
     try:
         from crawlers import REGISTRY as _R
@@ -34095,6 +34641,98 @@ def _finish_login(plat: str, slot: str = "") -> dict:
     # Acknowledges the save request; only the worker may publish saved/pending.
     return {"ok": True, "plat": plat, "slot": key,
             "saving": True, "saved": False}
+
+
+# 登录槽位的 plat → 同厂商的 App 渠道（登录一次，两边都清墙）
+VENDOR_APP_PLATS = {
+    "ctrip": ("app_ctrip",),
+    "fliggy": ("app_fliggy",),
+    "tongcheng": ("app_tongcheng",),
+    "tuniu": ("app_tuniu",),
+    "qunar": ("app_qunar",),
+}
+
+
+def _kick_login_probe(plat: str) -> dict:
+    """登录成功后异步复探（r1063 T134）：浏览器通路 + 同厂商的 App 渠道。
+
+    不阻塞登录请求：起一个 daemon 线程顺序探，结果写进路径账（矩阵里可见）。
+    任何异常都吞掉——登录已经是成功路径。
+    """
+    try:
+        on = bool(((_State.cfg or {}).get("web") or {})
+                  .get("login_reprobe", True))
+    except Exception:
+        on = True
+    if not on:
+        return {"ok": False, "why": "已配置关闭（web.login_reprobe=false）"}
+    cb = getattr(_State, "probe_cb", None)
+    if cb is None:
+        return {"ok": False, "why": "probe_cb 未挂接"}
+
+    base = str(plat or "").split(":")[0]
+    if base.endswith("_h5"):
+        base = base[:-3]
+    targets = [base] + [t for t in VENDOR_APP_PLATS.get(base, ())
+                        if t in _ALL_PLATS]
+    targets = [t for t in targets if t in _ALL_PLATS]
+
+    def _run():
+        for t in targets:
+            try:
+                out = cb(t, scope="")
+                ok = bool((out or {}).get("ok"))
+                rows = (out or {}).get("rows")
+                _State.logger.info("[登录] 自动复探 %s → ok=%s rows=%s",
+                                   t, ok, rows)
+            except Exception as e:
+                _State.logger.warning("[登录] 自动复探 %s 异常：%s", t,
+                                      str(e)[:120])
+
+    threading.Thread(target=_run, daemon=True, name="login-reprobe").start()
+    return {"ok": True, "targets": targets}
+
+
+def _clear_login_wall_memo(plat: str, key: str = "") -> list:
+    """清掉某渠道的登录墙记忆（App 侧 json + service_state memo）。
+
+    返回被清掉的项（用于日志）。任何异常都不抛出——登录已经是成功路径，
+    清理失败不该让它变成失败。
+    """
+    cleared = []
+    base = str(plat or "").split(":")[0]
+    # 槽位 plat 可能带端的后缀（fliggy_h5 / ctrip_h5…），厂商名要再去掉 _h5
+    if base.endswith("_h5"):
+        base = base[:-3]
+    names = {base, str(key or "")}
+    # r1063 T130：同厂商的 App 渠道也一起清（浏览器登录成功 = 账号可用）
+    for v, apps in VENDOR_APP_PLATS.items():
+        if base == v or base in apps:
+            names.update(apps)
+            names.add(v)
+    names.discard("")
+    try:
+        from core.yield_stats import user_data_root
+        root = str(user_data_root(_effective_crawler_config()))
+    except Exception:
+        root = "user_data"
+    for p in sorted(names):
+        f = os.path.join(root, p, "login_wall.json")
+        try:
+            if os.path.isfile(f):
+                os.remove(f)
+                cleared.append(p)
+        except Exception:
+            pass
+        try:
+            from core import service_state as _ss
+            for kind in ("login_wall", "app_gone"):
+                if _ss.until(root, p, kind) > 0:
+                    _ss.clear(root, p, kind)
+                    cleared.append("%s·%s" % (p, kind))
+        except Exception:
+            pass
+    return cleared
 
 
 def _verify_login_slot(key: str) -> dict:
@@ -34653,10 +35291,18 @@ def _probe_takeover_url(plat, fc, tc, fn, tn, date):
     route = SimpleNamespace(
         from_code=str(fc or "").upper(), to_code=str(tc or "").upper(),
         from_name=str(fn or fc or ""), to_name=str(tn or tc or ""))
+    # r1063 T70：先问"该端登录入口"——`_build_view_url` 给的是**查看详情**深链
+    # （途牛那条是 H5），拿它当登录弹窗会弹错端（用户实测：PC 弹成 m.tuniu.com）。
     try:
-        url = Alerter._build_view_url(None, route, str(date or ""), plat)
+        from core.channel_links import login_entry_url as _leu
+        url = _leu(plat, "pc")
     except Exception:
         url = ""
+    if not url:
+        try:
+            url = Alerter._build_view_url(None, route, str(date or ""), plat)
+        except Exception:
+            url = ""
     if not url:
         from crawlers import REGISTRY
         try:
@@ -39298,6 +39944,16 @@ class _Handler(BaseHTTPRequestHandler):
                                 "err": "节流未挂接（扫描任务尚未初始化）"}, 503)
                     return
                 data = pac.snapshot()
+                # r1063 T194：auto 诊断的结论随同一份载荷下发（面板直接渲染，
+                # 不再多发一次请求，避免卡片与建议对不上）。
+                try:
+                    from core.advise import top_from_pacing as _tfp
+                    from core.advise import weak_paths as _wp
+                    data["advice_top"] = _tfp(data)
+                    # 注意：weak_paths 不在这里算——`channels[].paths` 是下面
+                    # "与路径账合并"之后才有的，此处为空（r1063 T198 实测）。
+                except Exception:
+                    data["advice_top"] = []
                 # 建议引擎（该等还是该干预）：与路径账合并后才说得准
                 try:
                     from core.pacing import advise
@@ -39364,12 +40020,22 @@ class _Handler(BaseHTTPRequestHandler):
                         # 看不到。这里只挑面板用得上的字段，避免把整个
                         # path_stats 塞进每 10s 的轮询响应。
                         _node = _ps.get(_p) or {}
+                        # 会话可用窗口（r1063 T94）：量化"登录后能用多久"。
+                        # 只回结构化字段，前端要不要显示由它决定。
+                        try:
+                            from core import session_window as _sw
+                            _session = _sw.summary(_ud_root(), _p)
+                        except Exception:
+                            _session = {}
+                        if _session:
+                            _ch["session"] = _session
                         _paths = {}
                         for _pn, _pv in (_node.get("paths") or {}).items():
                             _paths[_pn] = {
                                 "rate": _pv.get("rate"),
                                 "attempts": _pv.get("attempts"),
                                 "last_ok_at": _pv.get("last_ok_at"),
+                                "why": _pv.get("last_why") or "",
                             }
                         if _paths:
                             _ch["paths"] = _paths
@@ -39411,6 +40077,13 @@ class _Handler(BaseHTTPRequestHandler):
                 except Exception as _ae:
                     _State.logger.warning("[建议] 生成失败: %s", _ae)
                 data["ok"] = True
+                # r1063 T198：弱环必须**在 paths 合并之后**算（见上）。
+                # 口径在 core.advise.weak_paths（能力边界/退役/样本量/天花板）。
+                try:
+                    from core.advise import weak_paths as _wp2
+                    data["weak_paths"] = _wp2(data)
+                except Exception:
+                    data.setdefault("weak_paths", [])
                 self._json(data)
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
@@ -41317,6 +41990,18 @@ class _Handler(BaseHTTPRequestHandler):
                 _body = _la.parse_body(self.rfile.read(_n) if _n > 0 else b"")
                 _r = _la.dispatch(_app_login_registry(), "POST", _u.path,
                                   _pq(_u.query), _body, _app_login_ctx())
+                # r1063 T175：开登录会话时**顺手叫停本轮**——否则用户要等
+                # 正在飞的那条航线跑完（最长 300s），面板上只能显示"等采集 N 秒"。
+                # 只对"建会话"这一步做；按钮点击/输入等高频调用不重复请求。
+                try:
+                    if (_u.path.rstrip("/") == "/api/app-login"
+                            and isinstance(_r[0], dict) and _r[0].get("ok")):
+                        from core import interrupt as _itr
+                        _itr.request(by="app-login")
+                        _State.logger.info(
+                            "[App登录] 已请求叫停本轮为登录让路（航线边界生效）")
+                except Exception:
+                    pass
                 _obj, _code = _r
                 # App 登录也要入干预账（r646）：网页登录成功会写 relogin，
                 # App 这条链路原先只在内存里结束——账本里查不到，节流面板
@@ -41336,6 +42021,20 @@ class _Handler(BaseHTTPRequestHandler):
                                 _plata, "relogin", ok=True, scope=_plata,
                                 before="login_wall",
                                 note="App 内登录并导出快照（真机画面）")
+                            # r1063 T168：App登录成功后清墙——否则用户明明登成功了，
+                            # 面板与 early_skip 仍按旧墙判「需登录（N 分钟内不再重试）」。
+                            try:
+                                _cleared = _clear_login_wall_memo(_plata, _plata)
+                                _State.logger.info(
+                                    "[App登录] %s 已清登录墙记忆：%s", _plata,
+                                    "、".join(_cleared) or "无")
+                            except Exception:
+                                pass
+                            # 顺手后台复探一次（与浏览器登录一致：登完就验）
+                            try:
+                                _kick_login_probe(_plata)
+                            except Exception:
+                                pass
                 except Exception as _e:
                     try:
                         _State.logger.warning("[App登录] 干预入账失败：%s", _e)
@@ -41709,7 +42408,23 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "err": str(e)}, 409)
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path == "/api/run/stop":
+            # r1063 T172：手动中止本轮（航线边界生效；不强杀线程）。
+            try:
+                from core import interrupt as _itr
+                st = _itr.request(by="panel")
+                self._json({"ok": True, **st,
+                            "next": "已请求中止：不再派发下一条航线；"
+                                    "正在飞的那条会跑完并照常落库"})
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 500)
         elif self.path == "/api/run":
+            # r1063 T172：新一轮开始先清掉上一轮遗留的中止请求
+            try:
+                from core import interrupt as _itr
+                _itr.clear()
+            except Exception:
+                pass
 
             if st.job is None:
                 self._json({"ok": False, "err": "job 未挂接"}, 500)
@@ -41962,6 +42677,70 @@ class _Handler(BaseHTTPRequestHandler):
                 _State.logger.info("[干预] 手动预热 %s → %s",
                                    plat, "成功" if out.get("ok") else out.get("err"))
                 self._json(out)
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path == "/api/channel/reset-app":
+            # 清某个 App 的本地数据（r1063 T87）：平台重新评估设备的最便宜一步。
+            try:
+                body = self._post_json("清 App 数据")
+                if body is None:
+                    return
+                plat = str(body.get("platform") or "").strip()
+                if plat not in _ALL_PLATS:
+                    self._json({"ok": False, "err": "未知渠道"}, 400)
+                    return
+                if plat not in _APP_CHANNELS:
+                    self._json({"ok": False,
+                                "err": "只有 App 渠道有「App 数据」可清（浏览器渠道请用重登/清会话）"},
+                               400)
+                    return
+                if not body.get("confirm"):
+                    self._json({"ok": False, "need_confirm": True,
+                                "err": "这是破坏性操作：会清掉该 App 的登录态与本地缓存，"
+                                       "需带 confirm=true 再调一次"}, 400)
+                    return
+                from crawlers import REGISTRY as _REG
+                pkg = str(getattr(_REG.get(plat), "package", "") or "")
+                if not pkg:
+                    self._json({"ok": False, "err": "该渠道没有包名"}, 400)
+                    return
+                from core.android import emulator as _emu
+                dev = _emu.device(_State.cfg or {})
+                out = dev._sh("shell", "pm", "clear", pkg) or ""
+                ok = "Success" in str(out)
+                _State.logger.warning("[干预] 清 App 数据 %s（%s）→ %s",
+                                      plat, pkg, str(out).strip()[:60])
+                if ok:
+                    # 清完就没有登录墙了，记忆也要清掉，否则窗口内不会再去试。
+                    # r1063 T131：统一走 _clear_login_wall_memo（连 app_gone 一起清）
+                    try:
+                        _clear_login_wall_memo(plat, "")
+                    except Exception:
+                        pass
+                self._json({"ok": ok, "plat": plat, "pkg": pkg,
+                            "detail": str(out).strip()[:120],
+                            "next": "该渠道需重新登录（App 内登一次即可）" if ok
+                                    else "pm clear 未返回 Success，请查设备连接"})
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path == "/api/channel/clear-wall":
+            # 清登录墙/自杀熔断记忆（r1063 T131）：非破坏性，只让下一轮立刻重试。
+            # 适用：换了出口 IP、重启过模拟器、在 App 里登好了但没走槽位登录流程。
+            try:
+                body = self._post_json("清登录墙")
+                if body is None:
+                    return
+                plat = str(body.get("platform") or "").strip()
+                if plat not in _ALL_PLATS:
+                    self._json({"ok": False, "err": "未知渠道"}, 400)
+                    return
+                cleared = _clear_login_wall_memo(plat, "")
+                _State.logger.info("[干预] 清登录墙 %s → %s", plat,
+                                   "、".join(cleared) or "没有需要清的")
+                self._json({"ok": True, "plat": plat, "cleared": cleared,
+                            "next": ("已清 %d 项，下一轮会立刻重试" % len(cleared))
+                                    if cleared else
+                                    "本来就没有墙，下一轮照常"})
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
         elif self.path == "/api/push":

@@ -819,7 +819,7 @@ def test_fetch_path_and_prov_round_trip(tmp_path):
 
 **Files:**
 - Test: `tests/test_v295_batch1_gate.py` (未创建 —— 计划项，未落地)
-- Modify: `docs/EXECUTION_SPEC_LATEST.md` (batch 1 facts), `docs/release-notes-v1.5.295.md` (create later)
+- Modify: `docs/EXECUTION_SPEC_LATEST.md` (batch 1 facts), docs/release-notes-v1.5.295.md（已删除，历史引用） (create later)
 - No version bump yet.
 
 - [ ] **Step 1: Add gate test** that asserts:

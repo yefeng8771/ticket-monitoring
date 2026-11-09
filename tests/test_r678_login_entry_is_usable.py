@@ -78,9 +78,14 @@ def _assert_login_surface(rec, name):
 
 def test_tuniu_login_url_is_a_real_login_page(browser):
     from core.login_slots import LOGIN_SLOTS
+    # r1063 T70：用户实测"PC 弹窗弹成了 m.tuniu.com（H5）"，要求 PC 端给 **PC 页**。
+    # 所以入口从 passport 改成 `flight.tuniu.com`（passport 仍是纯登录表单，
+    # 保留在 core/login_slots.py 注释里作兜底）。
     rec = _open(browser, LOGIN_SLOTS["tuniu"]["login_url"])
+    # 槽位入口必须是**能登录的表单**：实测 flight.tuniu.com 是搜索页、0 个登录控件，
+    # 用户无从登录（"PC 页"的需求由 LOGIN_ENTRY 承担，不是这里）。
     assert "passport.tuniu.com" in rec["url"], (
-        "途牛登录入口又回到会触发 WAF 的首页：%s" % rec["url"])
+        "途牛登录入口又回到了没有登录控件的页面：%s" % rec["url"])
     _assert_login_surface(rec, "途牛")
     assert rec["password"] + rec["tel"] > 0, "途牛登录页没有可输入的登录控件"
 

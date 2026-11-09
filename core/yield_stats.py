@@ -108,7 +108,8 @@ class YieldLedger:
         return rec
 
     def note(self, plat: str, path: str, ok: bool, rows: int = 0,
-             now: float = None, status: str = "") -> dict:
+             now: float = None, status: str = "",
+             detail: str = "") -> dict:
         """记一次采集结果。返回该路径的累计记录。
 
         ``status``（可选）只做**观测**用：累加进该路径的 ``st`` 直方图。
@@ -127,6 +128,11 @@ class YieldLedger:
         if _st:
             hist = p.setdefault("st", {})
             hist[_st] = int(hist.get(_st) or 0) + 1
+        # `why`＝最后一次的**原因原文**（r1063 T75）：只留一条，截断，
+        # 否则"为什么失败"只能靠翻日志。
+        _d = str(detail or "").strip()
+        if _d:
+            p["why"] = _d[:120]
         if ok:
             p["ok"] = int(p.get("ok") or 0) + 1
             rec["total"]["ok"] = int(rec["total"].get("ok") or 0) + 1
@@ -210,6 +216,34 @@ class YieldLedger:
         return sorted(dead)
 
     # ---------- 建议 ----------
+    def note_phases(self, plat: str, rows) -> dict:
+        """记一次采集的**分段耗时**（r1063 T77）：`{阶段: {n, total_s}}`。
+
+        与 `note()` 分开存：那是成功率账，这是耗时账，两者别搅在一起。
+        只留最近 12 个阶段名（阶段名是代码里写死的，不会无限增长）。
+        """
+        rec = self._plat(plat)
+        ph = rec.setdefault("phases", {})
+        for r in (rows or []):
+            if not isinstance(r, dict):
+                continue
+            name = str(r.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                dt = float(r.get("s") or 0)
+            except (TypeError, ValueError):
+                continue
+            cur = ph.setdefault(name, {"n": 0, "total_s": 0.0})
+            cur["n"] = int(cur.get("n") or 0) + 1
+            cur["total_s"] = round(float(cur.get("total_s") or 0) + dt, 1)
+        if len(ph) > 12:
+            keep = sorted(ph.items(), key=lambda kv: -float(kv[1].get(
+                "total_s") or 0))[:12]
+            rec["phases"] = dict(keep)
+        self._save()          # 真实方法名是 `_save`（没有公开 `save`）
+        return dict(rec.get("phases") or {})
+
     def recommend_interval(self, plat: str, base_min: int,
                            lo_ok: float = 0.9, lo_bad: float = 0.4) -> dict:
         """按 Wilson 下界给「间隔该调成多少分钟」。

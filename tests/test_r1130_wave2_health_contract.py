@@ -87,6 +87,13 @@ def _open_health(pg):
     pg.wait_for_timeout(350)
     pg.click("text=渠道健康")
     pg.wait_for_timeout(2000)
+    # 健康矩阵与节流行都是异步二次渲染；固定 2s 在 xdist 并发下会量到
+    # 「行数 0」或不可见的空壳。等到首行真有高度再读，仍为空则照常判红。
+    pg.wait_for_function(
+        "()=>{const r=document.querySelector('#hbody .hrow');"
+        "return r&&r.getBoundingClientRect().height>1"
+        "&&document.querySelectorAll('#paceBox .pace-row').length>=10}",
+        timeout=15000)
 
 
 SNAP = """(() => {
@@ -94,7 +101,7 @@ SNAP = """(() => {
     const r=e.getBoundingClientRect();
     return {x:+r.x.toFixed(1),y:+r.y.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)}};
   const rows=[...document.querySelectorAll('#hbody .hrow')];
-  const chain=[...document.querySelectorAll('#healthChain .hchain-node')];
+  const chain=[...document.querySelectorAll('#srccap .scnode')];
   return {
     diag:R('#healthDiag'), health:R('#healthcard'), hbody:R('#hbody'),
     rows:rows.length,
@@ -103,7 +110,7 @@ SNAP = """(() => {
     chainN:chain.length,
     chainTxt:chain.map(n=>n.textContent.replace(/\\s+/g,' ').trim()),
     chainCls:chain.map(n=>n.className),
-    qnote:(document.body.innerText.match(/PC 网页已停服/g)||[]).length,
+    dead:chain.filter(n=>n.classList.contains('dead')).length,
     bodyDisplay:getComputedStyle(document.getElementById('healthDiagBody')).display,
     more:R('#healthDiagMore2'),
     moreTxt:document.getElementById('healthDiagMore2').textContent.trim(),
@@ -138,10 +145,10 @@ def test_health_strip_matrix_and_trace(srv):
                 bad.append("%d 健康矩阵未进首屏 y=%s" % (w, d["hbody"]["y"]))
             if d["chainN"] != 3:
                 bad.append("%d 状态链胶囊 %d" % (w, d["chainN"]))
-            if "4/5 可用" not in d["chainTxt"][0]:
+            if "已停服" not in d["chainTxt"][0]:
                 bad.append("%d PC 状态未反映去哪儿停服: %s" % (w, d["chainTxt"]))
-            if d["qnote"] != 1:
-                bad.append("%d 去哪儿停服说明出现 %d 次（应 1）" % (w, d["qnote"]))
+            if d["dead"] != 2:
+                bad.append("%d 去哪儿 PC/H5 停服节点 %d（应 2）" % (w, d["dead"]))
             if d["bodyDisplay"] != "none":
                 bad.append("%d 逐渠道说明默认未折叠" % w)
             if d["moreTxt"] != "展开说明":

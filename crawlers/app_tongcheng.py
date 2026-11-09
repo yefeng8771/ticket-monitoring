@@ -200,6 +200,8 @@ class AppTongchengCrawler(AppCrawler):
               ret_date: str = "") -> List[FlightPrice]:
         # 日期超出 App 视野就直接交浏览器（能力边界，记 unsupported）：
         # App 日历只支持近未来，远期日期每条白耗 100–150 秒设备时间。
+        if self.early_skip(dates):      # 停服/需登录：不发请求
+            return []
         if self.reject_far_dates(dates):
             return []
         try:

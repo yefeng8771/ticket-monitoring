@@ -185,10 +185,15 @@ def test_tuniu_intl_login_wall_reaches_the_slot(env, monkeypatch):
     env["at"] = epoch("11:00:00")
     monkeypatch.setattr(webui, "_recent_path_rows", lambda hours=24: {
         "tuniu": [row("11:38:31", "H5/API", "login", LOGIN_NOTE)]})
-    st = webui._login_state_view()["slots"]["tuniu"]
+    # r1063 T82 起 H5 与 PC 是两格：国际 H5 的登录墙要挂在 **H5 槽**上，
+    # 这样用户才知道该处理哪一端（并进唯一槽就看不出来了）。
+    slots = webui._login_state_view()["slots"]
+    st = slots["tuniu_h5"]
     assert st["status"] == "login_required", st
     assert st["needs_login"] is True
     assert st["block"]["kind"] == "login"
+    assert not (slots["tuniu"].get("block") or {}), \
+        "PC 槽不该被 H5 的墙点亮（两端要能分开看）"
 
 
 # ── 健康诊断卡：账本拦截压过「最近一轮正常」 ─────────────────
@@ -459,7 +464,10 @@ def test_challenge_window_uses_mobile_identity_for_h5_block(env, monkeypatch):
 
     monkeypatch.setattr(webui, "slot_crawler",
                         lambda key, cfg, logger: Fake(cfg, logger))
-    t = webui._challenge_target("ctrip")
+    # 挑战归属按端走：H5 的 block 只该由 **H5 槽** 打开手机档窗口
+    assert webui._challenge_target("ctrip").get("ok") is False, \
+        "PC 槽没有待处理挑战，不该能打开窗口"
+    t = webui._challenge_target("ctrip_h5")
     assert t["ok"] is True and t["mobile"] is True and t["desktop"] is False, t
     webui._State.login_pending.clear()
     res = webui._start_login("ctrip", "ctrip", url=t["url"],

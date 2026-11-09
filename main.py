@@ -2511,7 +2511,7 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                    "rows": len(prices), "paths": paths,
                    "warmup": (bool(warm) if warm is not None else None),
                    "cookies": list(getattr(c, "warmup_cookies", []) or []),
-                   "blocked_url": (c.last_block_url or "")[:120],
+                   "blocked_url": (getattr(c, "last_block_url", "") or "")[:120],
                    "api": (getattr(c, "last_block_api", "") or "")[:120],
                    "scene": dict(getattr(c, "last_scene", {}) or {}),
                    "retry_after": int(getattr(c, "retry_after_s", 0) or 0),
@@ -2668,7 +2668,8 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                             if not _pa:
                                 continue
                             pac.set_health(_p, (_pn or {}).get("rate") or 0,
-                                           _pa, dim=_dop(_pth), path=_pth)
+                                           _pa, dim=_dop(_pth), path=_pth,
+                                           why=str((_pn or {}).get("why") or ""))
             except Exception as _he:
                 logger.warning("[节流] 成功率账本读取失败: %s", _he)
         _mark_scan()
@@ -3204,7 +3205,75 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
         except Exception as _pfe:
             logger.warning("[换道] 预置决策失败（不影响采集）：%s",
                            str(_pfe)[:80])
+        # r1063 T202：**反补**决策（每轮一次）。与上面 `_preload` 正好相反方向：
+        # App 被登录墙/崩溃拦死时，让同名浏览器渠道接这一波——否则用户只订阅
+        # App 时，App 一拦那些航线整轮没数。开关/预算/冷却全复用换道那套。
+        _backstop = {}
+        try:
+            from core import failover as _fo_back
+            _want_back = set()
+            for _u in users:
+                _want_back |= set(_u.get("platforms") or ())
+            # 从 pacing 快照取"真账事实"：文件里没墙不等于能跑
+            # （携程 App 首页有会员、**搜索时**才弹手机验证码登录）。
+            _blk_map = {}
+            # r1063 T205：先按**采集侧真相**判（登录墙/设备掉线），
+            # 不依赖 pacing 是否已挂接——否则这里会静默得到空集合，
+            # 事后看日志就像"机制没生效"。
+            try:
+                for _app0 in sorted(_want_back):
+                    if not str(_app0).startswith("app_"):
+                        continue
+                    _blk0, _w0 = _fo_back._app_blocked(_app0, session_root)
+                    if _blk0:
+                        _blk_map[_app0] = True
+            except Exception:
+                pass
+            try:
+                _snap_b = (rt["pacing"].snapshot()
+                           if rt.get("pacing") is not None else {}) or {}
+                for _k, _chb in (_snap_b.get("channels") or {}).items():
+                    if not isinstance(_chb, dict):
+                        continue
+                    _paths_b = _chb.get("paths") or {}
+                    _tot = sum(int((v or {}).get("attempts") or 0)
+                               for v in _paths_b.values())
+                    _okb = sum(int((v or {}).get("attempts") or 0)
+                               for v in _paths_b.values()
+                               if float((v or {}).get("rate") or 0) > 0)
+                    _cooldown_login = (
+                        str(_chb.get("state") or "") == "cooldown"
+                        and str(_chb.get("reason") or "") == "login")
+                    if (bool(_chb.get("needs_login")) or _cooldown_login
+                            or (_tot >= 5 and _okb == 0)):
+                        _blk_map[_k] = True
+            except Exception:
+                _blk_map = {}
+            # r1063 T204：**不在轮首定反补**——"浏览器通路是否已在跑"是
+            # **按航线**的事实。轮首用"用户平台并集"判，等于"只要用户订了
+            # ctrip 就永远不反补"（真机一条 [反补] 都没有）。所以这里只算
+            # 被拦集合 `_blk_map`，反补在航线循环里按 `plats` 判。
+        except Exception as _bfe:
+            logger.warning("[反补] 决策失败（不影响采集）：%s", str(_bfe)[:80])
+        try:
+            logger.info("[反补] 本轮被拦的 App：%s（浏览器通路已在跑的不补）",
+                        sorted(_blk_map or {}))
+        except Exception:
+            pass
         for qi, (fc, tc, d) in enumerate(queries):
+            # r1063 T172（一切可中断）：手动中止在**航线边界**生效——
+            # 不强杀线程（浏览器/设备线程没有安全中断点，硬杀会留半截状态）；
+            # 语义是"不再派发下一条航线"，正在飞的那条自然跑完并照常落库。
+            try:
+                from core import interrupt as _itr
+                if _itr.requested():
+                    logger.warning(
+                        "[扫描] 用户手动中止：已完成 %d/%d 条航线，本轮结束"
+                        "（剩余不再派发）", qi, len(queries))
+                    _itr.clear()
+                    break
+            except Exception:
+                pass
             # 平台集合 = 所有订阅用户平台配置的并集（一次采集服务所有人）
             plats = set()
             th_min = None  # 该查询的最低达标线（qunar 幻影价复核参考）
@@ -3221,6 +3290,35 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                                 th_min = v if th_min is None else min(th_min, v)
             # 预置换道（r1063 T23）：该查询订阅了被拦渠道，就把它的 App 孪生
             # 一起拉进这一波——两条通路并行，而不是串行补采。
+            # r1063 T204：反补——**按航线**判"这条航线上有没有该浏览器渠道"。
+            # 放在 _preload 之前：先保证"这家还有路"，再谈"换到 App"。
+            try:
+                from core import failover as _fo_rt
+                for _app1 in [x for x in sorted(plats) if _blk_map.get(x)]:
+                    _br1, _why1 = _fo_rt.plan_backstop(
+                        _app1, rt.get("cfg") or cfg,
+                        user_data_dir=session_root, running=plats,
+                        blocked=True)
+                    if not _br1 or _br1 in plats:
+                        # 不补也要留痕：App 被拦 + 浏览器通路已在跑 = 无需反补，
+                        # 这是**正常**结局。没有这行日志，事后会误判成"机制没生效"。
+                        if _why1:
+                            logger.info("[反补] 跳过 %s：%s", _app1, _why1)
+                        continue
+                    plats.add(_br1)
+                    _fo_rt.note_switch("backstop:" + _app1, _br1,
+                                       user_data_dir=session_root)
+                    logger.info("[反补] %s 本轮由 %s 接口代采（%s）",
+                                _app1, _br1, _why1)
+                    try:
+                        storage.save_intervention(
+                            platform=_app1, action="strategy_app_backstop",
+                            ok=True, rows=0, note="[app_backstop] " + _why1)
+                    except Exception:
+                        pass
+            except Exception as _bfe2:
+                logger.warning("[反补] 按航线决策失败（不影响采集）：%s",
+                               str(_bfe2)[:80])
             for _src0, _app0 in list((_preload or {}).items()):
                 if _src0 in plats and _app0 not in plats:
                     plats.add(_app0)
@@ -3291,7 +3389,8 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                     if _fo is not None and not prices:
                         _kind0 = str(((rt.get("scene") or {}).get(_nm) or {})
                                      .get("kind") or "")
-                        if _fo.is_behavior_block(_kind0):
+                        # r1063 T67：停服也算值得换道（App 是唯一通路）
+                        if _fo.is_switch_worthy(_kind0):
                             _blocked[_nm] = _kind0
                     # 分母按域分流（c330 F1）：渠道×域结构性零供给面
                     # （intl 全断）不与 dom 满勤合并成假比率，qsup 逐域

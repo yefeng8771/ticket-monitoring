@@ -3,7 +3,8 @@
 
 本门禁只钉「物理量与交互意图」，不钉像素快照：
 1) 首访搜索表单常驻，1440 表单 ≤56、hero ≤48；10 渠道 chip + 图标在独立行（≤40）；
-2) 组合入口在表单下方独立行；开合两态触发器 dx/dy ≤1，面板紧贴下方，结果首行 y 不变；
+2) 组合入口与实时探针同排同高（城市+日期+探针+组合一行）；开合两态
+   触发器 dx/dy ≤1，面板紧贴下方，结果首行 y 不变；
 3) 筛选为锚定浮层：触发器两态 dx/dy ≤1；桌面面板在触发器下方（top ≥ btn.bottom），
    宽 720–880、高 ≤70vh；打开/关闭结果列表 y 不变；航司搜索框独占一行且在 chips 上方，零相交；
 4) 6 档零横向溢出；渠道 rail 仅在溢出时显示渐隐（is-over）。
@@ -96,6 +97,7 @@ SNAP_BASE = """(() => {
     hero:R(document.querySelector('.srx-hero')),
     form:R(document.getElementById('srxProbeForm')),
     qrow:R(document.querySelector('#srxProbe .srx-qrow')),
+    go:R(document.getElementById('srxGo')),
     rail:R(rail), railRow:R(document.getElementById('srxChannelRow')),
     chips:rail.querySelectorAll('.srx-pchip').length,
     chipVisible:[...rail.querySelectorAll('.srx-pchip')]
@@ -182,10 +184,14 @@ def test_search_first_screen_and_ci_rail(srv):
             if (d["railOver"] > 1) != d["fader"]:
                 bad.append("%d rail 渐隐与溢出不一致 over=%s fader=%s"
                            % (w, d["railOver"], d["fader"]))
-            if d["batchInForm"]:
-                bad.append("%d 组合入口仍在表单内" % w)
-            if d["batchTrigger"]["y"] <= d["qrow"]["b"] - 1:
-                bad.append("%d 组合入口未在表单下方" % w)
+            if not d["batchInForm"]:
+                bad.append("%d 组合入口不在表单主行" % w)
+            if (d["batchTrigger"]["y"] < d["qrow"]["y"] - 1
+                    or d["batchTrigger"]["b"] > d["qrow"]["b"] + 1):
+                bad.append("%d 组合入口不在表单主行内" % w)
+            if abs(d["batchTrigger"]["h"] - d["go"]["h"]) > 1:
+                bad.append("%d 组合入口与探针按钮不同高 %s/%s"
+                           % (w, d["batchTrigger"]["h"], d["go"]["h"]))
             if d["docOver"] > 1 or d["viewOver"] > 1:
                 bad.append("%d 横向溢出 doc=%s view=%s"
                            % (w, d["docOver"], d["viewOver"]))

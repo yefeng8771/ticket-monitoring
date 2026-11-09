@@ -73,7 +73,8 @@ def test_ua_kernel_mismatch_is_recorded():
 
 
 def test_panel_shows_the_degraded_line_only_when_needed():
-    seg = SRC[SRC.index("const _degradeLine="):][:1400]
+    # 窗口放宽：T61 又往 tips 里加了「下一步」（_DGFIX），1400 字不够
+    seg = SRC[SRC.index("const _degradeLine="):][:2200]
     assert "j.degraded" in seg
     assert "if(!keys.length)return '';" in seg, "没有降级时不该占位"
     # 中文能力名与原因都要有

@@ -53,6 +53,11 @@ class _Runtime:
 def test_zhixing_prepare_device_happens_inside_device_lock(monkeypatch):
     events = []
     c = AppZhixingCrawler({}, _LOG)
+    # 本用例只测「锁内/锁外顺序」：把日程/链路闸门固定为放行，避免同
+    # worker 里别的用例留下的停服/限流状态让 fetch 在拿锁前就返回（CI
+    # 上实测 events=[]：断言看似红，其实是别的用例的账本污染）。
+    monkeypatch.setattr(c, "early_skip", lambda dates: False)
+    monkeypatch.setattr(c, "path_gate", lambda *a, **k: True)
     monkeypatch.setattr(c, "runtime", lambda: _Runtime(events))
     monkeypatch.setattr(c, "prepare_device",
                         lambda dev: events.append("prepare"))

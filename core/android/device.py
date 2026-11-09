@@ -498,6 +498,14 @@ class AdbDevice:
         并且要求「文件存在 + 大小 > 0 + 内容带 <hierarchy>」，连续失败
         就重启 uiautomator 再试一次。
         """
+        # r1063 T80：**先试 u2**——实测同样一屏，CLI 2.1–3.1s、u2 0.54s（复用连接后
+        # 0.2–0.3s）。一次采集要取树 5–6 次，这是整轮最大的固定成本。
+        # u2 不可用（没装/服务坏）就本会话不再试，直接走下面的 CLI 老路径。
+        if getattr(self, "_u2_first", True) and not self._prefer_u2:
+            xml = self.dump_u2()
+            if xml and "<hierarchy" in xml:
+                return xml
+            self._u2_first = False
         for attempt in range(retries + 1):
             # u2 的 UiAutomation 服务已注册时，CLI 每次都会以
             # 「already registered」崩掉；继续跑 CLI 只会在 logcat 里刷
@@ -541,16 +549,28 @@ class AdbDevice:
             self.last_error = "dump failed"
         return ""
 
+    def _u2_device(self):
+        """懒建并**复用** u2 连接（r1063 T80）。
+
+        实测：每次 `u2.connect()` + `dump_hierarchy()` = 0.54s，其中连接占大头。
+        复用连接后单次取树约 0.2–0.3s——一次采集要 dump 5–6 次，省下的
+        正好是整轮最容易白花的那十几秒。
+        """
+        dev = getattr(self, "_u2_conn", None)
+        if dev is not None:
+            return dev
+        import uiautomator2 as u2  # type: ignore
+        self._u2_conn = u2.connect(self.serial)
+        return self._u2_conn
+
     def dump_u2(self) -> str:
         """可选：用 uiautomator2 取层级（WebView 动画页的 CLI dump 会卡 idle）。"""
         try:
-            import uiautomator2 as u2  # type: ignore
-        except Exception:
-            return ""
-        try:
-            dev = u2.connect(self.serial)
+            dev = self._u2_device()
             xml = dev.dump_hierarchy() or ""
         except Exception as e:
+            # 连接坏了就丢掉缓存的连接，下一轮重建
+            self._u2_conn = None
             self.last_error = "u2 dump: %s" % str(e)[:120]
             return ""
         if "<hierarchy" not in xml:
@@ -671,6 +691,36 @@ class AdbDevice:
                        str(ax), str(ay), str(bx), str(by),
                        str(int(duration_ms)))
         return out is not None
+
+    def getprop(self, key: str) -> str:
+        """读一个系统属性（读不到返回空串，不抛）。"""
+        try:
+            out = self._sh("shell", "getprop", str(key))
+        except Exception:
+            return ""
+        return str(out or "").strip()
+
+    def u2_swipe_points(self, points, duration: float = 1.0) -> bool:
+        """按**多段轨迹**做一次手势（r1063 T81：滑块自动用）。
+
+        为什么不用 `input swipe`：那是单段等速直线，阿里 NC 会直接判机器
+        （真机回报 `请点我重试(error:x2VW8)`）。u2 的 `swipe_points` 能把
+        我们生成的变速轨迹一次性下发，更接近人手。
+        """
+        pts = [(int(x), int(y)) for x, y in (points or [])]
+        if len(pts) < 2:
+            return False
+        try:
+            dev = self._u2_device()
+            mv = getattr(dev, "swipe_points", None)
+            if not callable(mv):
+                return False
+            mv(pts, float(duration or 1.0))
+            return True
+        except Exception as e:
+            self._u2_conn = None
+            self.last_error = "u2 swipe: %s" % str(e)[:120]
+            return False
 
     def input_text(self, text: str) -> bool:
         """输入文本。空格转 %s（input text 的约定），并做 shell 转义。

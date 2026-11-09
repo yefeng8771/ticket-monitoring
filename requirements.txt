@@ -19,3 +19,8 @@ tzdata>=2024.1
 # 可选：curl_cffi 提供 Chrome 的 TLS/JA3 指纹（core/net.py 优先用它发 HTTP，
 # 未安装则自动退回 httpx，行为不变）。需要更贴合浏览器指纹时装：
 #   pip install curl_cffi
+
+# App 渠道的 UI 取树后端（r1063 T80/T95）：装了走 u2（单次 dump ≈0.07s），
+# 没装自动退回 `uiautomator dump` CLI（≈2.1–3.1s，整轮慢 6 倍）。
+# 功能不受影响，但**速度差异巨大**，所以按硬依赖声明。
+uiautomator2>=3.0

@@ -163,6 +163,8 @@ class AppCtripCrawler(AppCrawler):
               ret_date: str = "") -> List[FlightPrice]:
         # 日期超出 App 视野就直接交浏览器（能力边界，记 unsupported）：
         # App 日历只支持近未来，远期日期每条白耗 100–150 秒设备时间。
+        if self.early_skip(dates):      # 停服/需登录：不发请求
+            return []
         if self.reject_far_dates(dates):
             return []
         rt = self.runtime()
@@ -672,7 +674,83 @@ class AppCtripCrawler(AppCrawler):
         form = parse_form(page)
         want = "%d月%d日" % (m, d)
         ok = bool(form and want in (form.get("date") or ""))
+        # r1063 T162：自校正重试——实测「要 16 号点到 23 号」正好差一整行。
+        # 不猜常量：从表单读出**实际选到的日**，按差几周把 y 上移几行再点。
         if not ok:
+            try:
+                def _day_of(txt):
+                    import re as _re
+                    m = _re.search(r"(\d{1,2})月(\d{1,2})日", str(txt or ""))
+                    return int(m.group(2)) if m else None
+
+                def _row_step():
+                    from crawlers.app_ctrip_parse import (
+                        CAL_CALIB, CAL_CALIB_WIDTH, CAL_ROW_STEP)
+                    try:
+                        _w = float((dev.window_size() or (0, 0))[0] or 0)
+                    except Exception:
+                        _w = 0.0
+                    if _w:
+                        return float(CAL_CALIB[2]) * (_w / float(
+                            CAL_CALIB_WIDTH))
+                    return float(CAL_ROW_STEP)
+
+                _got = _day_of((form or {}).get("date"))
+                _weeks = ((_got - int(d)) // 7) if _got is not None else 0
+                _step = _row_step()
+                for _try in range(2):
+                    if not _weeks:
+                        break
+                    if not dev.tap(*_center(slot)):
+                        break
+                    _wait_for(dev, is_calendar, timeout=12)
+                    _months = parse_months(dev.dump() or "")
+                    _tm = next(((yy, mm, cy) for yy, mm, cy in _months
+                                if (yy, mm) == (y, m)), None)
+                    if _tm is None:
+                        break
+                    _xy = calendar_xy(_tm[2], y, m, d, width=_screen_w(dev))
+                    if _xy is None:
+                        break
+                    _xy2 = (_xy[0], int(round(_xy[1] - _weeks * _step)))
+                    self.logger.info(
+                        "[%s] 日期自校正：实际 %s 天，目标 %s 天 → y 上移 %d 行",
+                        self.name, _got, d, _weeks)
+                    if not dev.tap(*_xy2):
+                        break
+                    _page2 = _wait_for(dev, is_form, timeout=12)
+                    _form2 = parse_form(_page2)
+                    _want2 = "%d月%d日" % (m, d)
+                    if _form2 and _want2 in (_form2.get("date") or ""):
+                        ok = True
+                        form = _form2
+                        page = _page2
+                        break
+                    _got = _day_of((_form2 or {}).get("date"))
+                    _weeks = ((_got - int(d)) // 7) if _got is not None else 0
+            except Exception as _e:
+                try:
+                    self.logger.warning("[%s] 日期自校正异常：%s", self.name,
+                                        str(_e)[:80])
+                except Exception:
+                    pass
+        if not ok:
+            # r1063 T161：先取证——把解析结果与页面快照落盘，才看得见到底
+            # 是"坐标点歪"还是"还要点确定"。取证不改任何行为。
+            try:
+                import os as _os
+                _d = _os.path.join(str(getattr(self, "user_data_root",
+                                               "user_data")), self.name)
+                _os.makedirs(_d, exist_ok=True)
+                _p = _os.path.join(_d, "app_date_fail_%s.xml"
+                                   % str(target).replace("/", "-"))
+                with open(_p, "w", encoding="utf-8") as _f:
+                    _f.write(page or "")
+                self.logger.warning(
+                    "[%s] 日期未生效：form.date=%r 目标=%s 坐标=%r 快照=%s",
+                    self.name, (form or {}).get("date"), want, picked, _p)
+            except Exception:
+                pass
             self.path_note("app-date", "timeout",
                            detail="点日历后未回到表单/日期未变（目标 %s）"
                                   % target,
@@ -840,6 +918,17 @@ class AppCtripCrawler(AppCrawler):
             return None
         rows = self._collect_rows(dev, page)
         if not rows:
+            # 再查一次登录墙（r1063 T85）：登录页常在列表壳之后才盖上来，
+            # 竞态下会被上面的轮询漏掉。**记错状态比慢更糟**——
+            # "无航班"会让人去改解析，"要登录"才有人去登。
+            late = dev.dump() or page
+            if is_login_wall(late):
+                self.login_suspect = True
+                self.note_date(date, [], "login",
+                               ms=int((time.time() - started) * 1000))
+                self.logger.info("[%s] 列表为空且命中登录墙：%s",
+                                 self.name, date)
+                return None
             self.note_date(date, [], "列表已打开但无可解析航班",
                            ms=int((time.time() - started) * 1000))
             return None

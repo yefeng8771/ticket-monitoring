@@ -185,7 +185,7 @@ PHONE_POOL = (
         "brand": "vivo", "manufacturer": "vivo",
         "model": "V2405A",
         "device": "V2405A", "product": "V2405A", "board": "k6897v1_64",
-        "hardware": "mt6897", "platform": "mt6897",
+        "hardware": "mt6991", "platform": "mt6991",
         "soc": "MediaTek Dimensity 9400",
         # SoC 的 OEM 编号：真机 `ro.soc.model` 报 MT6991。
         # 这不是可有可无的字段——`ro.hardware`/`ro.board.platform` 与
@@ -245,6 +245,23 @@ SOC_MODEL_BY_SOC = {
     "Qualcomm Snapdragon 8 Gen 1": "SM8450",
     "Qualcomm Snapdragon 8 Gen 3": "SM8650",
     "Google Tensor G3": "GS301",
+}
+
+# 机型码 → 对外市场名（r1063 T83）。真机 `ro.product.marketname` 有值；
+# 空的会与「品牌 + 型号」对不上，属「设备脸缺件」。
+MARKETNAME_BY_MODEL = {
+    "V2405A": "vivo X200 Pro",
+    "V2168A": "vivo Y31s",
+    "23127PN0CC": "Xiaomi 14",
+    "2201123C": "Xiaomi 12",
+    "M2102J20SG": "Redmi Note 10 Pro",
+    "PEGM00": "OPPO Reno7",
+    "ANY-AN00": "HONOR X30",
+    "RMX3350": "realme GT Neo3",
+    "LE2100": "OnePlus 9R",
+    "SM-S9280": "Galaxy S24 Ultra",
+    "Pixel 8 Pro": "Pixel 8 Pro",
+    "Redmi K50": "Redmi K50",
 }
 
 # 默认写入的 props（顺序稳定，便于审计 diff）。刻意不写 ro.build.version.release
@@ -476,6 +493,54 @@ class Identity:
         soc_model = str(p.get("soc_model")
                         or SOC_MODEL_BY_SOC.get(str(p.get("soc") or ""), ""))
 
+        # 平台代号按 **SoC 推导**（r1063 T83）：之前依赖池里的 platform/hardware
+        # 字段，缺了就落回 "qcom" 或旧值 mt6897，而 cpuinfo 说 MT6991 —— 同一
+        # 机型两颗芯片，正是风控判"环境异常"的常见依据（对应携程 50003）。
+        _soc2plat = {
+            "MT6991": ("mt6991", "mt6991"),
+            "MT6989": ("mt6989", "mt6989"),
+            "MT6897": ("mt6897", "mt6897"),
+            "MT6893": ("mt6893", "mt6893"),
+            "MT6853": ("mt6853", "mt6853"),
+            "MT6895": ("mt6895", "mt6895"),
+            "SM8650": ("pineapple", "qcom"),
+            "SM8550": ("kalama", "qcom"),
+            "SM8475": ("cape", "qcom"),
+            "SM7325": ("yupik", "qcom"),
+            "SM8250": ("kona", "qcom"),
+            "SM8350": ("lahaina", "qcom"),
+        }
+        _soc_up = str(soc_model or "").upper()
+        _plat, _hw = "", ""
+        for _k, _v in _soc2plat.items():
+            if _soc_up.startswith(_k):
+                _plat, _hw = _v
+                break
+        # **推导优先**（r1063 T83）：池里的旧值可能是错的（V2405A 就填了
+        # mt6897，而它是天玑 9400 = MT6991）。SoC 是硬事实，以它为准。
+        _plat = _plat or str(p.get("platform") or "")
+        _hw = _hw or str(p.get("hardware") or "")
+        # SoC 厂商与市场名（真机都有；缺了就是"设备脸"缺件）
+        _soc_mfr = str(p.get("soc_manufacturer") or
+                       ("MediaTek" if _soc_up.startswith("MT") else
+                        ("Qualcomm" if _soc_up.startswith("SM") else "")))
+        if not _soc_mfr:
+            # 先看 soc 名字前缀（'MediaTek Dimensity 8100' → MediaTek）
+            _nm = str(p.get("soc") or "")
+            for _m in ("MediaTek", "Qualcomm", "Google"):
+                if _nm.startswith(_m):
+                    _soc_mfr = _m
+                    break
+        if not _soc_mfr:
+            # 再看平台前缀，别留空
+            _pl = str(_plat or "").lower()
+            if _pl.startswith("mt"):
+                _soc_mfr = "MediaTek"
+            elif _pl in ("qcom", "kona", "lahaina", "cape", "yupik",
+                         "pineapple", "kalama", "aresin", "venus", "husky"):
+                _soc_mfr = "Qualcomm" if _pl != "husky" else "Google"
+        _market = str(p.get("marketname") or MARKETNAME_BY_MODEL.get(model, ""))
+
         out = {
             "ro.product.model": model,
             "ro.product.brand": brand,
@@ -502,9 +567,10 @@ class Identity:
             "ro.build.user": "builder",
             # host 不能是 `localhost`（那是"容器/模拟器里现编的"特征）
             "ro.build.host": str(p.get("build_host") or "builder"),
-            "ro.hardware": str(p.get("hardware") or "qcom"),
-            "ro.board.platform": str(p.get("platform") or "qcom"),
-            "ro.boot.hardware": str(p.get("hardware") or "qcom"),
+            "ro.hardware": _hw or "qcom",
+            "ro.board.platform": _plat or "qcom",
+            "ro.boot.hardware": _hw or "qcom",
+
             "ro.serialno": self.serial,
             "ro.boot.serialno": self.serial,
             "ro.bootmode": "normal",
@@ -549,7 +615,15 @@ class Identity:
             # 也不要留空——空值会让 apply 跳过这个键，设备上就继续保留
             # 模拟器出厂时那个"我已经被改过"的编号。
             out["ro.soc.model"] = str(p.get("platform") or "")
+        # SoC / 市场名：**有值才写**（r1063 T83）。写空值比不写更糟——
+        # 真机这两个 prop 都有值，写成空串等于自己声明"我这台设备缺件"。
+        if _soc_mfr:
+            out["ro.soc.manufacturer"] = _soc_mfr
+        if _market:
+            out["ro.product.marketname"] = _market
+            out["ro.config.marketing_name"] = _market
         return out
+
 
     def props_unsafe_note(self) -> str:
         """给报告用：说明哪些字段是"想改但改不动"的。"""

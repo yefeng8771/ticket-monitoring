@@ -33,10 +33,18 @@ def _fn_body(src, name):
 
 def test_every_modal_opener_sets_aria_label():
     src = io.open(os.path.join(ROOT, "webui.py"), encoding="utf-8").read()
-    for fn in ("appLoginOpen", "lgOpenFliggy"):
-        body = _fn_body(src, fn)
-        assert re.search(r"setAttribute\(\s*'aria-label'", body), (
-            "%s 没写 aria-label：共用容器的可读名称会停在上一个开窗方" % fn)
+    # r1063 T195：双端开窗已泛化为 lgOpenDual(plat)，aria-label 写在它里面；
+    # 老入口 lgOpenFliggy 必须仍转发过来（否则有两条开窗路径、只改一条就漏）。
+    body = _fn_body(src, "lgOpenDual")
+    assert re.search(r"setAttribute\(\s*'aria-label'", body), (
+        "lgOpenDual 没写 aria-label：共用容器的可读名称会停在上一个开窗方")
+    assert "LG_DUAL" in body, (
+        "lgOpenDual 的 aria-label 必须按渠道取（写死一家=切渠道后念错）")
+    assert "lgOpenDual('fliggy')" in _fn_body(src, "lgOpenFliggy"), (
+        "lgOpenFliggy 应转发到 lgOpenDual，避免两条开窗路径")
+    app = _fn_body(src, "appLoginOpen")
+    assert re.search(r"setAttribute\(\s*'aria-label'", app), (
+        "appLoginOpen 没写 aria-label")
     # App 侧必须是「跟着渠道名」，不能写死一家
     app = _fn_body(src, "appLoginOpen")
     m = re.search(r"setAttribute\(\s*'aria-label'\s*,\s*([^\n;]+)\)", app)

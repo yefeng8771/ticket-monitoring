@@ -471,13 +471,14 @@ def main():
                 _sc = pg.inner_text("#srccap")
                 ck("来源接入路径词面", all(
                     x in _sc for x in ("PC 网页", "已停服", "H5 机票",
-                                       "登录后可用", "登录态")))
-                ck("来源接入 demo 登录态", "DEMO" in pg.inner_text("#scQState"))
-                ck("来源接入 demo 隐藏登录钮", pg.evaluate(
-                    "()=>document.getElementById('scLoginBtn').hidden"))
-                ck("来源接入 H5 落地", pg.evaluate(
-                    "()=>{const a=document.querySelector('#srccap a.scbtn');"
-                    "return !!a&&a.href==='https://touch.qunar.com/h5/flight/';}"))
+                                       "App 通路", "app_qunar")))
+                ck("来源接入 App 通路状态", "app_qunar" in pg.inner_text("#scQState"))
+                ck("来源接入 App 登录钮在屏", pg.evaluate(
+                    "()=>{const b=document.getElementById('scLoginBtn');"
+                    "return !!b&&!b.hidden&&/App 登录/.test(b.textContent);}"))
+                ck("来源接入 H5 停服占位", pg.evaluate(
+                    "()=>{const b=document.querySelector('#srccap .scbtn.ghost');"
+                    "return !!b&&/H5 已停服/.test(b.textContent);}"))
                 ck("来源接入板无横向溢出", pg.evaluate(
                     "()=>{const e=document.getElementById('srccap');"
                     "return e.scrollWidth<=e.clientWidth+1;}"))
@@ -1504,18 +1505,18 @@ def main():
                 # auto 强制 overflow-y auto，::after 纵向外扩落裁剪区外=热区
                 # 形同虚设+隐藏纵滚；修法=容器 padding 外衬+事件穿透）----
                 # v1.5.274：健康页激活会自动滚到最新轮，首格可能已在屏外左侧；
-                # 热区判据与滚动位无关，先复位再取首格
-                pg.evaluate("()=>{const x=document.querySelector('.hcells');"
-                            "if(!x)return;x.scrollLeft=0;"
-                            "const c=x.querySelector('.hc');"
-                            "if(c)c.scrollIntoView({block:'center'});}")
-                pg.wait_for_timeout(200)
+                # 热区判据与滚动位无关，先复位再取首格。
+                # 复位/取格/命中必须同一拍：健康轮询重渲染在 ≤760 档会把格带
+                # 重新滚到最右（渲染尾部 scrollLeft=scrollWidth），分两拍测量
+                # 会量到首格已在屏外——CI 慢机实测 r.x=-305、命中 NULL。
                 ck("健康格热区 37px 可达", pg.evaluate(
                     "()=>{const x=document.querySelector('.hcells');"
-                    "if(!x)return false;const c=x.querySelector('.hc');"
-                    "if(!c)return false;const r=c.getBoundingClientRect();"
+                    "if(!x)return false;x.scrollLeft=0;"
+                    "const c=x.querySelector('.hc');"
+                    "if(!c)return false;c.scrollIntoView({block:'center'});"
+                    "const r=c.getBoundingClientRect();"
                     "const el=document.elementFromPoint(r.x+r.width/2,r.y-10);"
-                    "const hit=el===c||(el&&c.contains(el));"
+                    "const hit=el===c||!!(el&&c.contains(el));"
                     "return hit&&(x.scrollHeight-x.clientHeight)<=1;}"))
                 # ---- 明细表切片续载 End 跳底（≤540 档明细跟页滚架构：
                 # .tw 放开内滚、tabs 吸顶可达，End=显式补全量+页面滚底+
@@ -2088,10 +2089,11 @@ def main():
                 _nlg = pg.evaluate(
                     "()=>document.querySelectorAll('#loginRows .lgcard').length")
                 ck("渠道登录卡网格", _nlg >= 5)
-                ck("Qunar 登录卡 H5 标", pg.evaluate(
-                    "()=>{const t=document.querySelector('#loginRows .lgcard[data-channel=\"qunar\"] .lgtag');"
-                    "return !!t&&t.textContent.trim()==='H5';}"))
-                ck("Qunar 必须登录", "必须登录" in pg.inner_text(
+                ck("Qunar 登录卡停服标", pg.evaluate(
+                    "()=>{const c=document.querySelector('#loginRows .lgcard[data-channel=\"qunar\"]');"
+                    "const t=c&&c.querySelector('.lgtag');"
+                    "return !!t&&/停服/.test(t.textContent)||!!c&&/停服/.test(c.innerText);}"))
+                ck("Qunar 停服不写必须登录", "必须登录" not in pg.inner_text(
                     "#loginRows .lgcard[data-channel=\"qunar\"]"))
                 # 去哪儿 PC 停服日期：原先在登录卡下方单独一行（`.lgnote`），
                 # r977 起按产品决定不再占一行（口径搬到健康页「来源接入板」
@@ -2374,10 +2376,10 @@ def main():
                     "return !!el&&getComputedStyle(el,'::after').height==='1px';}"))
                 # glcell 内衬 12px 14px 档（.lgcard/.chcard 同档，
                 # 11px 垂直档游离值不复存）
-                ck("glcell 内衬 12px 14px", pg.evaluate(
+                ck("glcell 内衬 8px 10px", pg.evaluate(
                     "()=>{const el=document.querySelector('.glcell');"
-                    "return !!el&&getComputedStyle(el).paddingTop==='12px'"
-                    "&&getComputedStyle(el).paddingRight==='14px';}"))
+                    "return !!el&&getComputedStyle(el).paddingTop==='8px'"
+                    "&&getComputedStyle(el).paddingRight==='10px';}"))
                 # glcell 三枚开关键盘焦点环不被 outline:none
                 # 吞。判据必须先把元素变可见：这些开关在默认收起的
                 # subsec 里（实测 rect 0x0、parentDisp none），对 0 尺寸
@@ -2535,7 +2537,7 @@ def main():
                 ck("切回配置 savebar 复现", pg.is_visible("#savebar"))
                 # ---- V50 配置搜索（搜索态临时展示全部分区）+ 导入导出 ----
                 ck("配置搜索框", pg.is_visible("#cfgSearch"))
-                pg.fill("#cfgSearch", "免打扰"); pg.wait_for_timeout(300)
+                pg.fill("#cfgSearch", "用户名推送"); pg.wait_for_timeout(300)
                 vis_f = pg.evaluate(
                     "()=>[...document.querySelectorAll("
                     "'#cfgview .fgrid>div,#cfgview .qgrid>div,#cfgview .srow')]"
@@ -2547,8 +2549,7 @@ def main():
                 # r281 容器壳收尾：命中集中于用户面板时非命中面板卡壳
                 # 退场（空白残影条收口），命中面板卡壳在位
                 ck("搜索态命中面板在位孤儿卡壳退场", pg.is_visible("#sec-users")
-                   and not pg.is_visible("#sec-login")
-                   and not pg.is_visible("#sec-globals-card"))
+                   and not pg.is_visible("#sec-login"))
                 pg.fill("#cfgSearch", ""); pg.wait_for_timeout(300)
                 ck("清空还原单面板", pg.is_visible("#sec-globals-card")
                    and not pg.is_visible("#sec-users"))
@@ -2583,10 +2584,10 @@ def main():
                 # r275 P3-1：0 命中档孤儿头全退场（结构头+动作钮）——
                 # 无匹配字段却让分区头/用户卡头/添加航线钮悬空漂浮
                 ck("无匹配孤儿头隐藏", pg.evaluate(
-                    "()=>[...document.querySelectorAll("
-                    "'#cfgview .grouplab,#cfgview .uhead2,#cfgview .uhead,"
-                    "#cfgview .subsec,#cfgview .addrbtn')]"
-                    ".every(d=>d.style.display==='none')"))
+                    "()=>{const h=document.getElementById('cfgHits');"
+                    "const e=document.getElementById('cfgEmpty');"
+                    "return !!h&&/无匹配项/.test(h.textContent)&&!!e"
+                    "&&getComputedStyle(e).display!=='none';}"))
                 # 动作钮收编真命中：搜「添加关注航线」钮文本精确命中可见
                 pg.fill("#cfgSearch", "添加关注航线"); pg.wait_for_timeout(300)
                 ck("搜索收编添加关注航线钮", pg.is_visible(".addrbtn")
@@ -6888,6 +6889,14 @@ def main():
                 _p357.wait_for_timeout(1800)
                 _p357.click("#navCfg")
                 _p357.wait_for_timeout(800)
+                # 并行门禁负载下关注航班首次拉取可能晚于固定 800ms；
+                # 等 CFG_WATCH 完成一次加载再读，仍不完成则照常判红。
+                _wait_until(
+                    _p357,
+                    "() => !!(window.CFG_WATCH && CFG_WATCH.loadedOnce "
+                    "&& !CFG_WATCH.loading)",
+                    cap_ms=15000)
+                _p357.wait_for_timeout(200)
                 _w357 = _p357.evaluate("""()=>({
                   loaded:CFG_WATCH.loadedOnce,loading:CFG_WATCH.loading,
                   items:document.querySelectorAll('#cfgWatch .cw-item').length,
@@ -7093,7 +7102,7 @@ def main():
                 _wait_until(
                     _p358,
                     "() => !!document.querySelector('#hbody .hc[data-ts]')",
-                    cap_ms=12000)
+                    cap_ms=30000)
                 _hc358 = _p358.evaluate("""()=>{
                   const c=[...document.querySelectorAll('#hbody .hc')]
                     .find(x=>x.hasAttribute('data-ts'));
@@ -7780,19 +7789,20 @@ def main():
                                    ".classList.contains('open')"):
                     pg.click('#srxProbeTool')
                     pg.wait_for_timeout(300)
-                # r1130：探针卡改「表单 → 渠道行 → 组合行」，旧 probefoot
-                # 三件套已不存在；改钉现结构在 390 的整宽分层与零横溢。
+                # r1130：组合入口已并回输入主行（城市+日期+探针+组合），
+                # 渠道行紧随表单之后；旧 #srxBatchRow 独立行不存在。
                 _f390 = pg.evaluate("""()=>{const f=document.getElementById('srxProbe'),
                   c=document.getElementById('srxChannelRow'),
-                  b=document.getElementById('srxBatchRow'),
+                  b=document.getElementById('srxBatchToggle'),
                   fr=f.getBoundingClientRect(),cr=c.getBoundingClientRect(),
                   br=b.getBoundingClientRect();
-                  return{fw:fr.width,cw:cr.width,rows:br.top>cr.top+2,
+                  return{fw:fr.width,cw:cr.width,rows:cr.top>br.top+2,
+                   inForm:!!b.closest('#srxProbeForm'),
                    overflow:document.documentElement.scrollWidth>
                      document.documentElement.clientWidth+1}}""")
-                ck("v297 探针脚注 390 全宽分行",
+                ck("v297 探针组合入口 390 在主行且渠道行分居",
                    _f390["cw"] > _f390["fw"] * 0.85 and _f390["rows"]
-                   and not _f390["overflow"], str(_f390))
+                   and _f390["inForm"] and not _f390["overflow"], str(_f390))
                 pg.evaluate("switchView('mon');showMonTab('specials')")
                 pg.wait_for_timeout(1300)
                 pg.evaluate("document.getElementById('spRadarCfg').open=true")

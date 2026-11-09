@@ -2,7 +2,7 @@
 
 > 状态：**已于 2026-11-03 08:58 执行**（由并行发版会话/用户授权）；现场复核
 > 2026-11-03 09:20。本文保留切换与回滚记录。
-> **执行结果**：live PID **47952**，cwd `D:\idea_project\_release_ab04`，启动
+> **执行结果**：live PID **47952**，cwd 为上一版 live 树（仓库外），启动
 > 08:58:06；`/api/channel-dims` **10 家**、`webui.py` sha12 `6c85a00f14c1`、
 > config 与主树 diff=0；`enabled_platforms` 6、诊断卡 7（5 浏览器 + 2 个已启用 App）。
 > Release 当前为 `v1.0` → `e65cee1`（2026-11-03 09:54 由 `ab04c22` 重指，ghcr `latest` 同 digest）；live 树 `ab04c22` 正文 10 渠道，四资产 digest 4/4。该树**不含**
@@ -12,7 +12,7 @@
 
 | 项 | 实测 |
 |---|---|
-| live 进程 | PID **47952**，cwd `D:\idea_project\_release_ab04`，启动 08:58:06 |
+| live 进程 | PID **47952**，cwd 为上一版 live 树（仓库外），启动 08:58:06 |
 | live 启动命令 | `python main.py --restart-delay 3` |
 | live 配置 | `_release_ab04/config.yaml` 与主树 `config.yaml` **diff=0** |
 | 数据/日志/登录态 | live 树的 `data`、`logs`、`user_data` 都是**主树的符号链接**（同一份文件） |
@@ -39,7 +39,7 @@
 ## 1. 切换前检查（只读）
 
 ```bash
-cd /d/idea_project/ticket-monitoring
+cd "$REPO"          # REPO=本仓库根目录，自行 export
 date
 netstat -ano | grep ':8765' | grep LISTENING
 cat ../_release_final_72d/.monitor.pid
@@ -66,13 +66,13 @@ print(p.cmdline(), p.cwd(), datetime.datetime.fromtimestamp(p.create_time()))
 
 ```bash
 # 2.1 停 live（先走 PID 文件；不要直接 kill 未知进程）
-cd /d/idea_project/_release_final_72d
+cd "$OLD_LIVE"      # OLD_LIVE=上一版 live 树目录，自行 export
 powershell -ExecutionPolicy Bypass -File stop.ps1
 # 确认端口已释放、进程已退出
 netstat -ano | grep ':8765' | grep LISTENING || true
 
 # 2.2 从主树启动（保持 live 原参数）
-cd /d/idea_project/ticket-monitoring
+cd "$REPO"          # REPO=本仓库根目录，自行 export
 powershell -ExecutionPolicy Bypass -File start.ps1
 # 或保持原参数直接后台启动：
 # python main.py --restart-delay 3
@@ -114,10 +114,10 @@ PY
 
 ```bash
 # 4.1 停主树进程
-cd /d/idea_project/ticket-monitoring
+cd "$REPO"          # REPO=本仓库根目录，自行 export
 powershell -ExecutionPolicy Bypass -File stop.ps1
 # 4.2 从旧 live 树按原参数启动
-cd /d/idea_project/_release_final_72d
+cd "$OLD_LIVE"      # OLD_LIVE=上一版 live 树目录，自行 export
 powershell -ExecutionPolicy Bypass -File start.ps1
 ```
 

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""r1090（2026-11-07 重写）：检索台窄档两行 + 渠道 rail 单行 + 组合独立行。
+"""r1090：检索台窄档两行 + 渠道 rail 单行 + 组合与探针同排。
 
-新契约（prompt_optimized_2026-11-07 §6.3/§6.4）：
-- 桌面（≥601）：城市对 + 日期 + 实时探针在**一行**（qrow ≤40px）；
-- 窄档（≤600）：城市对一行、日期 + 探针一行（qrow ≤80px），不允许四行以上堆叠；
-- 组合入口**不在**表单内，位于表单下方独立行（#srxBatchRow），触发器两态同坐标；
+新契约（prompt_optimized_2026-11-07 §6.3/§6.4 + 2026-11-08 用户返工）：
+- 桌面（≥601）：城市对 + 日期 + 实时探针 + 组合在**一行**（qrow ≤40px）；
+- 窄档（≤600）：城市对一行、日期 + 探针 + 组合一行（qrow ≤80px）；
+- 组合入口与探针同排同高，不再单独占第三行；队列浮层不推布局；
 - 10 个官方渠道图标 + 名称在单独一行（≤40px），横向溢出时内部滚动，不撑破页面。
 """
 import os
@@ -99,7 +99,7 @@ SNAP = """(() => {
   const row=document.getElementById('srxChannelRow');
   return {items,row:rg(q),formH:Math.round(document.querySelector(
       '#srxProbeForm').getBoundingClientRect().height),
-    combo:rg(combo),comboInBatch:!!combo.closest('#srxBatchRow'),
+    combo:rg(combo),comboInForm:!!combo.closest('#srxProbeForm'),
     comboClip:combo.scrollWidth-combo.clientWidth,
     cityClip:inp.scrollWidth-inp.clientWidth,
     toClip:to.scrollWidth-to.clientWidth,
@@ -132,8 +132,8 @@ def test_probe_two_rows_on_narrow_and_controls_in_place(srv):
             d = pg.evaluate(SNAP)
             pg.close()
             items = d["items"]
-            if len(items) != 5:
-                bad.append("%d 档 qrow 可见控件 %d 个（应 5：出发/交换/到达/日期/探针）"
+            if len(items) != 6:
+                bad.append("%d 档 qrow 可见控件 %d 个（应 6：出发/交换/到达/日期/探针/组合）"
                            % (w, len(items)))
                 continue
             if d["formH"] > (80 if w <= 600 else 40):
@@ -157,10 +157,11 @@ def test_probe_two_rows_on_narrow_and_controls_in_place(srv):
                 bad.append("%d 档城市名被裁 %d/%d" % (w, d["cityClip"], d["toClip"]))
             if d["dateClip"] > 1:
                 bad.append("%d 档日期被裁 %d" % (w, d["dateClip"]))
-            if not d["comboInBatch"]:
-                bad.append("%d 档组合入口不在独立行" % w)
-            if d["combo"] and d["combo"]["T"] <= d["row"]["B"]:
-                bad.append("%d 档组合入口未在表单下方" % w)
+            if not d["comboInForm"]:
+                bad.append("%d 档组合入口不在表单主行" % w)
+            if d["combo"] and (d["combo"]["T"] < d["row"]["T"] - 1
+                               or d["combo"]["B"] > d["row"]["B"] + 1):
+                bad.append("%d 档组合入口越出表单主行" % w)
             if d["comboClip"] > 1:
                 bad.append("%d 档组合钮文字被裁 %d" % (w, d["comboClip"]))
             if d["chips"] != 10:

@@ -881,10 +881,20 @@ class PriceStorage:
         """
         hours = max(1, min(24 * 90, int(hours or 24)))
         with self._conn() as c:
+            # 兼容：老库可能没有 `note` 列（r1063 T76 加的）。缺列时用空串代替，
+            # 千万别让整条查询失败——那会让"路径账全空"，看起来像一条都没跑。
+            try:
+                _cols = {str(r[1]) for r in
+                         c.execute("PRAGMA table_info(fetch_paths)")}
+            except Exception:
+                _cols = set()
+            _note = ("COALESCE(note,'') AS note" if "note" in _cols
+                     else "'' AS note")
             rows = c.execute(
                 "SELECT platform, entry_path, path_status, from_city, "
-                "to_city, depart_date, attempt_id, fetched_at "
-                "FROM fetch_paths "
+                "to_city, depart_date, attempt_id, fetched_at, "
+                + _note +
+                " FROM fetch_paths "
                 "WHERE fetched_at >= datetime('now','localtime', ?) "
                 "ORDER BY id", ("-%d hours" % hours,)).fetchall()
         try:
@@ -900,7 +910,8 @@ class PriceStorage:
                     "query_attempts": 0, "query_ok": 0,
                     "query_detail_ok": 0, "query_calendar_only": 0,
                     "query_rate": 0.0, "last_at": "", "last_ok_at": "",
-                    "last_login_at": "", "login_since_ok": 0}
+                    "last_login_at": "", "login_since_ok": 0,
+                    "last_why": ""}
 
         def new_path():
             return {"attempts": 0, "ok": 0, "detail_ok": 0, "calendar_ok": 0,
@@ -908,7 +919,9 @@ class PriceStorage:
                     "login": 0, "error": 0,
                     "rate": 0.0, "rate_excl_empty": 0.0,
                     "detail_rate": 0.0, "last_at": "", "last_ok_at": "",
-                    "last_login_at": "", "login_since_ok": 0}
+                    "last_login_at": "", "login_since_ok": 0,
+                    # 最后一次**非空**原因（`fetch_paths.note`，r1063 T76）
+                    "last_why": ""}
 
         def bump(node, status, last):
             node["attempts"] += 1
@@ -1000,6 +1013,17 @@ class PriceStorage:
             node["dims"].setdefault(dim, new_node())
             node["dims"][dim]["paths"].setdefault(path, new_path())
             bump(node, st, last)
+            # 原因（r1063 T76）：只记**最后一次非空** note——成功行没有原因，
+            # 不能把上一条失败原因抹掉，否则面板上"为什么"一闪就没了。
+            n_why = str(r["note"] or "").strip()
+            if n_why:
+                for _n in (node, node["paths"][path],
+                           node["scopes"][scope],
+                           node["scopes"][scope]["paths"][path],
+                           node["dims"][dim],
+                           node["dims"][dim]["paths"][path]):
+                    if isinstance(_n, dict) and "last_why" in _n:
+                        _n["last_why"] = n_why[:120]
             bump(node["paths"][path], st, last)
             bump(node["scopes"][scope], st, last)
             bump(node["scopes"][scope]["paths"][path], st, last)

@@ -68,7 +68,6 @@ def test_explicit_proxy_still_honoured(monkeypatch):
     """显式 proxy=（我们自己配的出口）必须仍然生效，不能被默认值覆盖。"""
     captured = {}
 
-    __import__("pytest").importorskip("curl_cffi")  # 可选后端：CI 未装时应跳过
     import curl_cffi.requests as _cffi
 
     class FakeSession:

@@ -1189,6 +1189,8 @@ class AppFliggyCrawler(AppCrawler):
               ret_date: str = "") -> List[FlightPrice]:
         # 日期超出 App 视野就直接交浏览器：App 日历只支持近未来，
         # 远期日期每条要白耗 100–150 秒设备时间（实测 2027-01-29）。
+        if self.early_skip(dates):      # 停服/需登录：不发请求
+            return []
         if self.reject_far_dates(dates):
             return []
         # 链路闸门（r1063 T9）：**必须在拿设备锁之前**按阶段问——闸门要等

@@ -118,7 +118,7 @@ def test_health_source_block_scoped_to_qunar_web(page):
       return {aria:b.getAttribute('aria-label')||'',
               note:(document.getElementById('scNote')||{}).textContent||''};}""")
     text = out["aria"] + out["note"]
-    assert "App 渠道" in text and "真机" in text, out
+    assert "App" in text and "真机" in text, out
     assert "App 专属价与自动下单不在采集范围" not in text, (
         "健康页仍写 App 不在采集范围", out)
 

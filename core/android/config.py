@@ -28,6 +28,10 @@ class AndroidConfig:
     boot_timeout_s: int = DEFAULT_BOOT_TIMEOUT
     action_timeout_s: int = DEFAULT_ACTION_TIMEOUT
     snapshot: bool = True
+    # `ensure_ready()` 成功结果的缓存秒数（r1063 T88）：这一步每次要跑
+    # MuMuManager info + adb 探测 + 硬化自检，实测约 4 秒；同一进程内
+    # 几十秒内条件几乎不变。0 = 不缓存（每轮都真探测）。
+    ready_cache_s: int = 60
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -38,6 +42,7 @@ class AndroidConfig:
             "boot_timeout_s": self.boot_timeout_s,
             "action_timeout_s": self.action_timeout_s,
             "snapshot": self.snapshot,
+            "ready_cache_s": self.ready_cache_s,
         }
 
 

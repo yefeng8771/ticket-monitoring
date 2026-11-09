@@ -301,17 +301,36 @@ def render_service() -> str:
     ])
 
 
-def render_fake_cpuinfo() -> str:
-    """真机格式的 /proc/cpuinfo（vivo X200 Pro / 天玑 9400 MT6991）。
+# SoC → (Hardware 行, 核构成)。核 part 值用 ARM implementer 0x41 系列，
+# 与真机 aarch64 的写法一致；认不出的 SoC 用通用布局 + 真实 Hardware 串。
+SOC_CPUINFO = {
+    "MT6991": ("MT6991", ((1, "0xd85"), (3, "0xd82"), (4, "0xd87"))),
+    "MT6989": ("MT6989", ((1, "0xd85"), (3, "0xd82"), (4, "0xd87"))),
+    "SM8650": ("Qualcomm Technologies, Inc SM8650",
+               ((1, "0xd4e"), (3, "0xd81"), (2, "0xd81"), (2, "0xd80"))),
+    "SM8550": ("Qualcomm Technologies, Inc SM8550",
+               ((1, "0xd4e"), (3, "0xd81"), (4, "0xd80"))),
+    "SM8475": ("Qualcomm Technologies, Inc SM8475",
+               ((1, "0xd46"), (3, "0xd48"), (4, "0xd49"))),
+}
+SOC_CPUINFO_FALLBACK = ((1, "0xd0c"), (3, "0xd0b"), (4, "0xd0a"))
 
-    天玑 9400：1×Cortex-X925(0xd85) + 3×Cortex-X4(0xd82) + 4×Cortex-A725(0xd87)，
-    ARM implementer 0x41。字段顺序与真机 aarch64 一致。
+
+def render_fake_cpuinfo(props: dict = None) -> str:
+    """真机格式的 /proc/cpuinfo，**按当前身份的 SoC 渲染**（r1063 T89）。
+
+    为什么必须跟着身份走：身份换成骁龙 8 Gen 3（SM8650）之后，若这里还写
+    `Hardware : MT6991`（联发科），就是"同机型两个芯片"——正是风控最爱抓的矛盾。
     """
+    props = props or {}
+    soc = str(props.get("ro.soc.model") or "").strip().upper()
+    hw, layout = SOC_CPUINFO.get(soc, (soc or "Qualcomm Technologies, Inc",
+                                       SOC_CPUINFO_FALLBACK))
     feats = ("fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp "
              "asimdhp cpuid asimdrdm lrcpc dcpop asimddp")
     out = []
     idx = 0
-    for count, part in ((1, "0xd85"), (3, "0xd82"), (4, "0xd87")):
+    for count, part in layout:
         for _ in range(count):
             out += ["processor\t: %d" % idx,
                     "BogoMIPS\t: 38.40",
@@ -323,7 +342,7 @@ def render_fake_cpuinfo() -> str:
                     "CPU revision\t: 0",
                     ""]
             idx += 1
-    out += ["Hardware\t: MT6991",
+    out += ["Hardware\t: %s" % hw,
             "Revision\t: 0000",
             "Serial\t\t: 0000000000000000"]
     return "\n".join(out) + "\n"
@@ -362,7 +381,7 @@ def build_payload(vm: int = 0) -> dict:
         "module.prop": render_module_prop(props),
         "post-fs-data.sh": render_post_fs_data(props),
         "service.sh": render_service(),
-        "fake_cpuinfo": render_fake_cpuinfo(),
+        "fake_cpuinfo": render_fake_cpuinfo(props),
         # /sys/fs/selinux/enforce 的替身内容："1"（1 字节，无换行）
         "enforce1": "1",
         "props": props,
